@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Scheduling;
 
@@ -35,6 +36,8 @@ public class FakeMediaCollectionRepository : IMediaCollectionRepository
     public Task<List<Episode>> GetEpisode(int id) => throw new NotSupportedException();
     public Task<List<MusicVideo>> GetMusicVideo(int id) => throw new NotSupportedException();
     public Task<List<OtherVideo>> GetOtherVideo(int id) => throw new NotSupportedException();
+    public Task<List<FillerMediaItem>> GetFiller(int id) => throw new NotImplementedException();
+
     public Task<List<Song>> GetSong(int id) => throw new NotSupportedException();
     public Task<List<Image>> GetImage(int id) => throw new NotSupportedException();
 

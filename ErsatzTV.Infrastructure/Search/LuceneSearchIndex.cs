@@ -2,6 +2,7 @@
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Repositories.Caching;
@@ -82,6 +83,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
     public const string MusicVideoType = "music_video";
     public const string EpisodeType = "episode";
     public const string OtherVideoType = "other_video";
+    public const string FillerType = "filler";
     public const string SongType = "song";
     public const string ImageType = "image";
     private readonly string _cleanShutdownPath;
@@ -173,6 +175,9 @@ public sealed class LuceneSearchIndex : ISearchIndex
                     break;
                 case OtherVideo otherVideo:
                     await UpdateOtherVideo(searchRepository, otherVideo);
+                    break;
+                case FillerMediaItem filler:
+                    await UpdateFiller(searchRepository, filler);
                     break;
                 case Song song:
                     await UpdateSong(searchRepository, song);
@@ -338,6 +343,9 @@ public sealed class LuceneSearchIndex : ISearchIndex
                 break;
             case OtherVideo otherVideo:
                 await UpdateOtherVideo(searchRepository, otherVideo);
+                break;
+            case FillerMediaItem filler:
+                await UpdateFiller(searchRepository, filler);
                 break;
             case Song song:
                 await UpdateSong(searchRepository, song);
@@ -1119,6 +1127,93 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
+    private async Task UpdateFiller(ISearchRepository searchRepository, FillerMediaItem filler)
+    {
+        Option<FillerMetadata> maybeMetadata = filler.FillerMetadata.HeadOrNone();
+        if (maybeMetadata.IsSome)
+        {
+            FillerMetadata metadata = maybeMetadata.ValueUnsafe();
+
+            try
+            {
+                var doc = new Document
+                {
+                    new StringField(IdField, filler.Id.ToString(CultureInfo.InvariantCulture), Field.Store.YES),
+                    new StringField(TypeField, FillerType, Field.Store.YES),
+                    new TextField(TitleField, metadata.Title, Field.Store.NO),
+                    new StringField(SortTitleField, metadata.SortTitle.ToLowerInvariant(), Field.Store.NO),
+                    new TextField(LibraryNameField, filler.LibraryPath.Library.Name, Field.Store.NO),
+                    new StringField(
+                        LibraryIdField,
+                        filler.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
+                        Field.Store.NO),
+                    new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
+                    new StringField(StateField, filler.State.ToString(), Field.Store.NO),
+                    new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
+                };
+
+                await AddLanguages(searchRepository, doc, filler.MediaVersions);
+
+                AddStatistics(doc, filler.MediaVersions);
+
+                if (metadata.ReleaseDate.HasValue)
+                {
+                    doc.Add(
+                        new StringField(
+                            ReleaseDateField,
+                            metadata.ReleaseDate.Value.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                            Field.Store.NO));
+                }
+
+                doc.Add(
+                    new StringField(
+                        AddedDateField,
+                        metadata.DateAdded.ToString("yyyyMMdd", CultureInfo.InvariantCulture),
+                        Field.Store.NO));
+
+                foreach (Genre genre in metadata.Genres)
+                {
+                    doc.Add(new TextField(GenreField, genre.Name, Field.Store.NO));
+                }
+
+                foreach (Tag tag in metadata.Tags)
+                {
+                    doc.Add(new TextField(TagField, tag.Name, Field.Store.NO));
+                }
+
+                foreach (Studio studio in metadata.Studios)
+                {
+                    doc.Add(new TextField(StudioField, studio.Name, Field.Store.NO));
+                }
+
+                foreach (Actor actor in metadata.Actors)
+                {
+                    doc.Add(new TextField(ActorField, actor.Name, Field.Store.NO));
+                }
+
+                foreach (Director director in metadata.Directors)
+                {
+                    doc.Add(new TextField(DirectorField, director.Name, Field.Store.NO));
+                }
+
+                foreach (Writer writer in metadata.Writers)
+                {
+                    doc.Add(new TextField(WriterField, writer.Name, Field.Store.NO));
+                }
+
+                AddMetadataGuids(metadata, doc);
+
+                _writer.UpdateDocument(new Term(IdField, filler.Id.ToString(CultureInfo.InvariantCulture)), doc);
+            }
+            catch (Exception ex)
+            {
+                metadata.Filler = null;
+                _logger.LogWarning(ex, "Error indexing filler with metadata {@Metadata}", metadata);
+            }
+        }
+    }
+
     private async Task UpdateOtherVideo(ISearchRepository searchRepository, OtherVideo otherVideo)
     {
         Option<OtherVideoMetadata> maybeMetadata = otherVideo.OtherVideoMetadata.HeadOrNone();
@@ -1434,6 +1529,8 @@ public sealed class LuceneSearchIndex : ISearchIndex
                     .ToLowerInvariant(),
             OtherVideoMetadata ovm => $"{OtherVideoTitle(ovm).Replace(' ', '_')}_{ovm.Year}_{ovm.OtherVideo.State}"
                 .ToLowerInvariant(),
+            FillerMetadata fm => $"{FillerTitle(fm).Replace(' ', '_')}_{fm.Year}_{fm.Filler.State}"
+                .ToLowerInvariant(),
             SongMetadata sm => $"{Title(sm)}_{sm.Year}_{sm.Song.State}".ToLowerInvariant(),
             ImageMetadata im => $"{Title(im)}_{im.Year}_{im.Image.State}".ToLowerInvariant(),
             MovieMetadata mm => $"{Title(mm)}_{mm.Year}_{mm.Movie.State}".ToLowerInvariant(),
@@ -1463,4 +1560,6 @@ public sealed class LuceneSearchIndex : ISearchIndex
 
     private static string OtherVideoTitle(OtherVideoMetadata ovm) =>
         string.IsNullOrWhiteSpace(ovm.OriginalTitle) ? ovm.Title : ovm.OriginalTitle;
+    private static string FillerTitle(FillerMetadata fm) =>
+        string.IsNullOrWhiteSpace(fm.OriginalTitle) ? fm.Title : fm.OriginalTitle;
 }

@@ -26,6 +26,7 @@ public class QuerySearchIndexAllItemsHandler : IRequestHandler<QuerySearchIndexA
             await GetIds(LuceneSearchIndex.ArtistType, request.Query),
             await GetIds(LuceneSearchIndex.MusicVideoType, request.Query),
             await GetIds(LuceneSearchIndex.OtherVideoType, request.Query),
+            await GetIds(LuceneSearchIndex.FillerType, request.Query),
             await GetIds(LuceneSearchIndex.SongType, request.Query),
             await GetIds(LuceneSearchIndex.ImageType, request.Query));
 

@@ -1,5 +1,6 @@
 ﻿using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
@@ -90,6 +91,12 @@ public class GetCollectionCardsHandler :
             .ThenInclude(ovm => ovm.Artwork)
             .Include(c => c.MediaItems)
             .ThenInclude(i => (i as OtherVideo).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Include(c => c.MediaItems)
+            .ThenInclude(i => (i as FillerMediaItem).FillerMetadata)
+            .ThenInclude(ovm => ovm.Artwork)
+            .Include(c => c.MediaItems)
+            .ThenInclude(i => (i as FillerMediaItem).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
             .Include(c => c.MediaItems)
             .ThenInclude(i => (i as Song).SongMetadata)

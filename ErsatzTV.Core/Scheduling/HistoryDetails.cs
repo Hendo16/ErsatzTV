@@ -1,4 +1,5 @@
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
@@ -148,6 +149,7 @@ internal static class HistoryDetails
             Episode e => e.EpisodeMetadata.Any(em => em.ReleaseDate == releaseDate),
             //MusicVideo mv => mv.MusicVideoMetadata.Any(mvm => mvm.ReleaseDate == releaseDate),
             OtherVideo ov => ov.OtherVideoMetadata.Any(ovm => ovm.ReleaseDate == releaseDate),
+            FillerMediaItem fv => fv.FillerMetadata.Any(fm => fm.ReleaseDate == releaseDate),
             _ => false
         };
 

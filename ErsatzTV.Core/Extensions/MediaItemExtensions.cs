@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Emby;
 using ErsatzTV.Core.Interfaces.Jellyfin;
 using ErsatzTV.Core.Interfaces.Plex;
@@ -15,6 +16,7 @@ public static class MediaItemExtensions
             Episode e => e.MediaVersions.HeadOrNone().Map(v => v.Duration),
             MusicVideo mv => mv.MediaVersions.HeadOrNone().Map(v => v.Duration),
             OtherVideo ov => ov.MediaVersions.HeadOrNone().Map(v => v.Duration),
+            FillerMediaItem fv => fv.MediaVersions.HeadOrNone().Map(v => v.Duration),
             Song s => s.MediaVersions.HeadOrNone().Map(v => v.Duration),
             _ => None
         };
@@ -30,6 +32,7 @@ public static class MediaItemExtensions
             Episode e => e.MediaVersions.Head(),
             MusicVideo mv => mv.MediaVersions.Head(),
             OtherVideo ov => ov.MediaVersions.Head(),
+            FillerMediaItem fv => fv.MediaVersions.Head(),
             Song s => s.MediaVersions.Head(),
             Image i => i.MediaVersions.Head(),
             _ => throw new ArgumentOutOfRangeException(nameof(mediaItem))

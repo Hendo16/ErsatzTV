@@ -74,6 +74,11 @@
                 <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#other_videos")" Style="margin-bottom: auto; margin-top: auto">@_otherVideos.Count Other Videos</MudLink>
             }
 
+            if (_fillers?.Count > 0)
+            {
+                <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#fillers")" Style="margin-bottom: auto; margin-top: auto">@_fillers.Count Fillers</MudLink>
+            }
+
             if (_songs?.Count > 0)
             {
                 <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#songs")" Style="margin-bottom: auto; margin-top: auto">@_songs.Count Songs</MudLink>
@@ -308,6 +313,34 @@
         </MudContainer>
     }
 
+    @if (_fillers?.Count > 0)
+    {
+        <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
+            <MudText Typo="Typo.h4"
+                     Style="scroll-margin-top: 160px"
+                     UserAttributes="@(new Dictionary<string, object> { { "id", "fillers" } })">
+                Other Videos
+            </MudText>
+            @if (_fillers.Count > 50)
+            {
+                <MudLink Href="@GetFillersLink()" Class="ml-4">See All >></MudLink>
+            }
+        </div>
+
+        <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+            @foreach (FillerCardViewModel card in _fillers.Cards.OrderBy(s => s.SortTitle))
+            {
+                <MediaCard Data="@card"
+                           Href=""
+                           ArtworkKind="ArtworkKind.Thumbnail"
+                           AddToCollectionClicked="@AddToCollection"
+                           SelectClicked="@(e => SelectClicked(card, e))"
+                           IsSelected="@IsSelected(card)"
+                           IsSelectMode="@IsSelectMode()"/>
+            }
+        </MudContainer>
+    }
+
     @if (_songs?.Count > 0)
     {
         <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
@@ -373,6 +406,7 @@
     private TelevisionEpisodeCardResultsViewModel _episodes;
     private MusicVideoCardResultsViewModel _musicVideos;
     private OtherVideoCardResultsViewModel _otherVideos;
+    private FillerCardResultsViewModel _fillers;
     private SongCardResultsViewModel _songs;
     private ImageCardResultsViewModel _images;
     private ArtistCardResultsViewModel _artists;
@@ -439,6 +473,15 @@
                 _otherVideos = restoredOtherVideos;
             }
 
+            if (!ApplicationState.TryTakeFromJson("_fillers", out FillerCardResultsViewModel restoredFillers))
+            {
+                _fillers = await Mediator.Send(new QuerySearchIndexFiller($"type:filler AND ({_query})", 1, 50), CancellationToken);
+            }
+            else
+            {
+                _fillers = restoredFillers;
+            }
+
             if (!ApplicationState.TryTakeFromJson("_songs", out SongCardResultsViewModel restoredSongs))
             {
                 _songs = await Mediator.Send(new QuerySearchIndexSongs($"type:song AND ({_query})", 1, 50), CancellationToken);
@@ -476,6 +519,7 @@
         ApplicationState.PersistAsJson("_episodes", _episodes);
         ApplicationState.PersistAsJson("_musicVideos", _musicVideos);
         ApplicationState.PersistAsJson("_otherVideos", _otherVideos);
+        ApplicationState.PersistAsJson("_fillers", _fillers);
         ApplicationState.PersistAsJson("_songs", _songs);
         ApplicationState.PersistAsJson("_artists", _artists);
 
@@ -499,6 +543,7 @@
                 .Append(_artists.Cards.OrderBy(a => a.SortTitle))
                 .Append(_musicVideos.Cards.OrderBy(mv => mv.SortTitle))
                 .Append(_otherVideos.Cards.OrderBy(ov => ov.SortTitle))
+                .Append(_fillers.Cards.OrderBy(f => f.SortTitle))
                 .Append(_songs.Cards.OrderBy(ov => ov.SortTitle))
                 .ToList();
         }
@@ -634,6 +679,27 @@
             }
         }
 
+        if (card is FillerCardViewModel filler)
+        {
+            var parameters = new DialogParameters { { "EntityType", "filler" }, { "EntityName", filler.Title } };
+            var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+            IDialogReference dialog = Dialog.Show<AddToCollectionDialog>("Add To Collection", parameters, options);
+            DialogResult result = await dialog.Result;
+            if (!result.Canceled && result.Data is MediaCollectionViewModel collection)
+            {
+                var request = new AddFillerToCollection(collection.Id, filler.FillerId);
+                Either<BaseError, Unit> addResult = await Mediator.Send(request, CancellationToken);
+                addResult.Match(
+                    Left: error =>
+                    {
+                        Snackbar.Add($"Unexpected error adding other video to collection: {error.Value}");
+                        Logger.LogError("Unexpected error adding other video to collection: {Error}", error.Value);
+                    },
+                    Right: _ => Snackbar.Add($"Added {filler.Title} to collection {collection.Name}", Severity.Success));
+            }
+        }
+
         if (card is SongCardViewModel song)
         {
             var parameters = new DialogParameters { { "EntityType", "song" }, { "EntityName", song.Title } };
@@ -740,6 +806,18 @@
         return uri;
     }
 
+    private string GetFillersLink()
+    {
+        var uri = "media/filler/videos/page/1";
+        if (!string.IsNullOrWhiteSpace(_query))
+        {
+            (string key, string value) = _query.EncodeQuery();
+            uri = $"{uri}?{key}={value}";
+        }
+
+        return uri;
+    }
+
     private string GetSongsLink()
     {
         var uri = "media/music/songs/page/1";
@@ -775,6 +853,7 @@
             results.ArtistIds,
             results.MusicVideoIds,
             results.OtherVideoIds,
+            results.FillerIds,
             results.SongIds,
             results.ImageIds,
             "search results");
@@ -791,6 +870,7 @@
             results.ArtistIds,
             results.MusicVideoIds,
             results.OtherVideoIds,
+            results.FillerIds,
             results.SongIds,
             results.ImageIds,
             "search results");

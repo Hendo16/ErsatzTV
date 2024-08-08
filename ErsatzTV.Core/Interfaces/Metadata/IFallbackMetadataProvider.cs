@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Core.Interfaces.Metadata;
 
@@ -11,6 +12,7 @@ public interface IFallbackMetadataProvider
     MovieMetadata GetFallbackMetadata(Movie movie);
     Option<MusicVideoMetadata> GetFallbackMetadata(MusicVideo musicVideo);
     Option<OtherVideoMetadata> GetFallbackMetadata(OtherVideo otherVideo);
+    Option<FillerMetadata> GetFallbackMetadata(FillerMediaItem filler);
     Option<SongMetadata> GetFallbackMetadata(Song song);
     Option<ImageMetadata> GetFallbackMetadata(Image image);
 }

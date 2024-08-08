@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Application.MediaCollections;
 
@@ -73,6 +74,7 @@ internal static class Mapper
                 Episode episode => MediaItems.Mapper.ProjectToViewModel(episode),
                 MusicVideo musicVideo => MediaItems.Mapper.ProjectToViewModel(musicVideo),
                 OtherVideo otherVideo => MediaItems.Mapper.ProjectToViewModel(otherVideo),
+                FillerMediaItem filler => MediaItems.Mapper.ProjectToViewModel(filler),
                 Song song => MediaItems.Mapper.ProjectToViewModel(song),
                 Image image => MediaItems.Mapper.ProjectToViewModel(image),
                 _ => null

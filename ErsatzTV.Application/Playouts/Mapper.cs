@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Application.Playouts;
 
@@ -64,6 +65,14 @@ internal static class Mapper
                             ? s
                             : $"{s} ({playoutItem.ChapterTitle})")
                     .IfNone("[unknown video]");
+            case FillerMediaItem fv:
+                return fv.FillerMetadata.HeadOrNone()
+                    .Map(fm => fm.Title ?? string.Empty)
+                    .Map(
+                        s => string.IsNullOrWhiteSpace(playoutItem.ChapterTitle)
+                            ? s
+                            : $"{s} ({playoutItem.ChapterTitle})")
+                    .IfNone("[unknown filler]");
             case Song s:
                 string songArtist = s.SongMetadata.HeadOrNone()
                     .Map(sm => $"{string.Join(", ", sm.Artists)} - ")

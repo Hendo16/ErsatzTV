@@ -9,6 +9,7 @@ public record CollectionCardResultsViewModel(
     List<ArtistCardViewModel> ArtistCards,
     List<MusicVideoCardViewModel> MusicVideoCards,
     List<OtherVideoCardViewModel> OtherVideoCards,
+    List<FillerCardViewModel> FillerCards,
     List<SongCardViewModel> SongCards,
     List<ImageCardViewModel> ImageCards)
 {

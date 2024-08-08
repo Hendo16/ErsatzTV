@@ -1,4 +1,5 @@
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -48,6 +49,9 @@ public class GetPlaylistItemsHandler(IDbContextFactory<TvContext> dbContextFacto
             .ThenInclude(a => a.ArtistMetadata)
             .Include(i => i.MediaItem)
             .ThenInclude(i => (i as OtherVideo).OtherVideoMetadata)
+            .ThenInclude(mm => mm.Artwork)
+            .Include(i => i.MediaItem)
+            .ThenInclude(i => (i as FillerMediaItem).FillerMetadata)
             .ThenInclude(mm => mm.Artwork)
             .Include(i => i.MediaItem)
             .ThenInclude(i => (i as Song).SongMetadata)

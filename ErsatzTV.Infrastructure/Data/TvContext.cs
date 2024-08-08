@@ -50,7 +50,9 @@ public class TvContext : DbContext
     public DbSet<MusicVideo> MusicVideos { get; set; }
     public DbSet<MusicVideoMetadata> MusicVideoMetadata { get; set; }
     public DbSet<OtherVideo> OtherVideos { get; set; }
+    public DbSet<FillerMediaItem> FillerMediaItems { get; set; }
     public DbSet<OtherVideoMetadata> OtherVideoMetadata { get; set; }
+    public DbSet<FillerMetadata> FillerMetadata { get; set; }
     public DbSet<Song> Songs { get; set; }
     public DbSet<SongMetadata> SongMetadata { get; set; }
     public DbSet<Image> Images { get; set; }

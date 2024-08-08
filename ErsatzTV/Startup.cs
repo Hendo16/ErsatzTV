@@ -643,6 +643,7 @@ public class Startup
         services.AddScoped<IArtistRepository, ArtistRepository>();
         services.AddScoped<IMusicVideoRepository, MusicVideoRepository>();
         services.AddScoped<IOtherVideoRepository, OtherVideoRepository>();
+        services.AddScoped<IFillerRepository, FillerRepository>();
         services.AddScoped<ISongRepository, SongRepository>();
         services.AddScoped<IImageRepository, ImageRepository>();
         services.AddScoped<ILibraryRepository, LibraryRepository>();

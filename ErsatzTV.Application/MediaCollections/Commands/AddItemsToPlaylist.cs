@@ -11,5 +11,6 @@ public record AddItemsToPlaylist(
     List<int> ArtistIds,
     List<int> MusicVideoIds,
     List<int> OtherVideoIds,
+    List<int> FillerIds,
     List<int> SongIds,
     List<int> ImageIds) : IRequest<Either<BaseError, Unit>>;

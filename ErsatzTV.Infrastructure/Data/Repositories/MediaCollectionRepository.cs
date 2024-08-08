@@ -2,6 +2,7 @@
 using Bugsnag;
 using Dapper;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Scheduling;
@@ -54,6 +55,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                         mediaItems.AddRange(await GetArtistItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetMusicVideoItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetOtherVideoItems(dbContext, collectionId));
+                        mediaItems.AddRange(await GetFillerItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetSongItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetImageItems(dbContext, collectionId));
                     }
@@ -128,6 +130,14 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                     foreach (int mediaItemId in Optional(playlistItem.MediaItemId))
                     {
                         mediaItems.AddRange(await GetOtherVideoItems(dbContext, [mediaItemId]));
+                    }
+
+                    break;
+
+                case ProgramScheduleItemCollectionType.Filler:
+                    foreach (var mediaItemId in Optional(playlistItem.MediaItemId))
+                    {
+                        mediaItems.AddRange(await GetFillerItems(dbContext, [mediaItemId]));
                     }
 
                     break;
@@ -192,6 +202,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                         mediaItems.AddRange(await GetArtistItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetMusicVideoItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetOtherVideoItems(dbContext, collectionId));
+                        mediaItems.AddRange(await GetFillerItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetSongItems(dbContext, collectionId));
                         mediaItems.AddRange(await GetImageItems(dbContext, collectionId));
                     }
@@ -270,6 +281,14 @@ public class MediaCollectionRepository : IMediaCollectionRepository
 
                     break;
 
+                case ProgramScheduleItemCollectionType.Filler:
+                    foreach (var mediaItemId in Optional(playlistItem.MediaItemId))
+                    {
+                        mediaItems.AddRange(await GetFillerItems(dbContext, [mediaItemId]));
+                    }
+
+                    break;
+
                 case ProgramScheduleItemCollectionType.Song:
                     foreach (int mediaItemId in Optional(playlistItem.MediaItemId))
                     {
@@ -316,6 +335,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
         result.AddRange(await GetArtistItems(dbContext, id));
         result.AddRange(await GetMusicVideoItems(dbContext, id));
         result.AddRange(await GetOtherVideoItems(dbContext, id));
+        result.AddRange(await GetFillerItems(dbContext, id));
         result.AddRange(await GetSongItems(dbContext, id));
         result.AddRange(await GetImageItems(dbContext, id));
 
@@ -359,6 +379,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                 result.AddRange(await GetArtistItems(dbContext, collectionId));
                 result.AddRange(await GetMusicVideoItems(dbContext, collectionId));
                 result.AddRange(await GetOtherVideoItems(dbContext, collectionId));
+                result.AddRange(await GetFillerItems(dbContext, collectionId));
                 result.AddRange(await GetSongItems(dbContext, collectionId));
                 result.AddRange(await GetImageItems(dbContext, collectionId));
             }
@@ -470,6 +491,12 @@ public class MediaCollectionRepository : IMediaCollectionRepository
             .Map(i => i.Id)
             .ToList();
         result.AddRange(await GetOtherVideoItems(dbContext, otherVideoIds));
+
+        var fillerIds = searchResults.Items
+            .Filter(i => i.Type == LuceneSearchIndex.FillerType)
+            .Map(i => i.Id)
+            .ToList();
+        result.AddRange(await GetFillerItems(dbContext, fillerIds));
 
         var songIds = searchResults.Items
             .Filter(i => i.Type == LuceneSearchIndex.SongType)
@@ -634,6 +661,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                         result.AddRange(await GetArtistItems(dbContext, collectionId));
                         result.AddRange(await GetMusicVideoItems(dbContext, collectionId));
                         result.AddRange(await GetOtherVideoItems(dbContext, collectionId));
+                        result.AddRange(await GetFillerItems(dbContext, collectionId));
                         result.AddRange(await GetSongItems(dbContext, collectionId));
                         result.AddRange(await GetImageItems(dbContext, collectionId));
                     }
@@ -712,6 +740,14 @@ public class MediaCollectionRepository : IMediaCollectionRepository
 
                     break;
 
+                case ProgramScheduleItemCollectionType.Filler:
+                    foreach (var mediaItemId in Optional(playlistItem.MediaItemId))
+                    {
+                        result.AddRange(await GetFillerItems(dbContext, [mediaItemId]));
+                    }
+
+                    break;
+
                 case ProgramScheduleItemCollectionType.Song:
                     foreach (int mediaItemId in Optional(playlistItem.MediaItemId))
                     {
@@ -755,6 +791,12 @@ public class MediaCollectionRepository : IMediaCollectionRepository
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
         return await GetOtherVideoItems(dbContext, [id]);
+    }
+
+    public async Task<List<FillerMediaItem>> GetFiller(int id)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await GetFillerItems(dbContext, [id]);
     }
 
     public async Task<List<Song>> GetSong(int id)
@@ -991,6 +1033,17 @@ public class MediaCollectionRepository : IMediaCollectionRepository
                 true,
                 PlaybackOrder.Chronological,
                 false));
+        id--;
+
+        result.Add(
+            new CollectionWithItems(
+                id,
+                id,
+                fakeKey,
+                items.OfType<FillerMediaItem>().Cast<MediaItem>().ToList(),
+                true,
+                PlaybackOrder.Chronological,
+                false));
 
         return result.Filter(c => c.MediaItems.Count != 0).ToList();
     }
@@ -1087,6 +1140,27 @@ public class MediaCollectionRepository : IMediaCollectionRepository
 
         return await GetOtherVideoItems(dbContext, ids);
     }
+
+    private static async Task<List<FillerMediaItem>> GetFillerItems(TvContext dbContext, int collectionId)
+    {
+        IEnumerable<int> ids = await dbContext.Connection.QueryAsync<int>(
+            @"SELECT o.Id FROM CollectionItem ci
+            INNER JOIN FillerMediaItem o ON o.Id = ci.MediaItemId
+            WHERE ci.CollectionId = @CollectionId",
+            new { CollectionId = collectionId });
+
+        return await GetFillerItems(dbContext, ids);
+    }
+
+    private static Task<List<FillerMediaItem>> GetFillerItems(TvContext dbContext, IEnumerable<int> fillerIds) =>
+        dbContext.FillerMediaItems
+            .Include(m => m.FillerMetadata)
+            .Include(m => m.MediaVersions)
+            .ThenInclude(mv => mv.Chapters)
+            .Include(m => m.MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Filter(m => fillerIds.Contains(m.Id))
+            .ToListAsync();
 
     private static Task<List<OtherVideo>> GetOtherVideoItems(TvContext dbContext, IEnumerable<int> otherVideoIds) =>
         dbContext.OtherVideos

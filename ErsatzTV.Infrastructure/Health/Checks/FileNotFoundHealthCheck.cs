@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Health;
 using ErsatzTV.Core.Health.Checks;
@@ -29,6 +30,8 @@ public class FileNotFoundHealthCheck : BaseHealthCheck, IFileNotFoundHealthCheck
             .Include(mi => (mi as MusicVideo).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
             .Include(mi => (mi as OtherVideo).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Include(mi => (mi as FillerMediaItem).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
             .Include(mi => (mi as Song).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)

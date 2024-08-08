@@ -89,6 +89,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         SelectedItems.OfType<ArtistCardViewModel>().Map(a => a.ArtistId).ToList(),
         SelectedItems.OfType<MusicVideoCardViewModel>().Map(mv => mv.MusicVideoId).ToList(),
         SelectedItems.OfType<OtherVideoCardViewModel>().Map(ov => ov.OtherVideoId).ToList(),
+        SelectedItems.OfType<FillerCardViewModel>().Map(f => f.FillerId).ToList(),
         SelectedItems.OfType<SongCardViewModel>().Map(s => s.SongId).ToList(),
         SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList());
 
@@ -100,6 +101,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         SelectedItems.OfType<ArtistCardViewModel>().Map(a => a.ArtistId).ToList(),
         SelectedItems.OfType<MusicVideoCardViewModel>().Map(mv => mv.MusicVideoId).ToList(),
         SelectedItems.OfType<OtherVideoCardViewModel>().Map(ov => ov.OtherVideoId).ToList(),
+        SelectedItems.OfType<FillerCardViewModel>().Map(f => f.FillerId).ToList(),
         SelectedItems.OfType<SongCardViewModel>().Map(s => s.SongId).ToList(),
         SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList());
 
@@ -111,12 +113,13 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         List<int> artistIds,
         List<int> musicVideoIds,
         List<int> otherVideoIds,
+        List<int> fillerIds,
         List<int> songIds,
         List<int> imageIds,
         string entityName = "selected items")
     {
         int count = movieIds.Count + showIds.Count + seasonIds.Count + episodeIds.Count + artistIds.Count +
-                    musicVideoIds.Count + otherVideoIds.Count + songIds.Count + imageIds.Count;
+                    musicVideoIds.Count + otherVideoIds.Count + fillerIds.Count + songIds.Count + imageIds.Count;
 
         var parameters = new DialogParameters
             { { "EntityType", count.ToString(CultureInfo.InvariantCulture) }, { "EntityName", entityName } };
@@ -136,6 +139,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
                 artistIds,
                 musicVideoIds,
                 otherVideoIds,
+                fillerIds,
                 songIds,
                 imageIds);
 
@@ -194,12 +198,13 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         List<int> artistIds,
         List<int> musicVideoIds,
         List<int> otherVideoIds,
+        List<int> fillerIds,
         List<int> songIds,
         List<int> imageIds,
         string entityName = "selected items")
     {
         int count = movieIds.Count + showIds.Count + seasonIds.Count + episodeIds.Count + artistIds.Count +
-                    musicVideoIds.Count + otherVideoIds.Count + songIds.Count + imageIds.Count;
+                    musicVideoIds.Count + otherVideoIds.Count + fillerIds.Count + songIds.Count + imageIds.Count;
 
         var parameters = new DialogParameters
             { { "EntityType", count.ToString(CultureInfo.InvariantCulture) }, { "EntityName", entityName } };
@@ -219,6 +224,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
                 artistIds,
                 musicVideoIds,
                 otherVideoIds,
+                fillerIds,
                 songIds,
                 imageIds);
 

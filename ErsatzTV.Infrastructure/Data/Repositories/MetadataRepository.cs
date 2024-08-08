@@ -1,5 +1,6 @@
 using Dapper;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Extensions;
@@ -234,6 +235,10 @@ public class MetadataRepository : IMetadataRepository
                         otherVideo.MediaVersions.Clear();
                         otherVideo.MediaVersions.Add(existing);
                         break;
+                    case FillerMediaItem filler:
+                        filler.MediaVersions.Clear();
+                        filler.MediaVersions.Add(existing);
+                        break;
                     case Song song:
                         song.MediaVersions.Clear();
                         song.MediaVersions.Add(existing);
@@ -305,6 +310,11 @@ public class MetadataRepository : IMetadataRepository
                     parameters)
                 .ToUnit(),
             OtherVideoMetadata => await dbContext.Connection.ExecuteAsync(
+                    @"INSERT INTO Artwork (ArtworkKind, OtherVideoMetadataId, DateAdded, DateUpdated, Path, SourcePath, BlurHash43, BlurHash54, BlurHash64)
+                            VALUES (@ArtworkKind, @Id, @DateAdded, @DateUpdated, @Path, @SourcePath, @BlurHash43, @BlurHash54, @BlurHash64)",
+                    parameters)
+                .ToUnit(),
+            FillerMetadata => await dbContext.Connection.ExecuteAsync(
                     @"INSERT INTO Artwork (ArtworkKind, OtherVideoMetadataId, DateAdded, DateUpdated, Path, SourcePath, BlurHash43, BlurHash54, BlurHash64)
                             VALUES (@ArtworkKind, @Id, @DateAdded, @DateUpdated, @Path, @SourcePath, @BlurHash43, @BlurHash54, @BlurHash64)",
                     parameters)
@@ -440,6 +450,14 @@ public class MetadataRepository : IMetadataRepository
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
     }
 
+    public async Task<Unit> MarkAsUpdated(FillerMetadata metadata, DateTime dateUpdated)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Connection.ExecuteAsync(
+            @"UPDATE FillerMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
+            new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
+    }
+
     public async Task<Unit> MarkAsExternal(OtherVideoMetadata metadata)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
@@ -448,11 +466,27 @@ public class MetadataRepository : IMetadataRepository
             new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
     }
 
+    public async Task<Unit> MarkAsExternal(FillerMetadata metadata)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Connection.ExecuteAsync(
+            @"UPDATE FillerMetadata SET MetadataKind = @Kind WHERE Id = @Id",
+            new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
+    }
+
     public async Task<Unit> SetContentRating(OtherVideoMetadata metadata, string contentRating)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE OtherVideoMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
+            new { metadata.Id, ContentRating = contentRating }).ToUnit();
+    }
+
+    public async Task<Unit> SetContentRating(FillerMetadata metadata, string contentRating)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Connection.ExecuteAsync(
+            @"UPDATE FillerMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
             new { metadata.Id, ContentRating = contentRating }).ToUnit();
     }
 
@@ -493,6 +527,10 @@ public class MetadataRepository : IMetadataRepository
             OtherVideoMetadata =>
                 await dbContext.Connection.ExecuteAsync(
                     "INSERT INTO MetadataGuid (Guid, OtherVideoMetadataId) VALUES (@Guid, @MetadataId)",
+                    new { guid.Guid, MetadataId = metadata.Id }).Map(result => result > 0),
+            FillerMetadata =>
+                await dbContext.Connection.ExecuteAsync(
+                    "INSERT INTO MetadataGuid (Guid, FillerMetadataId) VALUES (@Guid, @MetadataId)",
                     new { guid.Guid, MetadataId = metadata.Id }).Map(result => result > 0),
             _ => throw new NotSupportedException()
         };
@@ -594,6 +632,10 @@ public class MetadataRepository : IMetadataRepository
             OtherVideoMetadata => await dbContext.OtherVideoMetadata
                 .Include(ovm => ovm.Subtitles)
                 .SelectOneAsync(ovm => ovm.Id, mm => mm.Id == metadataId)
+                .MapT(ovm => (Core.Domain.Metadata)ovm),
+            FillerMetadata => await dbContext.FillerMetadata
+                .Include(fm => fm.Subtitles)
+                .SelectOneAsync(fm => fm.Id, mm => mm.Id == metadataId)
                 .MapT(ovm => (Core.Domain.Metadata)ovm),
             _ => None
         };

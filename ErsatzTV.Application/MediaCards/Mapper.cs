@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Jellyfin;
@@ -117,6 +118,23 @@ internal static class Mapper
             musicVideoMetadata.MusicVideo.GetHeadVersion().MediaFiles.Head().Path,
             localPath);
 
+    internal static FillerCardViewModel ProjectToViewModel(FillerMetadata fillerMetadata)
+    {
+        string poster = GetThumbnail(fillerMetadata, None, None);
+        if (string.IsNullOrWhiteSpace(poster))
+        {
+            poster = GetPoster(fillerMetadata, None, None);
+        }
+
+        return new FillerCardViewModel(
+            fillerMetadata.FillerId,
+            fillerMetadata.Title,
+            fillerMetadata.OriginalTitle,
+            fillerMetadata.SortTitle,
+            poster,
+            fillerMetadata.Filler.State);
+    }
+
     internal static OtherVideoCardViewModel ProjectToViewModel(OtherVideoMetadata otherVideoMetadata)
     {
         string poster = GetThumbnail(otherVideoMetadata, None, None);
@@ -197,6 +215,8 @@ internal static class Mapper
                     .Map(mv => ProjectToViewModel(mv.MusicVideoMetadata.Head(), string.Empty))
                     .ToList(),
                 collection.MediaItems.OfType<OtherVideo>().Map(ov => ProjectToViewModel(ov.OtherVideoMetadata.Head()))
+                    .ToList(),
+                collection.MediaItems.OfType<FillerMediaItem>().Map(fv => ProjectToViewModel(fv.FillerMetadata.Head()))
                     .ToList(),
                 collection.MediaItems.OfType<Song>().Map(s => ProjectToViewModel(s.SongMetadata.Head()))
                     .ToList(),

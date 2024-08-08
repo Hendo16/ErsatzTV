@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -53,6 +54,9 @@ public class GetChannelFramerateHandler : IRequestHandler<GetChannelFramerate, O
             .Include(p => p.Items)
             .ThenInclude(pi => pi.MediaItem)
             .ThenInclude(mi => (mi as OtherVideo).MediaVersions)
+            .Include(p => p.Items)
+            .ThenInclude(pi => pi.MediaItem)
+            .ThenInclude(mi => (mi as FillerMediaItem).MediaVersions)
             .Filter(p => p.Channel.Number == request.ChannelNumber)
             .ToListAsync(cancellationToken);
 

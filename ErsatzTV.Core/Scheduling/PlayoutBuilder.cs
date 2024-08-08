@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
@@ -857,6 +858,8 @@ public class PlayoutBuilder : IPlayoutBuilder
                         .IfNoneAsync(TimeSpan.Zero) == TimeSpan.Zero,
                     OtherVideo ov => await ov.MediaVersions.Map(v => v.Duration).HeadOrNone()
                         .IfNoneAsync(TimeSpan.Zero) == TimeSpan.Zero,
+                    FillerMediaItem fv => await fv.MediaVersions.Map(v => v.Duration).HeadOrNone()
+                        .IfNoneAsync(TimeSpan.Zero) == TimeSpan.Zero,
                     Song s => await s.MediaVersions.Map(v => v.Duration).HeadOrNone()
                         .IfNoneAsync(TimeSpan.Zero) == TimeSpan.Zero,
                     Image => false,
@@ -1189,6 +1192,10 @@ public class PlayoutBuilder : IPlayoutBuilder
                 return ov.OtherVideoMetadata.HeadOrNone().Match(
                     ovm => ovm.Title ?? string.Empty,
                     () => "[unknown video]");
+            case FillerMediaItem fv:
+                return fv.FillerMetadata.HeadOrNone().Match(
+                    fm => fm.Title ?? string.Empty,
+                    () => "[unknown filler]");
             case Song s:
                 return s.SongMetadata.HeadOrNone().Match(
                     sm => sm.Title ?? string.Empty,

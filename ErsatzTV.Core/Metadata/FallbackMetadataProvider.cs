@@ -2,6 +2,7 @@
 using System.Text.RegularExpressions;
 using Bugsnag;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Metadata;
 
 namespace ErsatzTV.Core.Metadata;
@@ -138,6 +139,27 @@ public partial class FallbackMetadataProvider : IFallbackMetadataProvider
         };
 
         return GetOtherVideoMetadata(path, metadata);
+    }
+
+    public Option<FillerMetadata> GetFallbackMetadata(FillerMediaItem filler)
+    {
+        string path = filler.MediaVersions.Head().MediaFiles.Head().Path;
+        string fileName = Path.GetFileNameWithoutExtension(path);
+        var metadata = new FillerMetadata
+        {
+            MetadataKind = MetadataKind.Fallback,
+            Title = fileName ?? path,
+            Filler = filler,
+            Genres = new List<Genre>(),
+            Tags = new List<Tag>(),
+            Studios = new List<Studio>(),
+            Actors = new List<Actor>(),
+            Directors = new List<Director>(),
+            Writers = new List<Writer>(),
+            Guids = new List<MetadataGuid>()
+        };
+
+        return GetFillerMetadata(path, metadata);
     }
 
     public Option<SongMetadata> GetFallbackMetadata(Song song)
@@ -280,6 +302,44 @@ public partial class FallbackMetadataProvider : IFallbackMetadataProvider
             metadata.Studios = [];
             metadata.Directors = [];
             metadata.DateUpdated = DateTime.UtcNow;
+
+            return metadata;
+        }
+        catch (Exception ex)
+        {
+            _client.Notify(ex);
+            return None;
+        }
+    }
+
+    private Option<FillerMetadata> GetFillerMetadata(string path, FillerMetadata metadata)
+    {
+        try
+        {
+            string folder = Path.GetDirectoryName(path);
+            if (folder == null)
+            {
+                return None;
+            }
+
+            string libraryPath = metadata.Filler.LibraryPath.Path;
+            string parent = Optional(Directory.GetParent(libraryPath)).Match(
+                di => di.FullName,
+                () => libraryPath);
+
+            string diff = Path.GetRelativePath(parent, folder);
+
+            var tags = diff.Split(Path.DirectorySeparatorChar)
+                .Map(t => new Tag { Name = t })
+                .ToList();
+
+            metadata.Artwork = new List<Artwork>();
+            metadata.Actors = new List<Actor>();
+            metadata.Genres = new List<Genre>();
+            metadata.Tags = tags;
+            metadata.Studios = new List<Studio>();
+            metadata.DateUpdated = DateTime.UtcNow;
+            metadata.OriginalTitle = Path.GetRelativePath(libraryPath, path);
 
             return metadata;
         }

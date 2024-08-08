@@ -53,8 +53,9 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         string musicVideoTemplateFileName = GetMusicVideoTemplateFileName();
         string songTemplateFileName = GetSongTemplateFileName();
         string otherVideoTemplateFileName = GetOtherVideoTemplateFileName();
+        string fillerTemplateFileName = GetFillerMediaItemTemplateFileName();
         if (movieTemplateFileName is null || episodeTemplateFileName is null || musicVideoTemplateFileName is null ||
-            songTemplateFileName is null || otherVideoTemplateFileName is null)
+            songTemplateFileName is null || otherVideoTemplateFileName is null || fillerTemplateFileName is null)
         {
             return;
         }
@@ -83,6 +84,9 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
         string otherVideoText = await File.ReadAllTextAsync(otherVideoTemplateFileName, cancellationToken);
         var otherVideoTemplate = Template.Parse(otherVideoText, otherVideoTemplateFileName);
+
+        string fillerText = await File.ReadAllTextAsync(fillerTemplateFileName, cancellationToken);
+        var fillerTemplate = Template.Parse(fillerText, fillerTemplateFileName);
 
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
@@ -154,6 +158,10 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             .ThenInclude(vm => vm.Artwork)
             .Include(p => p.Items)
             .ThenInclude(i => i.MediaItem)
+            .ThenInclude(i => (i as FillerMediaItem).FillerMetadata)
+            .ThenInclude(vm => vm.Artwork)
+            .Include(p => p.Items)
+            .ThenInclude(i => i.MediaItem)
             .ThenInclude(i => (i as Song).SongMetadata)
             .ThenInclude(vm => vm.Artwork)
             .Include(p => p.Items)
@@ -197,6 +205,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         musicVideoTemplate,
                         songTemplate,
                         otherVideoTemplate,
+                        fillerTemplate,
                         minifier,
                         xml);
                     break;
@@ -215,6 +224,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         musicVideoTemplate,
                         songTemplate,
                         otherVideoTemplate,
+                        fillerTemplate,
                         minifier,
                         xml);
                     break;
@@ -232,6 +242,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         musicVideoTemplate,
                         songTemplate,
                         otherVideoTemplate,
+                        fillerTemplate,
                         minifier,
                         xml);
                     break;
@@ -256,6 +267,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template musicVideoTemplate,
         Template songTemplate,
         Template otherVideoTemplate,
+        Template fillerTemplate,
         XmlMinifier minifier,
         XmlWriter xml)
     {
@@ -341,6 +353,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 musicVideoTemplate,
                 songTemplate,
                 otherVideoTemplate,
+                fillerTemplate,
                 minifier,
                 xml);
 
@@ -357,6 +370,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template musicVideoTemplate,
         Template songTemplate,
         Template otherVideoTemplate,
+        Template fillerTemplate,
         XmlMinifier minifier,
         XmlWriter xml)
     {
@@ -397,6 +411,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                     musicVideoTemplate,
                     songTemplate,
                     otherVideoTemplate,
+                    fillerTemplate,
                     minifier,
                     xml);
 
@@ -418,6 +433,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template musicVideoTemplate,
         Template songTemplate,
         Template otherVideoTemplate,
+        Template fillerTemplate,
         XmlMinifier minifier,
         XmlWriter xml)
     {
@@ -479,6 +495,16 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 title,
                 templateContext,
                 otherVideoTemplate),
+            FillerMediaItem templateFiller => await ProcessFillerMediaItemTemplate(
+                request,
+                templateFiller,
+                start,
+                stop,
+                hasCustomTitle,
+                displayItem,
+                title,
+                templateContext,
+                fillerTemplate),
             _ => Option<string>.None
         };
 
@@ -718,6 +744,45 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         return Option<string>.None;
     }
 
+    private static async Task<Option<string>> ProcessFillerMediaItemTemplate(
+        RefreshChannelData request,
+        FillerMediaItem templateFiller,
+        string start,
+        string stop,
+        bool hasCustomTitle,
+        PlayoutItem displayItem,
+        string title,
+        XmlTemplateContext templateContext,
+        Template fillerTemplate)
+    {
+        foreach (FillerMetadata metadata in templateFiller.FillerMetadata.HeadOrNone())
+        {
+            metadata.Genres ??= [];
+            metadata.Guids ??= [];
+
+            var data = new
+            {
+                ProgrammeStart = start,
+                ProgrammeStop = stop,
+                request.ChannelNumber,
+                HasCustomTitle = hasCustomTitle,
+                displayItem.CustomTitle,
+                FillerTitle = title,
+                FillerHasYear = metadata.Year.HasValue,
+                FillerYear = metadata.Year,
+                FillerGenres = metadata.Genres.Map(g => g.Name).OrderBy(n => n),
+            };
+
+            var scriptObject = new ScriptObject();
+            scriptObject.Import(data);
+            templateContext.PushGlobal(scriptObject);
+
+            return await fillerTemplate.RenderAsync(templateContext);
+        }
+
+        return Option<string>.None;
+    }
+
     private static async Task<Option<string>> ProcessOtherVideoTemplate(
         RefreshChannelData request,
         OtherVideo templateOtherVideo,
@@ -853,6 +918,29 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         return templateFileName;
     }
 
+    private string GetFillerMediaItemTemplateFileName()
+    {
+        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "filler.sbntxt");
+
+        // fall back to default template
+        if (!_localFileSystem.FileExists(templateFileName))
+        {
+            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_filler.sbntxt");
+        }
+
+        // fail if file doesn't exist
+        if (!_localFileSystem.FileExists(templateFileName))
+        {
+            _logger.LogError(
+                "Unable to generate filler XMLTV fragment without template file {File}; please restart ErsatzTV",
+                templateFileName);
+
+            return null;
+        }
+
+        return templateFileName;
+    }
+
     private string GetOtherVideoTemplateFileName()
     {
         string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "otherVideo.sbntxt");
@@ -931,6 +1019,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 .IfNone("[unknown artist]"),
             OtherVideo ov => ov.OtherVideoMetadata.HeadOrNone().Map(vm => vm.Title ?? string.Empty)
                 .IfNone("[unknown video]"),
+            FillerMediaItem fv => fv.FillerMetadata.HeadOrNone().Map(fm => fm.Title ?? string.Empty)
+                .IfNone("[unknown filler]"),
             _ => "[unknown]"
         };
     }

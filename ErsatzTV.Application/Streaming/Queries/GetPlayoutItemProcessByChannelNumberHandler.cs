@@ -144,6 +144,15 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             .ThenInclude(mi => (mi as OtherVideo).MediaVersions)
             .ThenInclude(ov => ov.Streams)
             .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as FillerMediaItem).FillerMetadata)
+            .ThenInclude(fm => fm.Subtitles)
+            .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as FillerMediaItem).MediaVersions)
+            .ThenInclude(f => f.MediaFiles)
+            .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as FillerMediaItem).MediaVersions)
+            .ThenInclude(f => f.Streams)
+            .Include(i => i.MediaItem)
             .ThenInclude(mi => (mi as Song).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
             .Include(i => i.MediaItem)
@@ -390,6 +399,9 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 .IfNoneAsync(new List<Subtitle>()),
             MusicVideo musicVideo => await GetMusicVideoSubtitles(musicVideo, channel, settings),
             OtherVideo otherVideo => await Optional(otherVideo.OtherVideoMetadata).Flatten().HeadOrNone()
+                .Map(mm => mm.Subtitles ?? new List<Subtitle>())
+                .IfNoneAsync(new List<Subtitle>()),
+            FillerMediaItem filler => await Optional(filler.FillerMetadata).Flatten().HeadOrNone()
                 .Map(mm => mm.Subtitles ?? new List<Subtitle>())
                 .IfNoneAsync(new List<Subtitle>()),
             _ => new List<Subtitle>()

@@ -9,6 +9,7 @@ using Dapper;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Locking;
 using ErsatzTV.Core.Interfaces.Metadata;
@@ -387,6 +388,12 @@ public class ExtractEmbeddedSubtitlesHandler : IRequestHandler<ExtractEmbeddedSu
             .ThenInclude(mv => mv.Streams)
             .Include(mi => (mi as OtherVideo).OtherVideoMetadata)
             .ThenInclude(em => em.Subtitles)
+            .Include(mi => (mi as FillerMediaItem).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Include(mi => (mi as FillerMediaItem).MediaVersions)
+            .ThenInclude(mv => mv.Streams)
+            .Include(mi => (mi as FillerMediaItem).FillerMetadata)
+            .ThenInclude(em => em.Subtitles)
             .SelectOneAsync(e => e.Id, e => e.Id == mediaItemId);
 
     private static Option<List<Subtitle>> GetSubtitles(MediaItem mediaItem) =>
@@ -396,6 +403,7 @@ public class ExtractEmbeddedSubtitlesHandler : IRequestHandler<ExtractEmbeddedSu
             Movie m => m.MovieMetadata.Head().Subtitles,
             MusicVideo mv => mv.MusicVideoMetadata.Head().Subtitles,
             OtherVideo ov => ov.OtherVideoMetadata.Head().Subtitles,
+            FillerMediaItem f => f.FillerMetadata.Head().Subtitles,
             _ => None
         };
 

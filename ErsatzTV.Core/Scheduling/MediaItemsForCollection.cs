@@ -69,6 +69,15 @@ public static class MediaItemsForCollection
                 }
 
                 break;
+
+            case ProgramScheduleItemCollectionType.Filler:
+                foreach (int mediaItemId in Optional(collectionKey.MediaItemId))
+                {
+                    result.AddRange(await mediaCollectionRepository.GetFiller(mediaItemId));
+                }
+
+                break;
+            
             case ProgramScheduleItemCollectionType.Song:
                 foreach (int mediaItemId in Optional(collectionKey.MediaItemId))
                 {

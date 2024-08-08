@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Health;
 using ErsatzTV.Core.Health.Checks;
@@ -44,6 +45,12 @@ public class ZeroDurationHealthCheck : BaseHealthCheck, IZeroDurationHealthCheck
             .ThenInclude(mv => mv.MediaFiles)
             .ToListAsync(cancellationToken);
 
+        List<FillerMediaItem> fillerItems = await dbContext.FillerMediaItems
+            .Filter(fm => fm.MediaVersions.Any(fm => fm.Duration == TimeSpan.Zero))
+            .Include(f => f.MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .ToListAsync(cancellationToken);
+
         List<Song> songs = await dbContext.Songs
             .Filter(s => s.MediaVersions.Any(mv => mv.Duration == TimeSpan.Zero))
             .Include(s => s.MediaVersions)
@@ -54,6 +61,7 @@ public class ZeroDurationHealthCheck : BaseHealthCheck, IZeroDurationHealthCheck
             .Append(episodes.Map(e => e.MediaVersions.Head().MediaFiles.Head().Path))
             .Append(musicVideos.Map(mv => mv.GetHeadVersion().MediaFiles.Head().Path))
             .Append(otherVideos.Map(ov => ov.GetHeadVersion().MediaFiles.Head().Path))
+            .Append(fillerItems.Map(f => f.GetHeadVersion().MediaFiles.Head().Path))
             .Append(songs.Map(s => s.GetHeadVersion().MediaFiles.Head().Path))
             .ToList();
 

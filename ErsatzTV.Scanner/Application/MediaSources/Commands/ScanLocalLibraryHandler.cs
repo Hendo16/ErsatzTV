@@ -19,6 +19,7 @@ public class ScanLocalLibraryHandler : IRequestHandler<ScanLocalLibrary, Either<
     private readonly IMovieFolderScanner _movieFolderScanner;
     private readonly IMusicVideoFolderScanner _musicVideoFolderScanner;
     private readonly IOtherVideoFolderScanner _otherVideoFolderScanner;
+    private readonly IFillerFolderScanner _fillerFolderScanner;
     private readonly ISongFolderScanner _songFolderScanner;
     private readonly ITelevisionFolderScanner _televisionFolderScanner;
 
@@ -29,6 +30,7 @@ public class ScanLocalLibraryHandler : IRequestHandler<ScanLocalLibrary, Either<
         ITelevisionFolderScanner televisionFolderScanner,
         IMusicVideoFolderScanner musicVideoFolderScanner,
         IOtherVideoFolderScanner otherVideoFolderScanner,
+        IFillerFolderScanner fillerFolderScanner,
         ISongFolderScanner songFolderScanner,
         IImageFolderScanner imageFolderScanner,
         IMediator mediator,
@@ -40,6 +42,7 @@ public class ScanLocalLibraryHandler : IRequestHandler<ScanLocalLibrary, Either<
         _televisionFolderScanner = televisionFolderScanner;
         _musicVideoFolderScanner = musicVideoFolderScanner;
         _otherVideoFolderScanner = otherVideoFolderScanner;
+        _fillerFolderScanner = fillerFolderScanner;
         _songFolderScanner = songFolderScanner;
         _imageFolderScanner = imageFolderScanner;
         _mediator = mediator;
@@ -102,6 +105,14 @@ public class ScanLocalLibraryHandler : IRequestHandler<ScanLocalLibrary, Either<
                             cancellationToken),
                     LibraryMediaKind.OtherVideos =>
                         await _otherVideoFolderScanner.ScanFolder(
+                            libraryPath,
+                            ffmpegPath,
+                            ffprobePath,
+                            progressMin,
+                            progressMax,
+                            cancellationToken),
+                    LibraryMediaKind.Filler =>
+                        await _fillerFolderScanner.ScanFolder(
                             libraryPath,
                             ffmpegPath,
                             ffprobePath,

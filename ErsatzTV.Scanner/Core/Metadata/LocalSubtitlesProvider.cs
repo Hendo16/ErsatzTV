@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
@@ -58,6 +59,7 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
             Movie m => m.MovieMetadata.OfType<ErsatzTV.Core.Domain.Metadata>().HeadOrNone(),
             MusicVideo mv => mv.MusicVideoMetadata.OfType<ErsatzTV.Core.Domain.Metadata>().HeadOrNone(),
             OtherVideo ov => ov.OtherVideoMetadata.OfType<ErsatzTV.Core.Domain.Metadata>().HeadOrNone(),
+            FillerMediaItem fv => fv.FillerMetadata.OfType<ErsatzTV.Core.Domain.Metadata>().HeadOrNone(),
             _ => None
         };
 

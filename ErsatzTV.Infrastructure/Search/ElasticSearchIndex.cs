@@ -4,6 +4,7 @@ using Elastic.Clients.Elasticsearch;
 using Elastic.Clients.Elasticsearch.Aggregations;
 using Elastic.Clients.Elasticsearch.IndexManagement;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Repositories.Caching;
@@ -133,6 +134,9 @@ public class ElasticSearchIndex : ISearchIndex
                     break;
                 case OtherVideo otherVideo:
                     await UpdateOtherVideo(searchRepository, otherVideo);
+                    break;
+                case FillerMediaItem filler:
+                    await UpdateFiller(searchRepository, filler);
                     break;
                 case Song song:
                     await UpdateSong(searchRepository, song);
@@ -274,6 +278,9 @@ public class ElasticSearchIndex : ISearchIndex
                 break;
             case OtherVideo otherVideo:
                 await UpdateOtherVideo(searchRepository, otherVideo);
+                break;
+            case FillerMediaItem filler:
+                await UpdateFiller(searchRepository, filler);
                 break;
             case Song song:
                 await UpdateSong(searchRepository, song);
@@ -632,6 +639,55 @@ public class ElasticSearchIndex : ISearchIndex
             {
                 metadata.Episode = null;
                 _logger.LogWarning(ex, "Error indexing episode with metadata {@Metadata}", metadata);
+            }
+        }
+    }
+
+    private async Task UpdateFiller(ISearchRepository searchRepository, FillerMediaItem filler)
+    {
+        foreach (FillerMetadata metadata in filler.FillerMetadata.HeadOrNone())
+        {
+            try
+            {
+                var doc = new ElasticSearchItem
+                {
+                    Id = filler.Id,
+                    Type = LuceneSearchIndex.FillerType,
+                    Title = metadata.Title,
+                    SortTitle = metadata.SortTitle.ToLowerInvariant(),
+                    LibraryName = filler.LibraryPath.Library.Name,
+                    LibraryId = filler.LibraryPath.Library.Id,
+                    TitleAndYear = LuceneSearchIndex.GetTitleAndYear(metadata),
+                    JumpLetter = LuceneSearchIndex.GetJumpLetter(metadata),
+                    State = filler.State.ToString(),
+                    MetadataKind = metadata.MetadataKind.ToString(),
+                    Language = await GetLanguages(searchRepository, filler.MediaVersions),
+                    LanguageTag = GetLanguageTags(filler.MediaVersions),
+                    SubLanguage = await GetSubLanguages(searchRepository, filler.MediaVersions),
+                    SubLanguageTag = GetSubLanguageTags(filler.MediaVersions),
+                    ReleaseDate = GetReleaseDate(metadata.ReleaseDate),
+                    AddedDate = GetAddedDate(metadata.DateAdded),
+                    Genre = metadata.Genres.Map(g => g.Name).ToList(),
+                    Tag = metadata.Tags.Map(t => t.Name).ToList(),
+                    Studio = metadata.Studios.Map(s => s.Name).ToList(),
+                    Actor = metadata.Actors.Map(a => a.Name).ToList(),
+                    Director = metadata.Directors.Map(d => d.Name).ToList(),
+                    Writer = metadata.Writers.Map(w => w.Name).ToList()
+                };
+
+                AddStatistics(doc, filler.MediaVersions);
+
+                foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
+                {
+                    doc.AdditionalProperties.Add(key, value);
+                }
+
+                await _client.IndexAsync(doc, index: IndexName);
+            }
+            catch (Exception ex)
+            {
+                metadata.Filler = null;
+                _logger.LogWarning(ex, "Error indexing filler with metadata {@Metadata}", metadata);
             }
         }
     }

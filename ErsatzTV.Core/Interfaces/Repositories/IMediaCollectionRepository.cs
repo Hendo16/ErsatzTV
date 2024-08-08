@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.Core.Interfaces.Repositories;
@@ -22,6 +23,7 @@ public interface IMediaCollectionRepository
     Task<List<Episode>> GetEpisode(int id);
     Task<List<MusicVideo>> GetMusicVideo(int id);
     Task<List<OtherVideo>> GetOtherVideo(int id);
+    Task<List<FillerMediaItem>> GetFiller(int id);
     Task<List<Song>> GetSong(int id);
     Task<List<Image>> GetImage(int id);
     Task<List<CollectionWithItems>> GetMultiCollectionCollections(int id);

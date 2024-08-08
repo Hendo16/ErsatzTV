@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Application.MediaItems;
 
@@ -25,6 +26,8 @@ internal static class Mapper
 
     internal static NamedMediaItemViewModel ProjectToViewModel(OtherVideo otherVideo) =>
         new(otherVideo.Id, otherVideo.OtherVideoMetadata.HeadOrNone().Match(ov => ov.Title, () => "???"));
+    internal static NamedMediaItemViewModel ProjectToViewModel(FillerMediaItem filler) =>
+        new(filler.Id, filler.FillerMetadata.HeadOrNone().Match(ov => ov.Title, () => "???"));
 
     internal static NamedMediaItemViewModel ProjectToViewModel(Song song) =>
         new(song.Id, SongTitle(song));

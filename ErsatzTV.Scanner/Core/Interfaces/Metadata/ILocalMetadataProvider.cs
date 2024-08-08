@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Scanner.Core.Interfaces.Metadata;
 
@@ -12,6 +13,7 @@ public interface ILocalMetadataProvider
     Task<bool> RefreshSidecarMetadata(Artist artist, string nfoFileName);
     Task<bool> RefreshSidecarMetadata(MusicVideo musicVideo, string nfoFileName);
     Task<bool> RefreshSidecarMetadata(OtherVideo otherVideo, string nfoFileName);
+    Task<bool> RefreshSidecarMetadata(FillerMediaItem filler, string nfoFileName);
     Task<bool> RefreshTagMetadata(Song song);
     Task<bool> RefreshTagMetadata(Image image, double? durationSeconds);
     Task<bool> RefreshFallbackMetadata(Movie movie);
@@ -19,6 +21,7 @@ public interface ILocalMetadataProvider
     Task<bool> RefreshFallbackMetadata(Artist artist, string artistFolder);
     Task<bool> RefreshFallbackMetadata(MusicVideo musicVideo);
     Task<bool> RefreshFallbackMetadata(OtherVideo otherVideo);
+    Task<bool> RefreshFallbackMetadata(FillerMediaItem filler);
     Task<bool> RefreshFallbackMetadata(Song song);
     Task<bool> RefreshFallbackMetadata(Image image);
     Task<bool> RefreshFallbackMetadata(Show televisionShow, string showFolder);

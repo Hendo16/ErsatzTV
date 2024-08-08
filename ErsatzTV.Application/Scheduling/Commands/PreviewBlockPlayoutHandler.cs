@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling;
@@ -77,6 +78,8 @@ public class PreviewBlockPlayoutHandler(
                 .ThenInclude(s => s.ShowMetadata)
                 .Include(mi => (mi as OtherVideo).OtherVideoMetadata)
                 .Include(mi => (mi as OtherVideo).MediaVersions)
+                .Include(mi => (mi as FillerMediaItem).FillerMetadata)
+                .Include(mi => (mi as FillerMediaItem).MediaVersions)
                 .Include(mi => (mi as Song).SongMetadata)
                 .Include(mi => (mi as Song).MediaVersions)
                 .Include(mi => (mi as Image).ImageMetadata)
