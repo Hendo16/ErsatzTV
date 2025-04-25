@@ -16,6 +16,7 @@ using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Core.Scheduling;
+using ErsatzTV.FFmpeg.State;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
@@ -265,6 +266,28 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                     ffmpegPath,
                     ffprobePath,
                     cancellationToken);
+
+                // override watermark as song_progress_overlay.png
+                if (videoVersion is BackgroundImageMediaVersion { IsSongWithProgress: true })
+                {
+                    double ratio = channel.FFmpegProfile.Resolution.Width / (double)channel.FFmpegProfile.Resolution.Height;
+                    bool is43 = Math.Abs(ratio - 4.0 / 3.0) < 0.01;
+                    string image = is43 ? "song_progress_overlay_43.png" : "song_progress_overlay.png";
+
+                    disableWatermarks = false;
+                    playoutItemWatermark = new ChannelWatermark
+                    {
+                        Mode = ChannelWatermarkMode.Permanent,
+                        Size = WatermarkSize.Scaled,
+                        WidthPercent = 100,
+                        HorizontalMarginPercent = 0,
+                        VerticalMarginPercent = 0,
+                        Opacity = 100,
+                        Location = WatermarkLocation.TopLeft,
+                        ImageSource = ChannelWatermarkImageSource.Resource,
+                        Image = image
+                    };
+                }
             }
 
             if (playoutItemWithPath.PlayoutItem.MediaItem is Image)
@@ -302,6 +325,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 request.StartAtZero ? start : now,
                 playoutItemWatermark,
                 maybeGlobalWatermark,
+                channel.FFmpegProfile.VaapiDisplay,
                 channel.FFmpegProfile.VaapiDriver,
                 channel.FFmpegProfile.VaapiDevice,
                 Optional(channel.FFmpegProfile.QsvExtraHardwareFrames),
@@ -347,6 +371,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         "Channel is Offline",
                         request.HlsRealtime,
                         request.PtsOffset,
+                        channel.FFmpegProfile.VaapiDisplay,
                         channel.FFmpegProfile.VaapiDriver,
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
@@ -360,6 +385,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         error.Value,
                         request.HlsRealtime,
                         request.PtsOffset,
+                        channel.FFmpegProfile.VaapiDisplay,
                         channel.FFmpegProfile.VaapiDriver,
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
@@ -373,6 +399,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         "Channel is Offline",
                         request.HlsRealtime,
                         request.PtsOffset,
+                        channel.FFmpegProfile.VaapiDisplay,
                         channel.FFmpegProfile.VaapiDriver,
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
@@ -603,7 +630,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
 
                     return new PlayoutItemWithPath(
                         playoutItem,
-                        $"http://localhost:{Settings.ListenPort}/media/plex/{plexMediaSourceId}/{pmf.Key}");
+                        $"http://localhost:{Settings.StreamingPort}/media/plex/{plexMediaSourceId}/{pmf.Key}");
                 }
 
                 break;
@@ -621,7 +648,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         {
             return new PlayoutItemWithPath(
                 playoutItem,
-                $"http://localhost:{Settings.ListenPort}/media/jellyfin/{itemId}");
+                $"http://localhost:{Settings.StreamingPort}/media/jellyfin/{itemId}");
         }
 
         // attempt to remotely stream emby
@@ -636,7 +663,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         {
             return new PlayoutItemWithPath(
                 playoutItem,
-                $"http://localhost:{Settings.ListenPort}/media/emby/{itemId}");
+                $"http://localhost:{Settings.StreamingPort}/media/emby/{itemId}");
         }
 
         return new PlayoutItemDoesNotExistOnDisk(path);

@@ -17,7 +17,7 @@ namespace ErsatzTV.Infrastructure.MySql.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.7")
+                .HasAnnotation("ProductVersion", "8.0.10")
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
@@ -278,6 +278,9 @@ namespace ErsatzTV.Infrastructure.MySql.Migrations
                         .HasColumnType("longtext");
 
                     b.Property<int>("ProgressMode")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SongVideoMode")
                         .HasColumnType("int");
 
                     b.Property<int>("StreamingMode")
@@ -635,6 +638,9 @@ namespace ErsatzTV.Infrastructure.MySql.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("VaapiDevice")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("VaapiDisplay")
                         .HasColumnType("longtext");
 
                     b.Property<int>("VaapiDriver")

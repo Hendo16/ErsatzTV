@@ -33,10 +33,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-12
+          - os: macos-13
             kind: macOS
             target: osx-x64
-          - os: macos-12
+          - os: macos-13
             kind: macOS
             target: osx-arm64
     steps:
@@ -130,7 +130,7 @@ jobs:
       - name: Publish
         uses: softprops/action-gh-release@v1
         with:
-          prerelease: true
+          prerelease: false
           tag_name: ${{ inputs.release_tag }}
           files: |
             ${{ env.RELEASE_NAME }}.dmg
@@ -146,6 +146,9 @@ jobs:
           - os: ubuntu-latest
             kind: linux
             target: linux-x64
+          - os: ubuntu-latest
+            kind: linux
+            target: linux-musl-x64
           - os: ubuntu-latest
             kind: linux
             target: linux-arm
@@ -230,7 +233,7 @@ jobs:
       - name: Publish
         uses: softprops/action-gh-release@v1
         with:
-          prerelease: true
+          prerelease: false
           tag_name: ${{ inputs.release_tag }}
           files: |
             ${{ env.RELEASE_NAME }}.zip

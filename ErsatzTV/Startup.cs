@@ -325,7 +325,6 @@ public class Startup
             Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                 ?.InformationalVersion ?? "unknown");
 
-        Log.Logger.Warning("This is beta software and may be unstable");
         Log.Logger.Warning(
             "Give feedback at {GitHub} or {Discord}",
             "https://github.com/ErsatzTV/ErsatzTV",
@@ -507,6 +506,14 @@ public class Startup
 
                     return LogEventLevel.Verbose;
                 };
+
+                options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+                {
+                    diagnosticContext.Set("RemoteIP", httpContext.Connection.RemoteIpAddress);
+                    diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"]);
+                };
+
+                options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.00} ms from {UserAgent} at {RemoteIP}";
             });
 
         app.UseRequestLocalization(
@@ -548,6 +555,19 @@ public class Startup
             });
 
         app.UseResponseCompression();
+
+        app.Use(
+            async (context, next) =>
+            {
+                if (!context.Request.Path.StartsWithSegments("/iptv") &&
+                    context.Connection.LocalPort != Settings.UiPort)
+                {
+                    context.Response.StatusCode = 404;
+                    return;
+                }
+
+                await next(context);
+            });
 
         app.MapWhen(
             ctx => !ctx.Request.Path.StartsWithSegments("/iptv"),

@@ -7,6 +7,7 @@ using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Core.Iptv;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Streaming;
 using ErsatzTV.Infrastructure.Data;
@@ -298,7 +299,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             int finishIndex = j;
             while (finishIndex + 1 < sorted.Count && (sorted[finishIndex + 1].GuideGroup == startItem.GuideGroup
                                                       || sorted[finishIndex + 1].FillerKind is FillerKind.GuideMode
-                                                          or FillerKind.Tail or FillerKind.Fallback))
+                                                          or FillerKind.Tail or FillerKind.Fallback or FillerKind.DecoDefault))
             {
                 finishIndex++;
             }
@@ -540,6 +541,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             {
                 ProgrammeStart = start,
                 ProgrammeStop = stop,
+                ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
                 request.ChannelNumber,
                 HasCustomTitle = hasCustomTitle,
                 displayItem.CustomTitle,
@@ -595,6 +598,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 {
                     ProgrammeStart = start,
                     ProgrammeStop = stop,
+                    ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                    ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
                     request.ChannelNumber,
                     HasCustomTitle = hasCustomTitle,
                     displayItem.CustomTitle,
@@ -655,6 +660,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             {
                 ProgrammeStart = start,
                 ProgrammeStop = stop,
+                ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
                 request.ChannelNumber,
                 HasCustomTitle = hasCustomTitle,
                 displayItem.CustomTitle,
@@ -712,6 +719,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             {
                 ProgrammeStart = start,
                 ProgrammeStop = stop,
+                ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
                 request.ChannelNumber,
                 HasCustomTitle = hasCustomTitle,
                 displayItem.CustomTitle,
@@ -803,6 +812,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             {
                 ProgrammeStart = start,
                 ProgrammeStop = stop,
+                ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
                 request.ChannelNumber,
                 HasCustomTitle = hasCustomTitle,
                 displayItem.CustomTitle,

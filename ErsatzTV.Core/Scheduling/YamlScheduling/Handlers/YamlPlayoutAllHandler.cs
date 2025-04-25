@@ -11,6 +11,7 @@ public class YamlPlayoutAllHandler(EnumeratorCache enumeratorCache) : YamlPlayou
     public override async Task<bool> Handle(
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
+        PlayoutBuildMode mode,
         ILogger<YamlPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
@@ -48,7 +49,7 @@ public class YamlPlayoutAllHandler(EnumeratorCache enumeratorCache) : YamlPlayou
                         //PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                         //PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
                         //SubtitleMode = scheduleItem.SubtitleMode
-                        GuideGroup = context.NextGuideGroup()
+                        GuideGroup = context.PeekNextGuideGroup()
                         //GuideStart = effectiveBlock.Start.UtcDateTime,
                         //GuideFinish = blockFinish.UtcDateTime,
                         //BlockKey = JsonConvert.SerializeObject(effectiveBlock.BlockKey),
@@ -57,6 +58,7 @@ public class YamlPlayoutAllHandler(EnumeratorCache enumeratorCache) : YamlPlayou
                     };
 
                     context.Playout.Items.Add(playoutItem);
+                    context.AdvanceGuideGroup();
 
                     // create history record
                     Option<PlayoutHistory> maybeHistory = GetHistoryForItem(

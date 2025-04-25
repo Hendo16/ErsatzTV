@@ -15,7 +15,7 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "8.0.7");
+            modelBuilder.HasAnnotation("ProductVersion", "8.0.10");
 
             modelBuilder.Entity("ErsatzTV.Core.Domain.Actor", b =>
                 {
@@ -275,6 +275,9 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("ProgressMode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SongVideoMode")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("StreamingMode")
@@ -619,6 +622,9 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("VaapiDevice")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VaapiDisplay")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("VaapiDriver")

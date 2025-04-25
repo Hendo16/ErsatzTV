@@ -5,6 +5,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 ### Added
+- Add `linux-musl-x64` artifact for users running Alpine x64
+- Add API endpoint to empty trash (POST to `/api/maintenance/empty_trash`)
+  - e.g. `curl -XPOST -d '' http://localhost:8409/api/maintenance/empty_trash`
+- Add remote IP and user agent to HTTP request logging
+- Add environment variables to allow ETV to run UI and streaming on separate ports
+    - `ETV_STREAMING_PORT`: port used for streaming requests, defaults to 8409
+    - `ETV_UI_PORT`: port used for admin UI, defaults to 8409
+- Publish docker images to ghcr.io (`ghcr.io/ersatztv/ersatztv`)
+
+### Fixed
+- Fix error message about synchronizing Plex collections from a Plex server that has zero collections
+
+## [25.1.0] - 2025-01-10
+### Added
+- Add `Reset All Playouts` button to top of playouts page
+- Add `rewind_on_reset` option to `wait_until` YAML playout instruction
+  - This option allows YAML playouts to start in the past
+- Add `advance` option to `epg_group` YAML playout instruction
+  - When set to `false`, this option will lock the guide group without starting a new guide group
+  - This can be helpful for "post roll" items that should be part of the previous item's guide group
+- Add `Song Video Mode` to channel settings
+  - `Default` - existing behavior
+  - `With Progress` - show animated progress bar at bottom of generated video
+    - Thanks to @JeckDev for the idea and the artwork
+- Add fallback album art image for songs that have no album art
+- Add `Vaapi Display` option to FFmpeg Profile
+  - Possible values will be install-specific and sourced from `vainfo`
+  - `drm` was the previous default value, and should be used in most cases
+- Test all `Vaapi Display` values in `Troubleshooting` > `VAAPI Capabilities`
+- Add `tag_full` field to search index
+  - This field contains the same values as the existing `tag` field, but it is not analyzed or tokenized
+
+### Changed
+- **BREAKING CHANGE**: Change channel identifiers used in XMLTV to work around bad behavior in Plex
+
+### Fixed
+- Fix startup error with MySql backend caused by database cleaner
+- Fix emptying trash with ElasticSearch backend
+- Fix double loading of trash UI elements, and fix reloading of all UI elements after emptying trash
+- Fix destroying channel preview player when preview dialog is closed
+  - This bug made it difficult to "stop" a channel after previewing it
+- Fix bug where deco default filler would never use hardware acceleration
+- Fix deleting local libraries with MySql backend
+- Fix `Scaling Behavior` `Crop` when content is smaller than FFmpeg Profile resolution
+  - Now, content will properly scale beyond the desired resolution before cropping
+- Fix displaying playout item durations that are greater than 24 hours
+- Fix building playouts when playlist has been changed to have fewer items
+- Fix selecting audio stream with preferred title
+- Fix synchronizing Plex collections
+  - If this breaks collection sync for you, you will need to update your Plex server
+- Fix guide group generation for `duration` YAML instructions
+- Fix default song background when targeting 4:3 resolutions
+  - Previously the background was always 16:9 and was padded, now it will fill 4:3
+
+## [0.8.8-beta] - 2024-09-19
+### Added
 - Add support for Plex Other Video libraries
   - These libraries will now appear as ETV Other Video libraries
   - Items in these libraries will have tag metadata added from folders just like local Other Video libraries
@@ -39,6 +95,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - POST `/api/libraries/{libraryId}/scan`
 - Add Deco setting to `Use Watermark During Filler`
   - This setting is turned OFF by default, meaning filler will NOT use the configured watermark unless this is manually turned on
+- Add `Random Count` filler mode by @embolon
+  - This mode will randomly schedule between zero and the provided count number of items
+  - e.g. random count 3 will schedule between 0 and 3 filler items
+- Add `Random Rotation` playback order for block scheduling by @embolon
+  - This playback order will pick a random item from a randomly selected group (show or artist)
+  - It is somewhat similar to the `Fill With Group` mode used in flood scheduling
 
 ### Fixed
 - Add basic cache busting to XMLTV image URLs
@@ -63,10 +125,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Fix synchronizing trakt lists from users with special characters in their username
   - Note that these lists MUST be added as URLs; the short-form `user/list` will NOT work with special characters
 - Fix local subtitle scanner to detect non-lowercase extensions (e.g. `Movie (2000).EN.SRT`)
+- Fix adding a single image to a manual collection from search results
+- Fix loading manual collection view when collection contains images
+- Fix edge case where block playout history would get stuck and repeat an item
+- Fix adjusting watermark opacity when watermark already contains alpha channel (is already transparent)
 
 ### Changed
 - Remove some unnecessary API calls related to media server scanning and paging
 - Improve trakt list URL validation; non-trakt URLs will no longer be requested
+- Prevent saving block templates when blocks are overlapping
+  - This can happen if block durations are changed for blocks that are already on the template
+- Redirect variant playlist request to proper URL for starting `HLS Segmenter` session when no session is active
+  - This can happen when some clients "pause" long enough for the session to stop in ETV
+  - When the client resumes playback, it requests the temp playlist URL which is now invalid e.g. `/iptv/session/1/hls.m3u8` (not the original URL `/iptv/channel/1.m3u8`)
+  - To fix, the client will be redirected back to the original URL in this case which will create a new session
 
 ## [0.8.7-beta] - 2024-06-26
 ### Added
@@ -2113,7 +2185,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Initial release to facilitate testing outside of Docker.
 
 
-[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.7-beta...HEAD
+[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.8-beta...HEAD
+[0.8.8-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.7-beta...v0.8.8-beta
 [0.8.7-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.6-beta...v0.8.7-beta
 [0.8.6-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.5-beta...v0.8.6-beta
 [0.8.5-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.4-beta...v0.8.5-beta

@@ -41,8 +41,8 @@ public class SongVideoGenerator : ISongVideoGenerator
         {
             Id = -1,
             Chapters = [],
-            Width = 192,
-            Height = 108,
+            Width = channel.FFmpegProfile.Resolution.Width / 10,
+            Height = channel.FFmpegProfile.Resolution.Height / 10,
             SampleAspectRatio = "1:1",
             Streams = [new MediaStream { MediaStreamKind = MediaStreamKind.Video, Index = 0, PixelFormat = "yuv420p" }]
         };
@@ -64,11 +64,16 @@ public class SongVideoGenerator : ISongVideoGenerator
         var boxBlur = false;
 
         const int HORIZONTAL_MARGIN_PERCENT = 3;
-        const int VERTICAL_MARGIN_PERCENT = 5;
+        var verticalMarginPercent = 5;
         const int WATERMARK_WIDTH_PERCENT = 25;
         WatermarkLocation watermarkLocation = NextRandom(2) == 0
             ? WatermarkLocation.BottomLeft
             : WatermarkLocation.BottomRight;
+
+        if (channel.SongVideoMode is ChannelSongVideoMode.WithProgress)
+        {
+            verticalMarginPercent += 10;
+        }
 
         foreach (SongMetadata metadata in song.SongMetadata)
         {
@@ -121,24 +126,21 @@ public class SongVideoGenerator : ISongVideoGenerator
             int leftMarginPercent = HORIZONTAL_MARGIN_PERCENT;
             int rightMarginPercent = HORIZONTAL_MARGIN_PERCENT;
 
-            if (metadata.Artwork.Any(a => a.ArtworkKind == ArtworkKind.Thumbnail))
+            switch (watermarkLocation)
             {
-                switch (watermarkLocation)
-                {
-                    case WatermarkLocation.BottomLeft:
-                        leftMarginPercent += WATERMARK_WIDTH_PERCENT + HORIZONTAL_MARGIN_PERCENT;
-                        break;
-                    case WatermarkLocation.BottomRight:
-                        leftMarginPercent = rightMarginPercent = HORIZONTAL_MARGIN_PERCENT;
-                        rightMarginPercent += WATERMARK_WIDTH_PERCENT + HORIZONTAL_MARGIN_PERCENT;
-                        break;
-                }
+                case WatermarkLocation.BottomLeft:
+                    leftMarginPercent += WATERMARK_WIDTH_PERCENT + HORIZONTAL_MARGIN_PERCENT;
+                    break;
+                case WatermarkLocation.BottomRight:
+                    leftMarginPercent = rightMarginPercent = HORIZONTAL_MARGIN_PERCENT;
+                    rightMarginPercent += WATERMARK_WIDTH_PERCENT + HORIZONTAL_MARGIN_PERCENT;
+                    break;
             }
 
             var leftMargin = (int)Math.Round(leftMarginPercent / 100.0 * channel.FFmpegProfile.Resolution.Width);
             var rightMargin = (int)Math.Round(rightMarginPercent / 100.0 * channel.FFmpegProfile.Resolution.Width);
             var verticalMargin =
-                (int)Math.Round(VERTICAL_MARGIN_PERCENT / 100.0 * channel.FFmpegProfile.Resolution.Height);
+                (int)Math.Round(verticalMarginPercent / 100.0 * channel.FFmpegProfile.Resolution.Height);
 
             subtitleFile = await new SubtitleBuilder(_tempFilePool)
                 .WithResolution(channel.FFmpegProfile.Resolution)
@@ -156,30 +158,40 @@ public class SongVideoGenerator : ISongVideoGenerator
                 .BuildFile();
 
             // use thumbnail (cover art) if present
-            foreach (Artwork artwork in Optional(
-                         metadata.Artwork.Find(a => a.ArtworkKind == ArtworkKind.Thumbnail)))
-            {
-                // signal that we want to use cover art as watermark
-                videoVersion = new CoverArtMediaVersion
-                {
-                    Chapters = new List<MediaChapter>(),
-                    // always stretch cover art
-                    Width = 192,
-                    Height = 108,
-                    SampleAspectRatio = "1:1",
-                    Streams = new List<MediaStream>
+            // fall back to default art
+            Artwork artwork = await Optional(metadata.Artwork.Find(a => a.ArtworkKind == ArtworkKind.Thumbnail))
+                .IfNoneAsync(
+                    new Artwork
                     {
-                        new() { MediaStreamKind = MediaStreamKind.Video, Index = 0 }
-                    }
-                };
+                        Id = 0,
+                        ArtworkKind = ArtworkKind.Thumbnail,
+                        Path = Path.Combine(FileSystemLayout.ResourcesCacheFolder, "song_album_cover_512.png"),
+                    });
 
-                string customPath = _imageCache.GetPathForImage(
-                    artwork.Path,
-                    ArtworkKind.Thumbnail,
-                    Option<int>.None);
+            // signal that we want to use cover art as watermark
+            videoVersion = new CoverArtMediaVersion
+            {
+                Chapters = [],
+                // always stretch cover art
+                Width = channel.FFmpegProfile.Resolution.Width / 10,
+                Height = channel.FFmpegProfile.Resolution.Height / 10,
+                SampleAspectRatio = "1:1",
+                Streams = new List<MediaStream>
+                {
+                    new() { MediaStreamKind = MediaStreamKind.Video, Index = 0 }
+                }
+            };
 
-                watermarkPath = customPath;
+            string customPath = _imageCache.GetPathForImage(
+                artwork.Path,
+                ArtworkKind.Thumbnail,
+                Option<int>.None);
 
+            watermarkPath = customPath;
+
+            // only blurhash real album art
+            if (artwork.Id > 0)
+            {
                 // randomize selected blur hash
                 var hashes = new List<string>
                 {
@@ -225,14 +237,17 @@ public class SongVideoGenerator : ISongVideoGenerator
             watermarkPath,
             watermarkLocation,
             HORIZONTAL_MARGIN_PERCENT,
-            VERTICAL_MARGIN_PERCENT,
+            verticalMarginPercent,
             WATERMARK_WIDTH_PERCENT,
             cancellationToken);
 
         foreach (string si in maybeSongImage.RightToSeq())
         {
             videoPath = si;
-            videoVersion = BackgroundImageMediaVersion.ForPath(si, channel.FFmpegProfile.Resolution);
+            videoVersion = BackgroundImageMediaVersion.ForPath(
+                si,
+                channel.FFmpegProfile.Resolution,
+                isSongWithProgress: channel.SongVideoMode is ChannelSongVideoMode.WithProgress);
         }
 
         return Tuple(videoPath, videoVersion);

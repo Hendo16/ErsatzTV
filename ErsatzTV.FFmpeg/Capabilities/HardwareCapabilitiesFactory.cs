@@ -20,7 +20,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
     private const string ModelCacheKey = "ffmpeg.hardware.nvidia.model";
 
     private static readonly CompositeFormat
-        VaapiCacheKeyFormat = CompositeFormat.Parse("ffmpeg.hardware.vaapi.{0}.{1}");
+        VaapiCacheKeyFormat = CompositeFormat.Parse("ffmpeg.hardware.vaapi.{0}.{1}.{2}");
 
     private static readonly CompositeFormat QsvCacheKeyFormat = CompositeFormat.Parse("ffmpeg.hardware.qsv.{0}");
     private static readonly CompositeFormat FFmpegCapabilitiesCacheKeyFormat = CompositeFormat.Parse("ffmpeg.{0}");
@@ -82,6 +82,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         IFFmpegCapabilities ffmpegCapabilities,
         string ffmpegPath,
         HardwareAccelerationMode hardwareAccelerationMode,
+        Option<string> vaapiDisplay,
         Option<string> vaapiDriver,
         Option<string> vaapiDevice)
     {
@@ -103,7 +104,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         {
             HardwareAccelerationMode.Nvenc => await GetNvidiaCapabilities(ffmpegPath, ffmpegCapabilities),
             HardwareAccelerationMode.Qsv => await GetQsvCapabilities(ffmpegPath, vaapiDevice),
-            HardwareAccelerationMode.Vaapi => await GetVaapiCapabilities(vaapiDriver, vaapiDevice),
+            HardwareAccelerationMode.Vaapi => await GetVaapiCapabilities(vaapiDisplay, vaapiDriver, vaapiDevice),
             HardwareAccelerationMode.Amf => new AmfHardwareCapabilities(),
             _ => new DefaultHardwareCapabilities()
         };
@@ -151,7 +152,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         return new QsvOutput(result.ExitCode, output);
     }
 
-    public async Task<Option<string>> GetVaapiOutput(Option<string> vaapiDriver, string vaapiDevice)
+    public async Task<Option<string>> GetVaapiOutput(string display, Option<string> vaapiDriver, string vaapiDevice)
     {
         BufferedCommandResult whichResult = await Cli.Wrap("which")
             .WithArguments("vainfo")
@@ -169,13 +170,43 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             envVars.Add("LIBVA_DRIVER_NAME", libvaDriverName);
         }
 
-        BufferedCommandResult result = await Cli.Wrap("vainfo")
-            .WithArguments($"--display drm --device {vaapiDevice} -a")
+        var lines = new List<string>();
+
+        string arguments = display == "drm"
+            ? $"--display drm --device {vaapiDevice} -a"
+            : $"--display {display} -a";
+
+        await Cli.Wrap("vainfo")
+            .WithArguments(arguments)
             .WithEnvironmentVariables(envVars)
+            .WithValidation(CommandResultValidation.None)
+            .WithStandardOutputPipe(PipeTarget.ToDelegate(lines.Add))
+            .WithStandardErrorPipe(PipeTarget.ToDelegate(lines.Add))
+            .ExecuteAsync();
+
+        return string.Join(System.Environment.NewLine, lines);
+    }
+
+    public async Task<List<string>> GetVaapiDisplays()
+    {
+        BufferedCommandResult whichResult = await Cli.Wrap("which")
+            .WithArguments("vainfo")
             .WithValidation(CommandResultValidation.None)
             .ExecuteBufferedAsync(Encoding.UTF8);
 
-        return result.StandardOutput;
+        if (whichResult.ExitCode != 0)
+        {
+            return ["drm"];
+        }
+
+        BufferedCommandResult result = await Cli.Wrap("vainfo")
+            .WithArguments("--display help")
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(Encoding.UTF8);
+
+        return string.IsNullOrWhiteSpace(result.StandardOutput)
+            ? ["drm"]
+            : result.StandardOutput.Trim().Split("\n").Skip(1).Map(s => s.Trim()).ToList();
     }
 
     private async Task<IReadOnlySet<string>> GetFFmpegCapabilities(
@@ -253,6 +284,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
     }
 
     private async Task<IHardwareCapabilities> GetVaapiCapabilities(
+        Option<string> vaapiDisplay,
         Option<string> vaapiDriver,
         Option<string> vaapiDevice)
     {
@@ -269,9 +301,10 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
                 return new NoHardwareCapabilities();
             }
 
+            string display = vaapiDisplay.IfNone("drm");
             string driver = vaapiDriver.IfNone(string.Empty);
             string device = vaapiDevice.IfNone(string.Empty);
-            var cacheKey = string.Format(CultureInfo.InvariantCulture, VaapiCacheKeyFormat, driver, device);
+            var cacheKey = string.Format(CultureInfo.InvariantCulture, VaapiCacheKeyFormat, display, driver, device);
 
             if (_memoryCache.TryGetValue(cacheKey, out List<VaapiProfileEntrypoint>? profileEntrypoints) &&
                 profileEntrypoints is not null)
@@ -279,7 +312,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
                 return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
             }
 
-            Option<string> output = await GetVaapiOutput(vaapiDriver, device);
+            Option<string> output = await GetVaapiOutput(display, vaapiDriver, device);
             if (output.IsNone)
             {
                 _logger.LogWarning("Unable to determine VAAPI capabilities; please install vainfo");
@@ -293,11 +326,22 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
             if (profileEntrypoints is not null && profileEntrypoints.Count != 0)
             {
-                _logger.LogDebug(
-                    "Detected {Count} VAAPI profile entrypoints for using {Driver} {Device}",
-                    profileEntrypoints.Count,
-                    driver,
-                    device);
+                if (display == "drm")
+                {
+                    _logger.LogDebug(
+                        "Detected {Count} VAAPI profile entrypoints using {Driver} {Device}",
+                        profileEntrypoints.Count,
+                        driver,
+                        device);
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "Detected {Count} VAAPI profile entrypoints using {Display} {Driver}",
+                        profileEntrypoints.Count,
+                        display,
+                        driver);
+                }
                 _memoryCache.Set(cacheKey, profileEntrypoints);
                 return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
             }
@@ -345,7 +389,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
             if (_runtimeInfo.IsOSPlatform(OSPlatform.Linux))
             {
-                Option<string> vaapiOutput = await GetVaapiOutput(Option<string>.None, device);
+                Option<string> vaapiOutput = await GetVaapiOutput("drm", Option<string>.None, device);
                 if (vaapiOutput.IsNone)
                 {
                     _logger.LogWarning("Unable to determine QSV capabilities; please install vainfo");
@@ -360,7 +404,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
                 if (profileEntrypoints is not null && profileEntrypoints.Count != 0)
                 {
                     _logger.LogDebug(
-                        "Detected {Count} VAAPI profile entrypoints for using QSV device {Device}",
+                        "Detected {Count} VAAPI profile entrypoints using QSV device {Device}",
                         profileEntrypoints.Count,
                         device);
 

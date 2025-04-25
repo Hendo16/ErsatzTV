@@ -10,6 +10,7 @@ public class YamlPlayoutEpgGroupHandler : IYamlPlayoutHandler
     public Task<bool> Handle(
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
+        PlayoutBuildMode mode,
         ILogger<YamlPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
@@ -20,7 +21,8 @@ public class YamlPlayoutEpgGroupHandler : IYamlPlayoutHandler
 
         if (epgGroup.EpgGroup)
         {
-            context.LockGuideGroup();
+            // advance guide group by default
+            context.LockGuideGroup(epgGroup.Advance is null or true);
         }
         else
         {

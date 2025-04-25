@@ -59,6 +59,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         DateTimeOffset now,
         Option<ChannelWatermark> playoutItemWatermark,
         Option<ChannelWatermark> globalWatermark,
+        string vaapiDisplay,
         VaapiDriver vaapiDriver,
         string vaapiDevice,
         Option<int> qsvExtraHardwareFrames,
@@ -107,7 +108,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             if (subtitle.SubtitleKind == SubtitleKind.Sidecar)
             {
                 // proxy to avoid dealing with escaping
-                subtitle.Path = $"http://localhost:{Settings.ListenPort}/media/subtitle/{subtitle.Id}";
+                subtitle.Path = $"http://localhost:{Settings.StreamingPort}/media/subtitle/{subtitle.Id}";
             }
         }
 
@@ -335,8 +336,24 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
 
         if (channel.FFmpegProfile.ScalingBehavior is ScalingBehavior.Crop)
         {
-            paddedSize = ffmpegVideoStream.SquarePixelFrameSizeForCrop(
-                new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height));
+            bool isTooSmallToCrop = videoVersion.Height < channel.FFmpegProfile.Resolution.Height ||
+                                    videoVersion.Width < channel.FFmpegProfile.Resolution.Width;
+
+            // if any dimension is smaller than the crop, scale beyond the crop (beyond the target resolution)
+            if (isTooSmallToCrop)
+            {
+                foreach (IDisplaySize size in playbackSettings.ScaledSize)
+                {
+                    scaledSize = new FrameSize(size.Width, size.Height);
+                }
+
+                paddedSize = scaledSize;
+            }
+            else
+            {
+                paddedSize = ffmpegVideoStream.SquarePixelFrameSizeForCrop(
+                    new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height));
+            }
 
             cropSize = new FrameSize(
                 channel.FFmpegProfile.Resolution.Width,
@@ -380,7 +397,8 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             hlsSegmentTemplate,
             ptsOffset,
             playbackSettings.ThreadCount,
-            qsvExtraHardwareFrames);
+            qsvExtraHardwareFrames,
+            videoVersion is BackgroundImageMediaVersion { IsSongWithProgress: true });
 
         _logger.LogDebug("FFmpeg desired state {FrameState}", desiredState);
 
@@ -391,6 +409,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             watermarkInputFile,
             subtitleInputFile,
             Option<ConcatInputFile>.None,
+            VaapiDisplayName(hwAccel, vaapiDisplay),
             VaapiDriverName(hwAccel, vaapiDriver),
             VaapiDeviceName(hwAccel, vaapiDevice),
             FileSystemLayout.FFmpegReportsFolder,
@@ -411,6 +430,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         string errorMessage,
         bool hlsRealtime,
         long ptsOffset,
+        string vaapiDisplay,
         VaapiDriver vaapiDriver,
         string vaapiDevice,
         Option<int> qsvExtraHardwareFrames)
@@ -531,7 +551,8 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             hlsSegmentTemplate,
             ptsOffset,
             Option<int>.None,
-            qsvExtraHardwareFrames);
+            qsvExtraHardwareFrames,
+            IsSongWithProgress: false);
 
         var ffmpegSubtitleStream = new ErsatzTV.FFmpeg.MediaStream(0, "ass", StreamKind.Video);
 
@@ -551,6 +572,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             None,
             subtitleInputFile,
             Option<ConcatInputFile>.None,
+            VaapiDisplayName(hwAccel, vaapiDisplay),
             VaapiDriverName(hwAccel, vaapiDriver),
             VaapiDeviceName(hwAccel, vaapiDevice),
             FileSystemLayout.FFmpegReportsFolder,
@@ -572,7 +594,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         var resolution = new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height);
 
         var concatInputFile = new ConcatInputFile(
-            $"http://localhost:{Settings.ListenPort}/ffmpeg/concat/{channel.Number}?mode=ts-legacy",
+            $"http://localhost:{Settings.StreamingPort}/ffmpeg/concat/{channel.Number}?mode=ts-legacy",
             resolution);
 
         IPipelineBuilder pipelineBuilder = await _pipelineBuilderFactory.GetBuilder(
@@ -582,6 +604,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             None,
             None,
             concatInputFile,
+            Option<string>.None,
             None,
             None,
             FileSystemLayout.FFmpegReportsFolder,
@@ -604,7 +627,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
     {
         var resolution = new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height);
         var concatInputFile = new ConcatInputFile(
-            $"http://localhost:{Settings.ListenPort}/ffmpeg/concat/{channel.Number}?mode=segmenter-v2",
+            $"http://localhost:{Settings.StreamingPort}/ffmpeg/concat/{channel.Number}?mode=segmenter-v2",
             resolution);
 
         FFmpegPlaybackSettings playbackSettings = FFmpegPlaybackSettingsCalculator.CalculateConcatSegmenterSettings(
@@ -699,6 +722,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             playbackSettings.VideoTrackTimeScale,
             playbackSettings.Deinterlace);
 
+        Option<string> vaapiDisplay = VaapiDisplayName(hwAccel, channel.FFmpegProfile.VaapiDisplay);
         Option<string> vaapiDriver = VaapiDriverName(hwAccel, channel.FFmpegProfile.VaapiDriver);
         Option<string> vaapiDevice = VaapiDeviceName(hwAccel, channel.FFmpegProfile.VaapiDevice);
 
@@ -721,7 +745,8 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             hlsSegmentTemplate,
             0,
             playbackSettings.ThreadCount,
-            Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
+            Optional(channel.FFmpegProfile.QsvExtraHardwareFrames),
+            IsSongWithProgress: false);
 
         _logger.LogDebug("FFmpeg desired state {FrameState}", desiredState);
 
@@ -732,6 +757,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             watermarkInputFile,
             subtitleInputFile,
             concatInputFile,
+            vaapiDisplay,
             vaapiDriver,
             vaapiDevice,
             FileSystemLayout.FFmpegReportsFolder,
@@ -761,7 +787,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             : $"&access_token={accessToken}";
 
         var concatInputFile = new ConcatInputFile(
-            $"http://localhost:{Settings.ListenPort}/iptv/channel/{channel.Number}.m3u8?mode=segmenter{accessTokenQuery}",
+            $"http://localhost:{Settings.StreamingPort}/iptv/channel/{channel.Number}.m3u8?mode=segmenter{accessTokenQuery}",
             resolution);
 
         IPipelineBuilder pipelineBuilder = await _pipelineBuilderFactory.GetBuilder(
@@ -771,6 +797,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             None,
             None,
             concatInputFile,
+            Option<string>.None,
             None,
             None,
             FileSystemLayout.FFmpegReportsFolder,
@@ -811,6 +838,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             None,
             None,
             Option<ConcatInputFile>.None,
+            Option<string>.None,
             None,
             None,
             FileSystemLayout.FFmpegReportsFolder,
@@ -968,6 +996,9 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             .WithStandardErrorPipe(PipeTarget.ToStream(Stream.Null))
             .WithEnvironmentVariables(environmentVariables.ToDictionary(e => e.Key, e => e.Value));
     }
+
+    private static Option<string> VaapiDisplayName(HardwareAccelerationMode accelerationMode, string vaapiDisplay) =>
+        accelerationMode == HardwareAccelerationMode.Vaapi ? vaapiDisplay : Option<string>.None;
 
     private static Option<string> VaapiDriverName(HardwareAccelerationMode accelerationMode, VaapiDriver driver)
     {
