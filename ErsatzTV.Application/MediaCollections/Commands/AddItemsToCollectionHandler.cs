@@ -4,6 +4,7 @@ using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Scheduling;
+using ErsatzTV.FFmpeg.OutputFormat;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
@@ -18,18 +19,21 @@ public class AddItemsToCollectionHandler :
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
     private readonly IMovieRepository _movieRepository;
     private readonly ITelevisionRepository _televisionRepository;
+    private readonly IFillerRepository _fillerRepository;
 
     public AddItemsToCollectionHandler(
         IDbContextFactory<TvContext> dbContextFactory,
         IMediaCollectionRepository mediaCollectionRepository,
         IMovieRepository movieRepository,
         ITelevisionRepository televisionRepository,
+        IFillerRepository fillerRepository,
         ChannelWriter<IBackgroundServiceRequest> channel)
     {
         _dbContextFactory = dbContextFactory;
         _mediaCollectionRepository = mediaCollectionRepository;
         _movieRepository = movieRepository;
         _televisionRepository = televisionRepository;
+        _fillerRepository = fillerRepository;
         _channel = channel;
     }
 
@@ -53,6 +57,7 @@ public class AddItemsToCollectionHandler :
             .Append(request.EpisodeIds)
             .Append(request.ArtistIds)
             .Append(request.MusicVideoIds)
+            .Append(request.FillerIds)
             .Append(request.OtherVideoIds)
             .Append(request.SongIds)
             .Append(request.ImageIds)
@@ -83,10 +88,11 @@ public class AddItemsToCollectionHandler :
         AddItemsToCollection request) =>
         (await CollectionMustExist(dbContext, request),
             await ValidateMovies(request),
+            await ValidateFiller(request),
             await ValidateShows(request),
             await ValidateSeasons(request),
             await ValidateEpisodes(request))
-        .Apply((collection, _, _, _, _) => collection);
+        .Apply((collection, _, _, _, _, _) => collection);
 
     private static Task<Validation<BaseError, Collection>> CollectionMustExist(
         TvContext dbContext,
@@ -123,4 +129,11 @@ public class AddItemsToCollectionHandler :
             .Filter(v => v == true)
             .MapT(_ => Unit.Default)
             .Map(v => v.ToValidation<BaseError>("Episode does not exist"));
+
+    private Task<Validation<BaseError, Unit>> ValidateFiller(AddItemsToCollection request) =>
+        _fillerRepository.AllFillerExists(request.FillerIds)
+            .Map(Optional)
+            .Filter(v => v == true)
+            .MapT(_ => Unit.Default)
+            .Map(v => v.ToValidation<BaseError>("Filler does not exist"));
 }

@@ -6,6 +6,7 @@ namespace ErsatzTV.Core.Interfaces.Repositories;
 public interface IMovieRepository
 {
     Task<bool> AllMoviesExist(List<int> movieIds);
+    Task<Option<Movie>> GetMovieByName(string name);
     Task<Option<Movie>> GetMovie(int movieId);
 
     Task<Either<BaseError, MediaItemScanResult<Movie>>> GetOrAdd(

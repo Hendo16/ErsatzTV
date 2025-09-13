@@ -1198,16 +1198,6 @@ public sealed class LuceneSearchIndex : ISearchIndex
                     doc.Add(new TextField(ActorField, actor.Name, Field.Store.NO));
                 }
 
-                foreach (Director director in metadata.Directors)
-                {
-                    doc.Add(new TextField(DirectorField, director.Name, Field.Store.NO));
-                }
-
-                foreach (Writer writer in metadata.Writers)
-                {
-                    doc.Add(new TextField(WriterField, writer.Name, Field.Store.NO));
-                }
-
                 AddMetadataGuids(metadata, doc);
 
                 _writer.UpdateDocument(new Term(IdField, filler.Id.ToString(CultureInfo.InvariantCulture)), doc);

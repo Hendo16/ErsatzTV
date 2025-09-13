@@ -1,9 +1,11 @@
-﻿using System.Globalization;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Bugsnag;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Metadata;
+using ErsatzTV.Core.Interfaces.Repositories;
 
 namespace ErsatzTV.Core.Metadata;
 
@@ -141,7 +143,7 @@ public partial class FallbackMetadataProvider : IFallbackMetadataProvider
         return GetOtherVideoMetadata(path, metadata);
     }
 
-    public Option<FillerMetadata> GetFallbackMetadata(FillerMediaItem filler)
+    public async Task<Option<FillerMetadata>> GetFallbackMetadata(FillerMediaItem filler, IMovieRepository movieRepository)
     {
         string path = filler.MediaVersions.Head().MediaFiles.Head().Path;
         string fileName = Path.GetFileNameWithoutExtension(path);
@@ -150,14 +152,25 @@ public partial class FallbackMetadataProvider : IFallbackMetadataProvider
             MetadataKind = MetadataKind.Fallback,
             Title = fileName ?? path,
             Filler = filler,
+            ContentRating = "",
             Genres = new List<Genre>(),
             Tags = new List<Tag>(),
             Studios = new List<Studio>(),
             Actors = new List<Actor>(),
-            Directors = new List<Director>(),
-            Writers = new List<Writer>(),
             Guids = new List<MetadataGuid>()
         };
+
+        //Check for TV Spot
+        if (path.Contains("TV Spot", StringComparison.InvariantCultureIgnoreCase))
+        {
+            Option<Movie> movieOptions = await movieRepository.GetMovieByName(fileName);
+            if (movieOptions != Option<Movie>.None)
+            {
+                MovieMetadata topMetadata = movieOptions.Head().MovieMetadata.Head();
+                metadata.Year = topMetadata.Year;
+                metadata.MovieId = topMetadata.MovieId;
+            }
+        }
 
         return GetFillerMetadata(path, metadata);
     }
@@ -323,23 +336,27 @@ public partial class FallbackMetadataProvider : IFallbackMetadataProvider
             }
 
             string libraryPath = metadata.Filler.LibraryPath.Path;
-            string parent = Optional(Directory.GetParent(libraryPath)).Match(
-                di => di.FullName,
-                () => libraryPath);
 
-            string diff = Path.GetRelativePath(parent, folder);
+            string diff = Path.GetRelativePath(libraryPath, folder);
 
             var tags = diff.Split(Path.DirectorySeparatorChar)
                 .Map(t => new Tag { Name = t })
                 .ToList();
 
-            metadata.Artwork = new List<Artwork>();
-            metadata.Actors = new List<Actor>();
-            metadata.Genres = new List<Genre>();
+            metadata.Artwork = [];
+            metadata.Actors = [];
+            metadata.Genres = [];
             metadata.Tags = tags;
-            metadata.Studios = new List<Studio>();
+            metadata.Studios = [];
             metadata.DateUpdated = DateTime.UtcNow;
             metadata.OriginalTitle = Path.GetRelativePath(libraryPath, path);
+
+            //Parse Year
+            if(metadata.Year == null && Regex.IsMatch(metadata.OriginalTitle, "\\b(19|20)\\d{2}\\b"))
+            {
+                string matchingYear = Regex.Match(metadata.OriginalTitle, "\\b(19|20)\\d{2}\\b").Value;
+                metadata.Year = int.Parse(matchingYear, CultureInfo.InvariantCulture);
+            }
 
             return metadata;
         }

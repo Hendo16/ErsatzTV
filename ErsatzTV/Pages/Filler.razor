@@ -1,0 +1,271 @@
+﻿@page "/media/filler/{FillerId:int}"
+@using ErsatzTV.Application.MediaCards
+@using ErsatzTV.Application.MediaCollections
+@using ErsatzTV.Application.MediaItems
+@using ErsatzTV.Application.Filler
+@using ErsatzTV.Extensions
+@using LanguageExt.UnsafeValueAccess
+@implements IDisposable
+@inject IMediator Mediator
+@inject IDialogService Dialog
+@inject NavigationManager NavigationManager
+@inject ILogger<Filler> Logger
+@inject ISnackbar Snackbar
+@inject PersistentComponentState ApplicationState
+<!--
+<MudContainer MaxWidth="MaxWidth.False" Style="padding: 0" Class="fanart-container">
+    <div class="fanart-tint"></div>
+    @if (!string.IsNullOrWhiteSpace(_filler?.FanArt))
+    {
+        if (_filler.FanArt.StartsWith("http://") || _filler.FanArt.StartsWith("https://"))
+        {
+            <img src="@_filler.FanArt" alt="fan art"/>
+        }
+        else
+        {
+            <img src="@($"artwork/fanart/{_filler.FanArt}")" alt="fan art"/>
+        }
+    }
+</MudContainer>
+-->
+<MudContainer MaxWidth="MaxWidth.Large" Style="margin-top: 200px">
+    <div style="display: flex; flex-direction: row;" class="mb-6">
+        <div style="display: flex; flex-direction: column; height: 100%">
+            <MudText Typo="Typo.h2" Class="media-item-title">@_filler?.Title</MudText>
+            <MudText Typo="Typo.subtitle1" Class="media-item-subtitle mb-6 mud-text-secondary">@_filler?.Year</MudText>
+            <div>
+                <MudButton Class="mb-6"
+                           Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="@AddToCollection">
+                    Add To Collection
+                </MudButton>
+            </div>
+            <div>
+                <MudButton Class="mb-6"
+                           Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="@AddToPlaylist">
+                    Add To Playlist
+                </MudButton>
+            </div>
+            <div>
+                <MudButton Class="mb-6"
+                           Variant="Variant.Filled"
+                           Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.Info"
+                           OnClick="@ShowInfo">
+                    Show Media Info
+                </MudButton>
+            </div>
+            <div>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.Edit"
+                           OnClick="@EditTags">
+                    Edit Tags
+                </MudButton>
+            </div>
+        </div>
+    </div>
+    @if (_filler?.MediaItemState == MediaItemState.FileNotFound)
+    {
+        <MudCard Class="mb-6">
+            <MudCardContent>
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Class="mr-2"/>
+                    <MudText>File Not Found:&nbsp;</MudText>
+                    <MudText>@_filler.Path</MudText>
+                </div>
+            </MudCardContent>
+        </MudCard>
+    }
+    else if (_filler?.MediaItemState == MediaItemState.Unavailable)
+    {
+        <MudCard Class="mb-6">
+            <MudCardContent>
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Class="mr-2"/>
+                    <MudText>Unavailable:&nbsp;</MudText>
+                    <MudText>@_filler.LocalPath</MudText>
+                </div>
+            </MudCardContent>
+        </MudCard>
+    }
+    <MudCard Class="mb-6">
+        <MudCardContent>
+            @if (_filler.MovieId != null)
+            {
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudText GutterBottom="true">Movie:&nbsp;</MudText>
+                    <MudLink Href="@($"media/movies/{_filler.MovieId}")">@_filler.MovieId</MudLink>
+                </div>
+            }
+            @if (_sortedContentRatings.Any())
+            {
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudText GutterBottom="true">Content Ratings:&nbsp;</MudText>
+                    <MudLink Href="@(@$"content_rating:""{_sortedContentRatings.Head()}""".GetRelativeSearchQuery())">@_sortedContentRatings.Head()</MudLink>
+                    @foreach (string contentRating in _sortedContentRatings.Skip(1))
+                    {
+                        <MudText>,&nbsp;</MudText>
+                        <MudLink Href="@(@$"content_rating:""{contentRating}""".GetRelativeSearchQuery())">@contentRating</MudLink>
+                    }
+                </div>
+            }
+            @if (_sortedLanguages.Any())
+            {
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudText GutterBottom="true">Languages:&nbsp;</MudText>
+                    <MudLink Href="@(@$"language:""{_sortedLanguages.Head().ToLowerInvariant()}""".GetRelativeSearchQuery())">@_sortedLanguages.Head()</MudLink>
+                    @foreach (string language in _sortedLanguages.Skip(1))
+                    {
+                        <MudText>,&nbsp;</MudText>
+                        <MudLink Href="@(@$"language:""{language.ToLowerInvariant()}""".GetRelativeSearchQuery())">@language</MudLink>
+                    }
+                </div>
+            }
+            @if (_sortedGenres.Any())
+            {
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudText GutterBottom="true">Genres:&nbsp;</MudText>
+                    <MudLink Href="@(@$"genre:""{_sortedGenres.Head().ToLowerInvariant()}""".GetRelativeSearchQuery())">@_sortedGenres.Head()</MudLink>
+                    @foreach (string genre in _sortedGenres.Skip(1))
+                    {
+                        <MudText>,&nbsp;</MudText>
+                        <MudLink Href="@(@$"genre:""{genre.ToLowerInvariant()}""".GetRelativeSearchQuery())">@genre</MudLink>
+                    }
+                </div>
+            }
+            @if (_sortedTags.Any())
+            {
+                <div style="display: flex; flex-direction: row; flex-wrap: wrap">
+                    <MudText GutterBottom="true">Tags:&nbsp;</MudText>
+                    <MudLink Href="@(@$"tag:""{_sortedTags.Head().ToLowerInvariant()}""".GetRelativeSearchQuery())">@_sortedTags.Head()</MudLink>
+                    @foreach (string tag in _sortedTags.Skip(1))
+                    {
+                        <MudText>,&nbsp;</MudText>
+                        <MudLink Href="@(@$"tag:""{tag.ToLowerInvariant()}""".GetRelativeSearchQuery())">@tag</MudLink>
+                    }
+                </div>
+            }
+        </MudCardContent>
+    </MudCard>
+</MudContainer>
+@code {
+    private readonly CancellationTokenSource _cts = new();
+    private PersistingComponentStateSubscription _persistingSubscription;
+
+    [Parameter]
+    public int FillerId { get; set; }
+
+    private FillerViewModel _filler;
+    private List<string> _sortedContentRatings = new();
+    private List<string> _sortedLanguages = new();
+    private List<string> _sortedDirectors = new();
+    private List<string> _sortedWriters = new();
+    private List<string> _sortedStudios = new();
+    private List<string> _sortedGenres = new();
+    private List<string> _sortedTags = new();
+
+    public void Dispose()
+    {
+        _persistingSubscription.Dispose();
+
+        _cts.Cancel();
+        _cts.Dispose();
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        _persistingSubscription = ApplicationState.RegisterOnPersisting(PersistData);
+
+        return base.OnInitializedAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!ApplicationState.TryTakeFromJson("_filler", out FillerViewModel restored))
+        {
+            _filler = await RefreshData();
+        }
+        else
+        {
+            _filler = restored;
+        }
+
+        _sortedContentRatings = _filler?.ContentRatings.OrderBy(cr => cr).ToList();
+        _sortedTags = _filler?.Tags.Select(t => t.Name).OrderBy(t => t).ToList();
+    }
+
+    private Task PersistData()
+    {
+        ApplicationState.PersistAsJson("_filler", _filler);
+
+        return Task.CompletedTask;
+    }
+
+    private async Task<FillerViewModel> RefreshData()
+    {
+        Option<FillerViewModel> vm = await Mediator.Send(new GetFillerById(FillerId), _cts.Token);
+        return vm.IsSome ? vm.ValueUnsafe() : null;
+    }
+
+    private async Task AddToCollection()
+    {
+        var parameters = new DialogParameters { { "EntityType", "filler" }, { "EntityName", _filler.Title } };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+        IDialogReference dialog = await Dialog.ShowAsync<AddToCollectionDialog>("Add To Collection", parameters, options);
+        DialogResult result = await dialog.Result;
+        if (!result.Canceled && result.Data is MediaCollectionViewModel collection)
+        {
+            await Mediator.Send(new AddFillerToCollection(collection.Id, FillerId), _cts.Token);
+            NavigationManager.NavigateTo($"media/collections/{collection.Id}");
+        }
+    }
+
+    private async Task AddToPlaylist()
+    {
+        var parameters = new DialogParameters { { "EntityType", "filler" }, { "EntityName", _filler.Title } };
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
+
+        IDialogReference dialog = await Dialog.ShowAsync<AddToPlaylistDialog>("Add To Playlist", parameters, options);
+        DialogResult result = await dialog.Result;
+        if (!result.Canceled && result.Data is PlaylistViewModel playlist)
+        {
+            await Mediator.Send(new AddFillerToPlaylist(playlist.Id, FillerId), _cts.Token);
+            NavigationManager.NavigateTo($"media/playlists/{playlist.Id}");
+        }
+    }
+
+    private async Task ShowInfo()
+    {
+        Either<BaseError, MediaItemInfo> maybeInfo = await Mediator.Send(new GetMediaItemInfo(FillerId));
+
+        foreach (BaseError error in maybeInfo.LeftToSeq())
+        {
+            Snackbar.Add("Unexpected error loading media info");
+            Logger.LogError("Unexpected error loading media info: {Error}", error.Value);
+        }
+
+        foreach (MediaItemInfo info in maybeInfo.RightToSeq())
+        {
+            var parameters = new DialogParameters { { "MediaItemInfo", info } };
+            var options = new DialogOptions { CloseButton = true, CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+            IDialogReference dialog = await Dialog.ShowAsync<MediaItemInfoDialog>(_filler.Title, parameters, options);
+            DialogResult _ = await dialog.Result;
+        }
+    }
+
+    private async Task EditTags()
+    {
+        var parameters = new DialogParameters { { "Tags", _filler?.Tags } };
+        var options = new DialogOptions { CloseButton = true, CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        IDialogReference dialog = await Dialog.ShowAsync<EditTagsDialog>(_filler.Title, parameters, options);
+        DialogResult _ = await dialog.Result;
+    }
+
+}

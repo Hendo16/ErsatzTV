@@ -37,13 +37,5 @@ public class FillerMetadataConfiguration : IEntityTypeConfiguration<FillerMetada
         builder.HasMany(mm => mm.Subtitles)
             .WithOne()
             .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasMany(ovm => ovm.Directors)
-            .WithOne()
-            .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasMany(ovm => ovm.Writers)
-            .WithOne()
-            .OnDelete(DeleteBehavior.Cascade);
     }
 }

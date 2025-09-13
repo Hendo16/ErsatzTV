@@ -420,9 +420,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.Property<int?>("EpisodeMetadataId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("FillerMetadataId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int?>("MovieMetadataId")
                         .HasColumnType("INTEGER");
 
@@ -438,8 +435,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("EpisodeMetadataId");
-
-                    b.HasIndex("FillerMetadataId");
 
                     b.HasIndex("MovieMetadataId");
 
@@ -713,10 +708,7 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Brand")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Country")
+                    b.Property<string>("ContentRating")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("DateAdded")
@@ -731,6 +723,9 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.Property<int>("MetadataKind")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("MovieId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("OriginalTitle")
                         .HasColumnType("TEXT");
 
@@ -739,6 +734,9 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
 
                     b.Property<DateTime?>("ReleaseDate")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("ShowId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("SortTitle")
                         .HasColumnType("TEXT");
@@ -3081,9 +3079,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.Property<int?>("EpisodeMetadataId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("FillerMetadataId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<int?>("MovieMetadataId")
                         .HasColumnType("INTEGER");
 
@@ -3096,8 +3091,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("EpisodeMetadataId");
-
-                    b.HasIndex("FillerMetadataId");
 
                     b.HasIndex("MovieMetadataId");
 
@@ -3748,11 +3741,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.HasOne("ErsatzTV.Core.Domain.EpisodeMetadata", null)
                         .WithMany("Directors")
                         .HasForeignKey("EpisodeMetadataId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.HasOne("ErsatzTV.Core.Domain.FillerMetadata", null)
-                        .WithMany("Directors")
-                        .HasForeignKey("FillerMetadataId")
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.HasOne("ErsatzTV.Core.Domain.MovieMetadata", null)
@@ -5075,11 +5063,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                         .HasForeignKey("EpisodeMetadataId")
                         .OnDelete(DeleteBehavior.Cascade);
 
-                    b.HasOne("ErsatzTV.Core.Domain.FillerMetadata", null)
-                        .WithMany("Writers")
-                        .HasForeignKey("FillerMetadataId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
                     b.HasOne("ErsatzTV.Core.Domain.MovieMetadata", null)
                         .WithMany("Writers")
                         .HasForeignKey("MovieMetadataId")
@@ -5517,8 +5500,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
 
                     b.Navigation("Artwork");
 
-                    b.Navigation("Directors");
-
                     b.Navigation("Genres");
 
                     b.Navigation("Guids");
@@ -5528,8 +5509,6 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                     b.Navigation("Subtitles");
 
                     b.Navigation("Tags");
-
-                    b.Navigation("Writers");
                 });
 
             modelBuilder.Entity("ErsatzTV.Core.Domain.ImageMetadata", b =>

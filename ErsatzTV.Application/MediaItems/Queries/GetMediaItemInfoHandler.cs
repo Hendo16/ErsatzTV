@@ -1,5 +1,6 @@
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
@@ -40,6 +41,12 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
                 .ThenInclude(mv => mv.Streams)
                 .Include(i => (i as Episode).EpisodeMetadata)
                 .ThenInclude(mv => mv.Subtitles)
+                .Include(i => (i as FillerMediaItem).FillerMetadata)
+                .ThenInclude(mv => mv.Subtitles)
+                .Include(i => (i as FillerMediaItem).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as FillerMediaItem).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
                 .SelectOneAsync(i => i.Id, i => i.Id == request.Id)
                 .MapT(Project);
 

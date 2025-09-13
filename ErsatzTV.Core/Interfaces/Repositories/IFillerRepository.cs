@@ -6,6 +6,9 @@ namespace ErsatzTV.Core.Interfaces.Repositories;
 
 public interface IFillerRepository
 {
+    Task<bool> AllFillerExists(List<int> fillerIds);
+    Task<Option<FillerMediaItem>> FindFillerByMovieTitle(string title);
+    Task<Option<FillerMediaItem>> GetFiller(int fillerId);
     Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> GetOrAdd(
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
@@ -15,10 +18,9 @@ public interface IFillerRepository
     Task<List<int>> DeleteByPath(LibraryPath libraryPath, string path);
     Task<bool> AddGenre(FillerMetadata metadata, Genre genre);
     Task<bool> AddTag(FillerMetadata metadata, Tag tag);
-    Task<bool> AddStudio(FillerMetadata metadata, Studio studio);
-    Task<bool> AddActor(FillerMetadata metadata, Actor actor);
-    Task<bool> AddDirector(FillerMetadata metadata, Director director);
-    Task<bool> AddWriter(FillerMetadata metadata, Writer writer);
+    Task<Unit> AddMovieMetadata(FillerMetadata metadata, MovieMetadata movieMetadata);
 
     Task<List<FillerMetadata>> GetFillerForCards(List<int> ids);
+    Task<bool> AddStudio(FillerMetadata arg1, Studio arg2);
+    Task<bool> AddActor(FillerMetadata arg1, Actor arg2);
 }

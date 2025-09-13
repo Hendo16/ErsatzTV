@@ -29,6 +29,13 @@ public class MovieRepository : IMovieRepository
             .Map(c => c == movieIds.Count);
     }
 
+    public async Task<Option<Movie>> GetMovieByName(string name)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Movies.Include(m => m.MovieMetadata).SingleOrDefaultAsync(md => md.MovieMetadata.Any(mm => name.Contains(mm.Title)))
+            .Map(Optional);
+    }
+
     public async Task<Option<Movie>> GetMovie(int movieId)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();

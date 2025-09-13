@@ -21,6 +21,36 @@ public class FillerRepository : IFillerRepository
         _logger = logger;
     }
 
+    public async Task<Option<FillerMediaItem>> FindFillerByMovieTitle(string title)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.FillerMediaItems.Include(m => m.FillerMetadata).SingleOrDefaultAsync(fd => fd.FillerMetadata.Any(fm => fm.Title.Contains(title)))
+            .Map(Optional);
+    }
+
+    public async Task<Option<FillerMediaItem>> GetFiller(int fillerId)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.FillerMediaItems
+            .Include(m => m.FillerMetadata)
+            .ThenInclude(m => m.Artwork)
+            .Include(m => m.FillerMetadata)
+            .ThenInclude(m => m.Genres)
+            .Include(m => m.FillerMetadata)
+            .ThenInclude(m => m.Tags)
+            .Include(m => m.FillerMetadata)
+            .ThenInclude(m => m.Studios)
+            .Include(m => m.FillerMetadata)
+            .ThenInclude(a => a.Artwork)
+            .Include(i => i.MediaVersions)
+            .ThenInclude(mv => mv.Streams)
+            .Include(m => m.MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .OrderBy(m => m.Id)
+            .SingleOrDefaultAsync(m => m.Id == fillerId)
+            .Map(Optional);
+    }
+
     public async Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> GetOrAdd(
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
@@ -40,7 +70,6 @@ public class FillerRepository : IFillerRepository
             .Include(i => i.FillerMetadata)
             .ThenInclude(ovm => ovm.Actors)
             .Include(i => i.FillerMetadata)
-            .ThenInclude(ovm => ovm.Actors)
             .ThenInclude(a => a.Artwork)
             .Include(ov => ov.LibraryPath)
             .ThenInclude(lp => lp.Library)
@@ -58,6 +87,15 @@ public class FillerRepository : IFillerRepository
                 Right<BaseError, MediaItemScanResult<FillerMediaItem>>(
                     new MediaItemScanResult<FillerMediaItem>(mediaItem) { IsAdded = false }).AsTask(),
             async () => await AddFiller(dbContext, libraryPath.Id, libraryFolder.Id, path));
+    }
+
+    public async Task<bool> AllFillerExists(List<int> fillerIds)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Connection.QuerySingleAsync<int>(
+                "SELECT COUNT(*) FROM `FillerMediaItem` WHERE Id in @FillerIds",
+                new { FillerIds = fillerIds })
+            .Map(c => c == fillerIds.Count);
     }
 
     public async Task<IEnumerable<string>> FindFillerPaths(LibraryPath libraryPath)
@@ -100,6 +138,14 @@ public class FillerRepository : IFillerRepository
         return ids;
     }
 
+    public async Task<Unit> AddMovieMetadata(FillerMetadata metadata, MovieMetadata movieMetadata)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        return await dbContext.Connection.ExecuteAsync(
+            @"UPDATE FillerMetadata SET Year = @Year, MovieId = @MovieId WHERE Id = @Id",
+            new { metadata.Id, movieMetadata.Year, MovieId = movieMetadata.MovieId }).ToUnit();
+    }
+
     public async Task<bool> AddGenre(FillerMetadata metadata, Genre genre)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
@@ -116,59 +162,6 @@ public class FillerRepository : IFillerRepository
             new { tag.Name, MetadataId = metadata.Id, tag.ExternalCollectionId }).Map(result => result > 0);
     }
 
-    public async Task<bool> AddStudio(FillerMetadata metadata, Studio studio)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.Connection.ExecuteAsync(
-            "INSERT INTO Studio (Name, FillerMetadataId) VALUES (@Name, @MetadataId)",
-            new { studio.Name, MetadataId = metadata.Id }).Map(result => result > 0);
-    }
-
-    public async Task<bool> AddActor(FillerMetadata metadata, Actor actor)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-
-        int? artworkId = null;
-
-        if (actor.Artwork != null)
-        {
-            artworkId = await dbContext.Connection.QuerySingleAsync<int>(
-                $"""
-                 INSERT INTO Artwork (ArtworkKind, DateAdded, DateUpdated, Path)
-                     VALUES (@ArtworkKind, @DateAdded, @DateUpdated, @Path);
-                 SELECT {TvContext.LastInsertedRowId}
-                 """,
-                new
-                {
-                    ArtworkKind = (int)actor.Artwork.ArtworkKind,
-                    actor.Artwork.DateAdded,
-                    actor.Artwork.DateUpdated,
-                    actor.Artwork.Path
-                });
-        }
-
-        return await dbContext.Connection.ExecuteAsync(
-                "INSERT INTO Actor (Name, Role, `Order`, FillerMetadataId, ArtworkId) VALUES (@Name, @Role, @Order, @MetadataId, @ArtworkId)",
-                new { actor.Name, actor.Role, actor.Order, MetadataId = metadata.Id, ArtworkId = artworkId })
-            .Map(result => result > 0);
-    }
-
-    public async Task<bool> AddDirector(FillerMetadata metadata, Director director)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.Connection.ExecuteAsync(
-            "INSERT INTO Director (Name, FillerMetadataId) VALUES (@Name, @MetadataId)",
-            new { director.Name, MetadataId = metadata.Id }).Map(result => result > 0);
-    }
-
-    public async Task<bool> AddWriter(FillerMetadata metadata, Writer writer)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.Connection.ExecuteAsync(
-            "INSERT INTO Writer (Name, FillerMetadataId) VALUES (@Name, @MetadataId)",
-            new { writer.Name, MetadataId = metadata.Id }).Map(result => result > 0);
-    }
-
     public async Task<List<FillerMetadata>> GetFillerForCards(List<int> ids)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
@@ -183,6 +176,10 @@ public class FillerRepository : IFillerRepository
             .OrderBy(ovm => ovm.SortTitle)
             .ToListAsync();
     }
+
+    public Task<bool> AddStudio(FillerMetadata arg1, Studio arg2) => throw new NotImplementedException();
+
+    public Task<bool> AddActor(FillerMetadata arg1, Actor arg2) => throw new NotImplementedException();
 
     private async Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> AddFiller(
         TvContext dbContext,

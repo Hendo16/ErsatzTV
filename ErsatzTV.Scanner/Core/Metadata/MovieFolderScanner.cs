@@ -2,6 +2,7 @@
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.FFmpeg;
@@ -28,6 +29,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
     private readonly IMediaItemRepository _mediaItemRepository;
     private readonly IMediator _mediator;
     private readonly IMovieRepository _movieRepository;
+    private readonly IFillerRepository _fillerRepository;
 
     public MovieFolderScanner(
         ILocalFileSystem localFileSystem,
@@ -43,6 +45,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         IFFmpegPngService ffmpegPngService,
         ITempFilePool tempFilePool,
         IClient client,
+        IFillerRepository fillerRepository,
         ILogger<MovieFolderScanner> logger)
         : base(
             localFileSystem,
@@ -57,6 +60,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
     {
         _localFileSystem = localFileSystem;
         _movieRepository = movieRepository;
+        _fillerRepository = fillerRepository;
         _localSubtitlesProvider = localSubtitlesProvider;
         _localMetadataProvider = localMetadataProvider;
         _libraryRepository = libraryRepository;
@@ -288,6 +292,16 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                 }
             }
 
+            string title = movie.MovieMetadata.Head().Title;
+            Option<FillerMediaItem> matchingFillers = await _fillerRepository.FindFillerByMovieTitle(title);
+            if (matchingFillers != Option<FillerMediaItem>.None)
+            {
+                foreach (FillerMediaItem filler in matchingFillers)
+                {
+                    Unit updateResult = await _fillerRepository.AddMovieMetadata(filler.FillerMetadata.Head(), movie.MovieMetadata.Head());
+                    Console.WriteLine(updateResult);
+                }
+            }
             return result;
         }
         catch (Exception ex)

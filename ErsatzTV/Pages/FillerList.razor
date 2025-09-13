@@ -6,7 +6,7 @@
 @using ErsatzTV.Extensions
 @inherits MultiSelectBase<FillerList>
 @inject NavigationManager NavigationManager
-
+@{bool hasTVSpots = _data.Cards.Any(f => f.Title.Contains("TV Spot", StringComparison.InvariantCultureIgnoreCase));}
 <MudPaper Square="true" Style="display: flex; height: 64px; left: 240px; padding: 0; position: fixed; right: 0; z-index: 100;">
     <div style="display: flex; flex-direction: row; margin-bottom: auto; margin-top: auto; width: 100%" class="ml-6 mr-6">
         @if (IsSelectMode())
@@ -57,22 +57,62 @@
     </div>
 </MudPaper>
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8" Style="margin-top: 64px">
-    <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
-        <FragmentLetterAnchor TCard="FillerCardViewModel" Cards="@_data.Cards">
-            <MediaCard Data="@context"
-                       Href=""
-                       ArtworkKind="ArtworkKind.Thumbnail"
-                       AddToCollectionClicked="@AddToCollection"
-                       SelectClicked="@(e => SelectClicked(context, e))"
-                       IsSelected="@IsSelected(context)"
-                       IsSelectMode="@IsSelectMode()"/>
-        </FragmentLetterAnchor>
-    </MudContainer>
+    @if (hasTVSpots)
+    {
+        <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
+            <MudText Typo="Typo.h4"
+                     Style="scroll-margin-top: 160px"
+                     UserAttributes="@(new Dictionary<string, object> { { "id", "tvSpots" } })">
+                TV Spots
+            </MudText>
+        </div>
+        <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+            <FragmentLetterAnchor TCard="FillerCardViewModel" Cards="@_data.Cards.Where(f => f.Title.Contains("TV Spot", StringComparison.InvariantCultureIgnoreCase)).ToList()">
+                <MediaCard Data="@context"
+                           Href="@($"media/filler/{context.FillerId}")"
+                           AddToCollectionClicked="@AddToCollection"
+                           SelectClicked="@(e => SelectClicked(context, e))"
+                           IsSelected="@IsSelected(context)"
+                           IsSelectMode="@IsSelectMode()"/>
+            </FragmentLetterAnchor>
+        </MudContainer>
+
+        <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
+            <MudText Typo="Typo.h4"
+                     Style="scroll-margin-top: 160px"
+                     UserAttributes="@(new Dictionary<string, object> { { "id", "Commercials" } })">
+                Commercials
+            </MudText>
+        </div>
+        <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+            <FragmentLetterAnchor TCard="FillerCardViewModel" Cards="@_data.Cards.Where(f => !f.Title.Contains("TV Spot", StringComparison.InvariantCultureIgnoreCase)).ToList()">
+                <MediaCard Data="@context"
+                           Href="@($"media/filler/{context.FillerId}")"
+                           AddToCollectionClicked="@AddToCollection"
+                           SelectClicked="@(e => SelectClicked(context, e))"
+                           IsSelected="@IsSelected(context)"
+                           IsSelectMode="@IsSelectMode()"/>
+            </FragmentLetterAnchor>
+        </MudContainer>
+    }
+    else
+    {
+        <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+            <FragmentLetterAnchor TCard="FillerCardViewModel" Cards="@_data.Cards">
+                <MediaCard Data="@context"
+                           Href="@($"media/filler/{context.FillerId}")"
+                           AddToCollectionClicked="@AddToCollection"
+                           SelectClicked="@(e => SelectClicked(context, e))"
+                           IsSelected="@IsSelected(context)"
+                           IsSelectMode="@IsSelectMode()"/>
+            </FragmentLetterAnchor>
+        </MudContainer>
+    }
 </MudContainer>
 @if (_data.PageMap is not null)
 {
     <LetterBar PageMap="@_data.PageMap"
-               BaseUri="media/other/videos"
+               BaseUri="media/filler/videos"
                Query="@_query"/>
 }
 

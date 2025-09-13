@@ -129,7 +129,7 @@ internal static class Mapper
         return new FillerCardViewModel(
             fillerMetadata.FillerId,
             fillerMetadata.Title,
-            fillerMetadata.OriginalTitle,
+            fillerMetadata.Year?.ToString(CultureInfo.InvariantCulture),
             fillerMetadata.SortTitle,
             poster,
             fillerMetadata.Filler.State);

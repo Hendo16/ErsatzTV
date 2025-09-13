@@ -68,6 +68,11 @@
                 <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#other_videos")">@_data.OtherVideoCards.Count Other Videos</MudLink>
             }
 
+            @if (_data?.FillerCards.Count > 0)
+            {
+                <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#filler")">@_data.FillerCards.Count Filler</MudLink>
+            }
+
             @if (_data?.SongCards.Count > 0)
             {
                 <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#songs")">@_data.SongCards.Count Songs</MudLink>
@@ -262,6 +267,30 @@
                            IsSelectMode="@IsSelectMode()"/>
             }
         </MudContainer>
+    }
+
+    @if (_data?.FillerCards.Count > 0)
+    {
+    <MudText GutterBottom="true"
+             Typo="Typo.h4"
+             Style="scroll-margin-top: 160px"
+             UserAttributes="@(new Dictionary<string, object> { { "id", "filler" } })">
+        Filler
+    </MudText>
+
+    <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+        @foreach (FillerCardViewModel card in _data.FillerCards.OrderBy(e => e.SortTitle))
+        {
+        <MediaCard Data="@card"
+                   Href=""
+                   ArtworkKind="ArtworkKind.Thumbnail"
+                   DeleteClicked="@RemoveFillerFromCollection"
+                   SelectColor="@Color.Error"
+                   SelectClicked="@(e => SelectClicked(card, e))"
+                   IsSelected="@IsSelected(card)"
+                   IsSelectMode="@IsSelectMode()"/>
+        }
+    </MudContainer>
     }
 
     @if (_data?.SongCards.Count > 0)
@@ -473,6 +502,19 @@
             };
 
             await RemoveItemsWithConfirmation("other video", $"{otherVideo.Title}", request);
+        }
+    }
+
+    private async Task RemoveFillerFromCollection(MediaCardViewModel vm)
+    {
+        if (vm is FillerCardViewModel filler)
+        {
+            var request = new RemoveItemsFromCollection(Id)
+            {
+                MediaItemIds = [filler.FillerId]
+            };
+
+            await RemoveItemsWithConfirmation("filler", $"{filler.Title}", request);
         }
     }
 

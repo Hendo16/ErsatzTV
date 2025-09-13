@@ -680,8 +680,6 @@ public class ElasticSearchIndex : ISearchIndex
                     Tag = metadata.Tags.Map(t => t.Name).ToList(),
                     Studio = metadata.Studios.Map(s => s.Name).ToList(),
                     Actor = metadata.Actors.Map(a => a.Name).ToList(),
-                    Director = metadata.Directors.Map(d => d.Name).ToList(),
-                    Writer = metadata.Writers.Map(w => w.Name).ToList()
                 };
 
                 AddStatistics(doc, filler.MediaVersions);
