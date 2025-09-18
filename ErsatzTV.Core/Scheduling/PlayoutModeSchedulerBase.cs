@@ -282,6 +282,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
             }
         }
 
+        List<int> usedMovies = new();
         foreach (FillerPreset filler in allFiller.Filter(
                      f => f.FillerKind == FillerKind.PreRoll && f.FillerMode != FillerMode.Pad))
         {
@@ -308,7 +309,8 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             filler.Count.Value,
                             FillerKind.PreRoll,
                             filler.AllowWatermarks,
-                            cancellationToken));
+                            cancellationToken,
+                            ref usedMovies));
                     break;
                 case FillerMode.RandomCount when filler.Count.HasValue:
                     IMediaCollectionEnumerator e3 = enumerators[CollectionKey.ForFillerPreset(filler)];
@@ -369,7 +371,8 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                                         filler.Count.Value,
                                         FillerKind.MidRoll,
                                         filler.AllowWatermarks,
-                                        cancellationToken));
+                                        cancellationToken,
+                                        ref usedMovies));
                             }
                         }
 
@@ -423,7 +426,8 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             filler.Count.Value,
                             FillerKind.PostRoll,
                             filler.AllowWatermarks,
-                            cancellationToken));
+                            cancellationToken,
+                            ref usedMovies));
                     break;
                 case FillerMode.RandomCount when filler.Count.HasValue:
                     IMediaCollectionEnumerator e3 = enumerators[CollectionKey.ForFillerPreset(filler)];
@@ -623,30 +627,48 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         int count,
         FillerKind fillerKind,
         bool allowWatermarks,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ref List<int> usedIds)
     {
         var result = new List<PlayoutItem>();
 
         for (var i = 0; i < count; i++)
         {
-            foreach (MediaItem mediaItem in enumerator.Current)
+            bool noDuplicate = false;
+            while (!noDuplicate)
             {
-                TimeSpan itemDuration = DurationForMediaItem(mediaItem);
-
-                var playoutItem = new PlayoutItem
+                foreach (MediaItem mediaItem in enumerator.Current)
                 {
-                    MediaItemId = mediaItem.Id,
-                    Start = new DateTime(2020, 2, 1, 0, 0, 0, DateTimeKind.Utc),
-                    Finish = new DateTime(2020, 2, 1, 0, 0, 0, DateTimeKind.Utc) + itemDuration,
-                    InPoint = TimeSpan.Zero,
-                    OutPoint = itemDuration,
-                    GuideGroup = playoutBuilderState.NextGuideGroup,
-                    FillerKind = fillerKind,
-                    DisableWatermarks = !allowWatermarks
-                };
+                    TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                    FillerMediaItem mappedFiller = (FillerMediaItem)mediaItem;
 
-                result.Add(playoutItem);
-                enumerator.MoveNext();
+                    //Filter out fillers that are associated with movies but have already been used for this media item
+                    if (mappedFiller.FillerMetadata[0].MovieId != null && usedIds.Contains((int)mappedFiller.FillerMetadata[0].MovieId))
+                    {
+                        enumerator.MoveNext();
+                        continue;
+                    }
+
+                    var playoutItem = new PlayoutItem
+                    {
+                        MediaItemId = mediaItem.Id,
+                        Start = new DateTime(2020, 2, 1, 0, 0, 0, DateTimeKind.Utc),
+                        Finish = new DateTime(2020, 2, 1, 0, 0, 0, DateTimeKind.Utc) + itemDuration,
+                        InPoint = TimeSpan.Zero,
+                        OutPoint = itemDuration,
+                        GuideGroup = playoutBuilderState.NextGuideGroup,
+                        FillerKind = fillerKind,
+                        DisableWatermarks = !allowWatermarks
+                    };
+
+                    if (mappedFiller.FillerMetadata[0].MovieId != null)
+                    {
+                        usedIds.Add((int)mappedFiller.FillerMetadata[0].MovieId);
+                    }
+                    result.Add(playoutItem);
+                    enumerator.MoveNext();
+                    noDuplicate = true;
+                }
             }
         }
 
@@ -754,7 +776,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         var result = new List<PlayoutItem>();
         // randomCount is from 0 to count.
         int randomCount = _random.Next(count + 1);
-
+        List<int> usedMovies = new();
         if (randomCount != 0)
         {
             result = AddCountFiller(
@@ -763,7 +785,8 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                 randomCount,
                 fillerKind,
                 allowWatermarks,
-                cancellationToken);
+                cancellationToken,
+                ref usedMovies);
         }
 
         return result;

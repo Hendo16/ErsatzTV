@@ -282,7 +282,7 @@
         @foreach (FillerCardViewModel card in _data.FillerCards.OrderBy(e => e.SortTitle))
         {
         <MediaCard Data="@card"
-                   Href=""
+                   Href="@($"media/filler/{card.FillerId}")"
                    ArtworkKind="ArtworkKind.Thumbnail"
                    DeleteClicked="@RemoveFillerFromCollection"
                    SelectColor="@Color.Error"

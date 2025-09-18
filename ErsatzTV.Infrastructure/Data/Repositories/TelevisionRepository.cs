@@ -563,6 +563,7 @@ public class TelevisionRepository : ITelevisionRepository
             .Include(e => e.Season)
             .ThenInclude(s => s.Show)
             .ThenInclude(s => s.ShowMetadata)
+            .ThenInclude(s => s.Genres)
             .Filter(e => ids.Contains(e.Id))
             .ToListAsync();
     }

@@ -54,6 +54,18 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                 SubtitleMode = scheduleItem.SubtitleMode
             };
 
+            //Get Base Item Genres
+            List<Genre> genres = new();
+            if (mediaItem is Episode)
+            {
+                var kothMetadata = ((Episode)mediaItem).Season.Show.ShowMetadata[0];
+                if (kothMetadata.Genres != null && kothMetadata.Genres.Count != 0)
+                {
+                    genres = kothMetadata.Genres;
+                }
+            }
+            //TODO: If list of genres isn't empty, get all TV Spots that have an associated movie that match genre?
+
             List<PlayoutItem> playoutItems = AddFiller(
                 playoutBuilderState,
                 collectionEnumerators,
