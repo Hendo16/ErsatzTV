@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using Bugsnag;
 using CliWrap;
 using ErsatzTV.Core;
@@ -19,14 +20,14 @@ public abstract class LocalFolderScanner
 {
     public static readonly ImmutableHashSet<string> VideoFileExtensions = new[]
     {
-        ".mpg", ".mp2", ".mpeg", ".mpe", ".mpv", ".ogg", ".ogv", ".mp4",
+        ".avs", ".mpg", ".mp2", ".mpeg", ".mpe", ".mpv", ".ogg", ".ogv", ".mp4",
         ".m4p", ".m4v", ".avi", ".wmv", ".mov", ".mkv", ".m2ts", ".ts", ".webm"
     }.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
     public static readonly ImmutableHashSet<string> AudioFileExtensions = new[]
     {
-        ".aac", ".alac", ".dff", ".dsf", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".oga", ".ogx", ".spx", ".wav",
-        ".wma"
+        ".aac", ".aif", ".aifc", ".aiff", ".alac", ".dff", ".dsf", ".flac", ".mp3",
+        ".m4a", ".ogg", ".opus", ".oga", ".ogx", ".spx", ".wav", ".wma"
     }.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
 
     public static readonly ImmutableHashSet<string> ImageFileExtensions = new[]
@@ -59,7 +60,7 @@ public abstract class LocalFolderScanner
 
     private readonly IImageCache _imageCache;
 
-    private readonly ILocalFileSystem _localFileSystem;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalStatisticsProvider _localStatisticsProvider;
     private readonly ILogger _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
@@ -67,7 +68,7 @@ public abstract class LocalFolderScanner
     private readonly ITempFilePool _tempFilePool;
 
     protected LocalFolderScanner(
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         ILocalStatisticsProvider localStatisticsProvider,
         IMetadataRepository metadataRepository,
         IMediaItemRepository mediaItemRepository,
@@ -77,7 +78,7 @@ public abstract class LocalFolderScanner
         IClient client,
         ILogger logger)
     {
-        _localFileSystem = localFileSystem;
+        _fileSystem = fileSystem;
         _localStatisticsProvider = localStatisticsProvider;
         _metadataRepository = metadataRepository;
         _mediaItemRepository = mediaItemRepository;
@@ -100,7 +101,7 @@ public abstract class LocalFolderScanner
 
             string path = version.MediaFiles.Head().Path;
 
-            if (version.DateUpdated != _localFileSystem.GetLastWriteTime(path) || version.Streams.Count == 0)
+            if (version.DateUpdated != _fileSystem.File.GetLastWriteTime(path) || version.Streams.Count == 0)
             {
                 _logger.LogDebug("Refreshing {Attribute} for {Path}", "Statistics", path);
                 Either<BaseError, bool> refreshResult =
@@ -141,7 +142,7 @@ public abstract class LocalFolderScanner
         Option<int> attachedPicIndex,
         CancellationToken cancellationToken)
     {
-        DateTime lastWriteTime = _localFileSystem.GetLastWriteTime(artworkFile);
+        DateTime lastWriteTime = _fileSystem.File.GetLastWriteTime(artworkFile);
 
         metadata.Artwork ??= new List<Artwork>();
 
@@ -311,5 +312,5 @@ public abstract class LocalFolderScanner
     protected bool ShouldIncludeFolder(string folder) =>
         !string.IsNullOrWhiteSpace(folder) &&
         !Path.GetFileName(folder).StartsWith('.') &&
-        !_localFileSystem.FileExists(Path.Combine(folder, ".etvignore"));
+        !_fileSystem.File.Exists(Path.Combine(folder, ".etvignore"));
 }

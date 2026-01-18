@@ -35,7 +35,7 @@ internal static class Mapper
             GetSeasonName(season.SeasonNumber),
             season.SeasonMetadata.HeadOrNone().Map(sm => GetPoster(sm, maybeJellyfin, maybeEmby))
                 .IfNone(string.Empty),
-            season.SeasonNumber == 0 ? "S" : season.SeasonNumber.ToString(CultureInfo.InvariantCulture),
+            season.SeasonNumber == 0 ? "S" : new string(season.SeasonNumber.ToString(CultureInfo.InvariantCulture).Take(20).ToArray()),
             season.State);
 
     internal static TelevisionSeasonCardViewModel ProjectToViewModel(
@@ -158,7 +158,7 @@ internal static class Mapper
         return new SongCardViewModel(
             songMetadata.SongId,
             songMetadata.Title,
-            string.Join(", ", songMetadata.Artists) + album,
+            string.Join(", ", songMetadata.Artists ?? []) + album,
             songMetadata.SortTitle,
             GetThumbnail(songMetadata, None, None),
             songMetadata.Song.State);
@@ -179,7 +179,7 @@ internal static class Mapper
             remoteStreamMetadata.Title,
             remoteStreamMetadata.OriginalTitle,
             remoteStreamMetadata.SortTitle,
-            string.Empty, // TODO: thumbnail?
+            GetThumbnail(remoteStreamMetadata, None, None),
             remoteStreamMetadata.RemoteStream.State);
 
     internal static ArtistCardViewModel ProjectToViewModel(ArtistMetadata artistMetadata) =>

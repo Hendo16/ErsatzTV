@@ -84,10 +84,9 @@ public class FFmpegProcessService
                 DateTimeOffset.UnixEpoch,
                 DateTimeOffset.UnixEpoch,
                 TimeSpan.Zero,
-                TimeSpan.Zero,
                 false,
                 StreamInputKind.Vod,
-                Option<int>.None);
+                Option<FrameRate>.None);
 
             scalePlaybackSettings.AudioChannels = Option<int>.None;
 

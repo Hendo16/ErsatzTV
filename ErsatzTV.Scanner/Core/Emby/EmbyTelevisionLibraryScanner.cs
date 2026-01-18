@@ -1,12 +1,13 @@
-﻿using ErsatzTV.Core;
+﻿using System.IO.Abstractions;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Emby;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
@@ -24,20 +25,20 @@ public class EmbyTelevisionLibraryScanner : MediaServerTelevisionLibraryScanner<
     private readonly IEmbyTelevisionRepository _televisionRepository;
 
     public EmbyTelevisionLibraryScanner(
+        IScannerProxy scannerProxy,
         IEmbyApiClient embyApiClient,
         IMediaSourceRepository mediaSourceRepository,
         IEmbyTelevisionRepository televisionRepository,
         IEmbyPathReplacementService pathReplacementService,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
-        IMediator mediator,
         ILogger<EmbyTelevisionLibraryScanner> logger)
         : base(
-            localFileSystem,
+            scannerProxy,
+            fileSystem,
             localChaptersProvider,
             metadataRepository,
-            mediator,
             logger)
     {
         _embyApiClient = embyApiClient;
@@ -157,7 +158,8 @@ public class EmbyTelevisionLibraryScanner : MediaServerTelevisionLibraryScanner<
         EmbyLibrary library,
         EmbyConnectionParameters connectionParameters,
         EmbyShow show,
-        EmbySeason season) =>
+        EmbySeason season,
+        bool isNewSeason) =>
         _embyApiClient.GetEpisodeLibraryItems(
             connectionParameters.Address,
             connectionParameters.ApiKey,

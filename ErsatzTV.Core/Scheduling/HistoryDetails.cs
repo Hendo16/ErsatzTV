@@ -24,7 +24,8 @@ internal static class HistoryDetails
             blockItem.CollectionId,
             blockItem.MultiCollectionId,
             blockItem.SmartCollectionId,
-            blockItem.MediaItemId
+            blockItem.MediaItemId,
+            blockItem.SearchQuery
         };
 
         return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
@@ -76,6 +77,17 @@ internal static class HistoryDetails
         return JsonConvert.SerializeObject(historyKey, Formatting.None, JsonSettings);
     }
 
+    public static string KeyForSchedulingPlaylistContent(string key)
+    {
+        var historyKey = new Dictionary<string, object>
+        {
+            { "Key", key },
+            { "Order", nameof(PlaybackOrder.None) }
+        };
+
+        return JsonConvert.SerializeObject(historyKey, Formatting.None, JsonSettings);
+    }
+
     public static string KeyForCollectionKey(CollectionKey collectionKey)
     {
         dynamic key = new
@@ -86,7 +98,25 @@ internal static class HistoryDetails
             collectionKey.SmartCollectionId,
             collectionKey.MediaItemId,
             collectionKey.PlaylistId,
+            collectionKey.SearchQuery,
             collectionKey.FakeCollectionKey
+        };
+
+        return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
+    }
+
+    public static string ForBreakContent(DecoBreakContent breakContent)
+    {
+        dynamic key = new
+        {
+            DecoBreakContentId = breakContent.Id,
+            PlaybackOrder = PlaybackOrder.Shuffle,
+            breakContent.CollectionType,
+            breakContent.CollectionId,
+            breakContent.MultiCollectionId,
+            breakContent.SmartCollectionId,
+            breakContent.MediaItemId,
+            breakContent.PlaylistId
         };
 
         return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
@@ -200,7 +230,7 @@ internal static class HistoryDetails
 
             if (!current)
             {
-                enumerator.MoveNext();
+                enumerator.MoveNext(Option<DateTimeOffset>.None);
             }
         }
     }

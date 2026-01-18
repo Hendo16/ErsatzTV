@@ -147,6 +147,8 @@ public class ArtworkController : ControllerBase
         GetPlexArtwork(plexMediaSourceId, $"/{path}", cancellationToken);
 
     [HttpGet("/artwork/thumbnails/plex/{plexMediaSourceId}/{*path}")]
+    [HttpHead("/iptv/artwork/thumbnails/plex/{plexMediaSourceId}/{*path}")]
+    [HttpGet("/iptv/artwork/thumbnails/plex/{plexMediaSourceId}/{*path}")]
     public Task<IActionResult> GetPlexThumbnail(
         int plexMediaSourceId,
         string path,
@@ -188,22 +190,29 @@ public class ArtworkController : ControllerBase
             Left: _ => new NotFoundResult().AsTask<IActionResult>(),
             Right: async r =>
             {
-                HttpClient client = _httpClientFactory.CreateClient();
-                HttpContext.Response.RegisterForDispose(client);
-                client.DefaultRequestHeaders.Add("X-Plex-Token", r.AuthToken);
+                try
+                {
+                    HttpClient client = _httpClientFactory.CreateClient();
+                    HttpContext.Response.RegisterForDispose(client);
+                    client.DefaultRequestHeaders.Add("X-Plex-Token", r.AuthToken);
 
-                var fullPath = new Uri(r.Uri, transcodePath);
-                HttpResponseMessage response = await client.GetAsync(
-                    fullPath,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken);
-                HttpContext.Response.RegisterForDispose(response);
+                    var fullPath = new Uri(r.Uri, transcodePath);
+                    HttpResponseMessage response = await client.GetAsync(
+                        fullPath,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken);
+                    HttpContext.Response.RegisterForDispose(response);
 
-                Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-                return new FileStreamResult(
-                    stream,
-                    response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                    return new FileStreamResult(
+                        stream,
+                        response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                }
+                catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+                {
+                    return NotFound();
+                }
             });
 #endif
     }
@@ -221,21 +230,28 @@ public class ArtworkController : ControllerBase
             Left: _ => new NotFoundResult().AsTask<IActionResult>(),
             Right: async vm =>
             {
-                HttpClient client = _httpClientFactory.CreateClient();
-                HttpContext.Response.RegisterForDispose(client);
+                try
+                {
+                    HttpClient client = _httpClientFactory.CreateClient();
+                    HttpContext.Response.RegisterForDispose(client);
 
-                Url fullPath = JellyfinUrl.ForArtwork(vm.Address, path);
-                HttpResponseMessage response = await client.GetAsync(
-                    fullPath,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken);
-                HttpContext.Response.RegisterForDispose(response);
+                    Url fullPath = JellyfinUrl.ForArtwork(vm.Address, path);
+                    HttpResponseMessage response = await client.GetAsync(
+                        fullPath,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken);
+                    HttpContext.Response.RegisterForDispose(response);
 
-                Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-                return new FileStreamResult(
-                    stream,
-                    response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                    return new FileStreamResult(
+                        stream,
+                        response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                }
+                catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+                {
+                    return NotFound();
+                }
             });
 #endif
     }
@@ -253,21 +269,28 @@ public class ArtworkController : ControllerBase
             Left: _ => new NotFoundResult().AsTask<IActionResult>(),
             Right: async vm =>
             {
-                HttpClient client = _httpClientFactory.CreateClient();
-                HttpContext.Response.RegisterForDispose(client);
+                try
+                {
+                    HttpClient client = _httpClientFactory.CreateClient();
+                    HttpContext.Response.RegisterForDispose(client);
 
-                Url fullPath = EmbyUrl.ForArtwork(vm.Address, path);
-                HttpResponseMessage response = await client.GetAsync(
-                    fullPath,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    cancellationToken);
-                HttpContext.Response.RegisterForDispose(response);
+                    Url fullPath = EmbyUrl.ForArtwork(vm.Address, path);
+                    HttpResponseMessage response = await client.GetAsync(
+                        fullPath,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        cancellationToken);
+                    HttpContext.Response.RegisterForDispose(response);
 
-                Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
 
-                return new FileStreamResult(
-                    stream,
-                    response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                    return new FileStreamResult(
+                        stream,
+                        response.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                }
+                catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+                {
+                    return NotFound();
+                }
             });
 #endif
     }

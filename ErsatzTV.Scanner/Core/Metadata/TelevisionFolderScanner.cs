@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -8,8 +9,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Images;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.FFmpeg;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
@@ -22,16 +23,19 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
     private readonly IFallbackMetadataProvider _fallbackMetadataProvider;
     private readonly ILibraryRepository _libraryRepository;
     private readonly ILocalChaptersProvider _localChaptersProvider;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
     private readonly ILogger<TelevisionFolderScanner> _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
-    private readonly IMediator _mediator;
     private readonly IMetadataRepository _metadataRepository;
     private readonly ITelevisionRepository _televisionRepository;
 
     public TelevisionFolderScanner(
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ITelevisionRepository televisionRepository,
         ILocalStatisticsProvider localStatisticsProvider,
@@ -42,13 +46,12 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         IImageCache imageCache,
         ILibraryRepository libraryRepository,
         IMediaItemRepository mediaItemRepository,
-        IMediator mediator,
         IFFmpegPngService ffmpegPngService,
         ITempFilePool tempFilePool,
         IClient client,
         IFallbackMetadataProvider fallbackMetadataProvider,
         ILogger<TelevisionFolderScanner> logger) : base(
-        localFileSystem,
+        fileSystem,
         localStatisticsProvider,
         metadataRepository,
         mediaItemRepository,
@@ -58,6 +61,8 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         client,
         logger)
     {
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _televisionRepository = televisionRepository;
         _localMetadataProvider = localMetadataProvider;
@@ -66,7 +71,6 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         _metadataRepository = metadataRepository;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
-        _mediator = mediator;
         _client = client;
         _fallbackMetadataProvider = fallbackMetadataProvider;
         _logger = logger;
@@ -107,14 +111,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                 }
 
                 decimal percentCompletion = (decimal)allShowFolders.IndexOf(showFolder) / allShowFolders.Count;
-                await _mediator.Publish(
-                    new ScannerProgressUpdate(
-                        libraryPath.LibraryId,
-                        null,
-                        progressMin + percentCompletion * progressSpread,
-                        Array.Empty<int>(),
-                        Array.Empty<int>()),
-                    cancellationToken);
+                if (!await _scannerProxy.UpdateProgress(progressMin + percentCompletion * progressSpread, cancellationToken))
+                {
+                    return new ScanCanceled();
+                }
 
                 Option<int> maybeParentFolder =
                     await _libraryRepository.GetParentFolderId(libraryPath, showFolder, cancellationToken);
@@ -149,14 +149,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                     // add show to search index right away
                     if (result.IsAdded || result.IsUpdated)
                     {
-                        await _mediator.Publish(
-                            new ScannerProgressUpdate(
-                                libraryPath.LibraryId,
-                                null,
-                                null,
-                                new[] { result.Item.Id },
-                                Array.Empty<int>()),
-                            cancellationToken);
+                        if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                        {
+                            _logger.LogWarning("Failed to reindex media items from scanner process");
+                        }
                     }
 
                     Either<BaseError, Unit> scanResult = await ScanSeasons(
@@ -177,19 +173,15 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
             foreach (string path in await _televisionRepository.FindEpisodePaths(libraryPath))
             {
-                if (!_localFileSystem.FileExists(path))
+                if (!_fileSystem.File.Exists(path))
                 {
                     _logger.LogInformation("Flagging missing episode at {Path}", path);
 
                     List<int> episodeIds = await FlagFileNotFound(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            episodeIds.ToArray(),
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems(episodeIds.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
                 }
                 else if (Path.GetFileName(path).StartsWith("._", StringComparison.OrdinalIgnoreCase))
                 {
@@ -202,14 +194,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
             await _televisionRepository.DeleteEmptySeasons(libraryPath);
             List<int> ids = await _televisionRepository.DeleteEmptyShows(libraryPath);
-            await _mediator.Publish(
-                new ScannerProgressUpdate(
-                    libraryPath.LibraryId,
-                    null,
-                    null,
-                    Array.Empty<int>(),
-                    ids.ToArray()),
-                cancellationToken);
+            if (!await _scannerProxy.RemoveMediaItems(ids.ToArray(), cancellationToken))
+            {
+                _logger.LogWarning("Failed to remove media items from scanner process");
+            }
 
             return Unit.Default;
         }
@@ -260,17 +248,15 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                 maybeParentFolder,
                 seasonFolder);
 
-            // skip folder if etag matches
-            if (knownFolder.Etag == etag)
+            // cache etag match for later checking
+            // we still need to scan the season folder in case season artwork has changed
+            bool etagMatch = knownFolder.Etag == etag;
+            if (etagMatch)
             {
                 if (allTrashedItems.Any(f => f.StartsWith(seasonFolder, StringComparison.OrdinalIgnoreCase)))
                 {
                     _logger.LogDebug("Previously trashed items are now present in folder {Folder}", seasonFolder);
-                }
-                else
-                {
-                    // etag matches and no trashed items are now present, continue to next folder
-                    continue;
+                    etagMatch = false;
                 }
             }
 
@@ -292,6 +278,12 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
                 foreach (Season season in maybeSeason.RightToSeq())
                 {
+                    // skip scanning episodes when season folder etag matches
+                    if (etagMatch)
+                    {
+                        continue;
+                    }
+
                     Either<BaseError, Unit> scanResult = await ScanEpisodes(
                         libraryPath,
                         knownFolder,
@@ -310,14 +302,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
                     season.Show = show;
 
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            new[] { season.Id },
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems([season.Id], cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
                 }
             }
         }
@@ -365,14 +353,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
             foreach (Episode episode in maybeEpisode.RightToSeq())
             {
-                await _mediator.Publish(
-                    new ScannerProgressUpdate(
-                        libraryPath.LibraryId,
-                        null,
-                        null,
-                        new[] { episode.Id },
-                        Array.Empty<int>()),
-                    cancellationToken);
+                if (!await _scannerProxy.ReindexMediaItems([episode.Id], cancellationToken))
+                {
+                    _logger.LogWarning("Failed to reindex media items from scanner process");
+                }
             }
         }
 
@@ -430,7 +414,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
 
     private async Task<Either<BaseError, Season>> EnsureMetadataExists(Season season)
     {
-        season.SeasonMetadata ??= new List<SeasonMetadata>();
+        season.SeasonMetadata ??= [];
 
         if (season.SeasonMetadata.Count == 0)
         {
@@ -439,8 +423,9 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                 SeasonId = season.Id,
                 Season = season,
                 DateAdded = DateTime.UtcNow,
-                Guids = new List<MetadataGuid>(),
-                Tags = new List<Tag>()
+                Guids = [],
+                Tags = [],
+                Artwork = []
             };
 
             season.SeasonMetadata.Add(metadata);
@@ -512,11 +497,18 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         try
         {
             Show show = result.Item;
-            Option<string> maybeArtwork = LocateArtworkForShow(showFolder, artworkKind);
-            foreach (string artworkFile in maybeArtwork)
+            foreach (ShowMetadata metadata in show.ShowMetadata.HeadOrNone())
             {
-                ShowMetadata metadata = show.ShowMetadata.Head();
-                await RefreshArtwork(artworkFile, metadata, artworkKind, None, None, cancellationToken);
+                Option<string> maybeArtwork = LocateArtworkForShow(showFolder, artworkKind);
+                foreach (string artworkFile in maybeArtwork)
+                {
+                    await RefreshArtwork(artworkFile, metadata, artworkKind, None, None, cancellationToken);
+                }
+
+                if (maybeArtwork.IsNone && metadata.Artwork.Any(a => a.ArtworkKind == artworkKind))
+                {
+                    await _metadataRepository.RemoveArtworkWithKind(metadata, artworkKind);
+                }
             }
 
             return result;
@@ -535,11 +527,18 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
     {
         try
         {
-            Option<string> maybePoster = LocatePoster(season, seasonFolder);
-            foreach (string posterFile in maybePoster)
+            foreach (SeasonMetadata metadata in season.SeasonMetadata.HeadOrNone())
             {
-                SeasonMetadata metadata = season.SeasonMetadata.Head();
-                await RefreshArtwork(posterFile, metadata, ArtworkKind.Poster, None, None, cancellationToken);
+                Option<string> maybePoster = LocatePoster(season, seasonFolder);
+                foreach (string posterFile in maybePoster)
+                {
+                    await RefreshArtwork(posterFile, metadata, ArtworkKind.Poster, None, None, cancellationToken);
+                }
+
+                if (maybePoster.IsNone && metadata.Artwork.Any(a => a.ArtworkKind is ArtworkKind.Poster))
+                {
+                    await _metadataRepository.RemoveArtworkWithKind(metadata, ArtworkKind.Poster);
+                }
             }
 
             return season;
@@ -555,10 +554,10 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
     {
         try
         {
-            Option<string> maybeThumbnail = LocateThumbnail(episode);
-            foreach (string thumbnailFile in maybeThumbnail)
+            foreach (EpisodeMetadata metadata in episode.EpisodeMetadata)
             {
-                foreach (EpisodeMetadata metadata in episode.EpisodeMetadata)
+                Option<string> maybeThumbnail = LocateThumbnail(episode);
+                foreach (string thumbnailFile in maybeThumbnail)
                 {
                     await RefreshArtwork(
                         thumbnailFile,
@@ -567,6 +566,11 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                         None,
                         None,
                         cancellationToken);
+                }
+
+                if (maybeThumbnail.IsNone && metadata.Artwork.Any(a => a.ArtworkKind is ArtworkKind.Thumbnail))
+                {
+                    await _metadataRepository.RemoveArtworkWithKind(metadata, ArtworkKind.Thumbnail);
                 }
             }
 
@@ -608,21 +612,21 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
     }
 
     private Option<string> LocateNfoFileForShow(string showFolder) =>
-        Optional(Path.Combine(showFolder, "tvshow.nfo")).Filter(s => _localFileSystem.FileExists(s));
+        Optional(Path.Combine(showFolder, "tvshow.nfo")).Filter(s => _fileSystem.File.Exists(s));
 
     private Option<string> LocateNfoFile(Episode episode)
     {
         string path = episode.MediaVersions.Head().MediaFiles.Head().Path;
-        return Optional(Path.ChangeExtension(path, "nfo")).Filter(s => _localFileSystem.FileExists(s));
+        return Optional(Path.ChangeExtension(path, "nfo")).Filter(s => _fileSystem.File.Exists(s));
     }
 
     private Option<string> LocateArtworkForShow(string showFolder, ArtworkKind artworkKind)
     {
         string[] segments = artworkKind switch
         {
-            ArtworkKind.Poster => new[] { "poster", "folder" },
-            ArtworkKind.FanArt => new[] { "fanart" },
-            ArtworkKind.Thumbnail => new[] { "thumb" },
+            ArtworkKind.Poster => ["poster", "folder"],
+            ArtworkKind.FanArt => ["fanart"],
+            ArtworkKind.Thumbnail => ["thumb"],
             _ => throw new ArgumentOutOfRangeException(nameof(artworkKind))
         };
 
@@ -630,7 +634,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
             .Map(ext => segments.Map(segment => $"{segment}.{ext}"))
             .Flatten()
             .Map(f => Path.Combine(showFolder, f))
-            .Filter(s => _localFileSystem.FileExists(s))
+            .Filter(s => _fileSystem.File.Exists(s))
             .HeadOrNone();
     }
 
@@ -639,7 +643,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         string folder = Path.GetDirectoryName(seasonFolder) ?? string.Empty;
         return ImageFileExtensions
             .Map(ext => Path.Combine(folder, $"season{season.SeasonNumber:00}-poster.{ext}"))
-            .Filter(s => _localFileSystem.FileExists(s))
+            .Filter(s => _fileSystem.File.Exists(s))
             .HeadOrNone();
     }
 
@@ -650,7 +654,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         return ImageFileExtensions
             .Map(ext => Path.GetFileNameWithoutExtension(path) + $"-thumb.{ext}")
             .Map(f => Path.Combine(folder, f))
-            .Filter(f => _localFileSystem.FileExists(f))
+            .Filter(f => _fileSystem.File.Exists(f))
             .HeadOrNone();
     }
 }

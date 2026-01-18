@@ -1,8 +1,10 @@
 ﻿@page "/blocks/{Id:int}"
+@using ErsatzTV.Application.Graphics
 @using ErsatzTV.Application.MediaCollections
 @using ErsatzTV.Application.MediaItems
 @using ErsatzTV.Application.Scheduling
 @using ErsatzTV.Application.Search
+@using ErsatzTV.Application.Watermarks
 @using ErsatzTV.Core.Domain.Scheduling
 @implements IDisposable
 @inject NavigationManager NavigationManager
@@ -95,6 +97,7 @@
             <col/>
             <col/>
             <col/>
+            <col/>
             <col style="width: 240px;"/>
         </MudHidden>
     </ColGroup>
@@ -151,15 +154,16 @@
             <MudText>Collection Type</MudText>
         </div>
         <MudSelect @bind-Value="_selectedItem.CollectionType" For="@(() => _selectedItem.CollectionType)">
-            <MudSelectItem Value="ProgramScheduleItemCollectionType.Collection">Collection</MudSelectItem>
-            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionShow">Television Show</MudSelectItem>
-            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionSeason">Television Season</MudSelectItem>
+            <MudSelectItem Value="CollectionType.Collection">Collection</MudSelectItem>
+            <MudSelectItem Value="CollectionType.TelevisionShow">Television Show</MudSelectItem>
+            <MudSelectItem Value="CollectionType.TelevisionSeason">Television Season</MudSelectItem>
             @* <MudSelectItem Value="ProgramScheduleItemCollectionType.Artist">Artist</MudSelectItem> *@
             @* <MudSelectItem Value="ProgramScheduleItemCollectionType.MultiCollection">Multi Collection</MudSelectItem> *@
-            <MudSelectItem Value="ProgramScheduleItemCollectionType.SmartCollection">Smart Collection</MudSelectItem>
+            <MudSelectItem Value="CollectionType.SmartCollection">Smart Collection</MudSelectItem>
+            <MudSelectItem Value="CollectionType.SearchQuery">Search Query</MudSelectItem>
         </MudSelect>
     </MudStack>
-    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Collection)
+    @if (_selectedItem.CollectionType == CollectionType.Collection)
     {
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
             <div class="d-flex">
@@ -177,7 +181,7 @@
         </MudStack>
     }
 
-    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.MultiCollection)
+    @if (_selectedItem.CollectionType == CollectionType.MultiCollection)
     {
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
             <div class="d-flex">
@@ -195,7 +199,7 @@
         </MudStack>
     }
 
-    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.SmartCollection)
+    @if (_selectedItem.CollectionType == CollectionType.SmartCollection)
     {
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
             <div class="d-flex">
@@ -213,7 +217,25 @@
         </MudStack>
     }
 
-    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionShow)
+    @if (_selectedItem.CollectionType == CollectionType.SearchQuery)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Search Title</MudText>
+            </div>
+            <MudTextField @bind-Value="@_selectedItem.SearchTitle"
+                          For="@(() => _selectedItem.SearchTitle)"
+                          HelperText="Optional title that will be displayed in the UI"/>
+        </MudStack>
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Search Query</MudText>
+            </div>
+            <MudTextField @bind-Value="@_selectedItem.SearchQuery" For="@(() => _selectedItem.SearchQuery)"/>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == CollectionType.TelevisionShow)
     {
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
             <div class="d-flex">
@@ -231,7 +253,7 @@
         </MudStack>
     }
 
-    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionSeason)
+    @if (_selectedItem.CollectionType == CollectionType.TelevisionSeason)
     {
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
             <div class="d-flex">
@@ -257,33 +279,63 @@
         <MudSelect @bind-Value="@_selectedItem.PlaybackOrder" For="@(() => _selectedItem.PlaybackOrder)">
             @switch (_selectedItem.CollectionType)
             {
-                case ProgramScheduleItemCollectionType.MultiCollection:
+                case CollectionType.MultiCollection:
                     <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
                     @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
                     break;
-                case ProgramScheduleItemCollectionType.Collection:
-                case ProgramScheduleItemCollectionType.SmartCollection:
+                case CollectionType.Collection:
+                case CollectionType.SmartCollection:
                     <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.RandomRotation">Random Rotation</MudSelectItem>
                     @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
                     break;
-                case ProgramScheduleItemCollectionType.TelevisionShow:
+                case CollectionType.TelevisionShow:
                     <MudSelectItem Value="PlaybackOrder.SeasonEpisode">Season, Episode</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
                     @* <MudSelectItem Value="PlaybackOrder.MultiEpisodeShuffle">Multi-Episode Shuffle</MudSelectItem> *@
                     break;
-                case ProgramScheduleItemCollectionType.TelevisionSeason:
-                case ProgramScheduleItemCollectionType.Artist:
-                case ProgramScheduleItemCollectionType.FakeCollection:
+                case CollectionType.TelevisionSeason:
+                case CollectionType.Artist:
+                case CollectionType.FakeCollection:
                 default:
                     <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
                     <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
                     break;
+            }
+        </MudSelect>
+    </MudStack>
+    <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+        <div class="d-flex">
+            <MudText>Watermarks</MudText>
+        </div>
+        <MudSelect T="WatermarkViewModel"
+                   @bind-SelectedValues="_selectedItem.Watermarks"
+                   ToStringFunc="@(wm => wm?.Name)"
+                   Clearable="true"
+                   MultiSelection="true">
+            @foreach (WatermarkViewModel watermark in _watermarks)
+            {
+                <MudSelectItem Value="@watermark">@watermark.Name</MudSelectItem>
+            }
+        </MudSelect>
+    </MudStack>
+    <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+        <div class="d-flex">
+            <MudText>Graphics Elements</MudText>
+        </div>
+        <MudSelect T="GraphicsElementViewModel"
+                   @bind-SelectedValues="_selectedItem.GraphicsElements"
+                   ToStringFunc="@(ge => ge?.Name)"
+                   Clearable="true"
+                   MultiSelection="true">
+            @foreach (GraphicsElementViewModel graphicsElement in _graphicsElements)
+            {
+                <MudSelectItem Value="@graphicsElement">@graphicsElement.Name</MudSelectItem>
             }
         </MudSelect>
     </MudStack>
@@ -321,6 +373,8 @@ else if (_previewItems != null)
 
     private BlockItemsEditViewModel _block = new() { Items = [] };
     private BlockItemEditViewModel _selectedItem;
+    private List<WatermarkViewModel> _watermarks = [];
+    private List<GraphicsElementViewModel> _graphicsElements = [];
     private List<PlayoutItemPreviewViewModel> _previewItems;
     private int _durationHours;
     private int _durationMinutes = 15;
@@ -346,6 +400,11 @@ else if (_previewItems != null)
                 NavigationManager.NavigateTo("blocks");
                 return;
             }
+
+            _watermarks = await Mediator.Send(new GetAllWatermarks(), token)
+                .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
+            _graphicsElements = await Mediator.Send(new GetAllGraphicsElements(), token)
+                .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
 
             foreach (BlockViewModel block in maybeBlock)
             {
@@ -449,9 +508,13 @@ else if (_previewItems != null)
             MultiCollection = item.MultiCollection,
             SmartCollection = item.SmartCollection,
             MediaItem = item.MediaItem,
+            SearchTitle = item.SearchTitle,
+            SearchQuery = item.SearchQuery,
             PlaybackOrder = item.PlaybackOrder,
             IncludeInProgramGuide = item.IncludeInProgramGuide,
-            DisableWatermarks = item.DisableWatermarks
+            DisableWatermarks = item.DisableWatermarks,
+            Watermarks = item.Watermarks,
+            GraphicsElements = item.GraphicsElements
         };
 
     private void AddBlockItem()
@@ -460,7 +523,9 @@ else if (_previewItems != null)
         {
             Index = _block.Items.Map(i => i.Index).DefaultIfEmpty().Max() + 1,
             PlaybackOrder = PlaybackOrder.Chronological,
-            CollectionType = ProgramScheduleItemCollectionType.Collection
+            CollectionType = CollectionType.Collection,
+            Watermarks = [],
+            GraphicsElements = []
         };
 
         _block.Items.Add(item);
@@ -478,8 +543,12 @@ else if (_previewItems != null)
             MultiCollection = item.MultiCollection,
             SmartCollection = item.SmartCollection,
             MediaItem = item.MediaItem,
+            SearchTitle = item.SearchTitle,
+            SearchQuery = item.SearchQuery,
             IncludeInProgramGuide = item.IncludeInProgramGuide,
-            DisableWatermarks = item.DisableWatermarks
+            DisableWatermarks = item.DisableWatermarks,
+            Watermarks = item.Watermarks.ToList(),
+            GraphicsElements = item.GraphicsElements.ToList()
         };
 
         foreach (BlockItemEditViewModel i in _block.Items.Filter(bi => bi.Index >= newItem.Index))
@@ -535,9 +604,14 @@ else if (_previewItems != null)
             item.MultiCollection?.Id,
             item.SmartCollection?.Id,
             item.MediaItem?.MediaItemId,
+            item.SearchTitle,
+            item.SearchQuery,
             item.PlaybackOrder,
             item.IncludeInProgramGuide,
-            item.DisableWatermarks)).ToList();
+            item.DisableWatermarks,
+            item.Watermarks.Map(wm => wm.Id).ToList(),
+            item.GraphicsElements.Map(wm => wm.Id).ToList())
+        ).ToList();
 
         _block.Minutes = _durationHours * 60 + _durationMinutes;
 

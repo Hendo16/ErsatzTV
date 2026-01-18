@@ -5,6 +5,7 @@ using ErsatzTV.FFmpeg.Encoder.VideoToolbox;
 using ErsatzTV.FFmpeg.Filter;
 using ErsatzTV.FFmpeg.Format;
 using ErsatzTV.FFmpeg.GlobalOption.HardwareAcceleration;
+using ErsatzTV.FFmpeg.OutputFormat;
 using ErsatzTV.FFmpeg.OutputOption;
 using Microsoft.Extensions.Logging;
 
@@ -55,11 +56,17 @@ public class VideoToolboxPipelineBuilder : SoftwarePipelineBuilder
             videoStream.Codec,
             videoStream.Profile,
             videoStream.PixelFormat,
-            videoStream.ColorParams.IsHdr);
+            videoStream.ColorParams);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
             desiredState.PixelFormat);
+
+        // use software encoding (rawvideo) when piping to parent hls segmenter
+        if (ffmpegState.OutputFormat is OutputFormatKind.Nut)
+        {
+            encodeCapability = FFmpegCapability.Software;
+        }
 
         if (decodeCapability is FFmpegCapability.Hardware)
         {

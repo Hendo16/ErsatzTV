@@ -1,6 +1,7 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
 using Microsoft.Extensions.Logging;
@@ -42,12 +43,12 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
                 e.Result = name switch
                 {
                     "count" => enumeratorCount,
-                    "random" => random.Next() % enumeratorCount,
+                    "random" => enumeratorCount > 0 ? random.Next() % enumeratorCount : 0,
                     _ => e.Result
                 };
             };
 
-            object expressionResult = expression.Evaluate();
+            object expressionResult = expression.Evaluate(cancellationToken);
             int countValue = expressionResult switch
             {
                 double doubleResult => (int)Math.Floor(doubleResult),
@@ -66,7 +67,7 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
 
                 foreach (MediaItem mediaItem in enumerator.Current)
                 {
-                    TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                    TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
 
                     // create a playout item
                     var playoutItem = new PlayoutItem
@@ -132,7 +133,7 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
                         context.AddedHistory.Add(history);
                     }
 
-                    enumerator.MoveNext();
+                    enumerator.MoveNext(playoutItem.StartOffset);
                 }
 
                 foreach (string postRollSequence in context.GetPostRollSequence())

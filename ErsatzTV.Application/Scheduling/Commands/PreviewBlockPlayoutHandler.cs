@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
@@ -49,9 +50,9 @@ public class PreviewBlockPlayoutHandler(
             [
                 new PlayoutTemplate
                 {
-                    DaysOfWeek = PlayoutTemplate.AllDaysOfWeek(),
-                    DaysOfMonth = PlayoutTemplate.AllDaysOfMonth(),
-                    MonthsOfYear = PlayoutTemplate.AllMonthsOfYear(),
+                    DaysOfWeek = AlternateScheduleSelector.AllDaysOfWeek(),
+                    DaysOfMonth = AlternateScheduleSelector.AllDaysOfMonth(),
+                    MonthsOfYear = AlternateScheduleSelector.AllMonthsOfYear(),
                     Template = template
                 }
             ],
@@ -66,9 +67,10 @@ public class PreviewBlockPlayoutHandler(
             playout.Templates.ToList(),
             playout.ProgramSchedule,
             playout.ProgramScheduleAlternates,
-            playout.PlayoutHistory.ToList());
+            playout.PlayoutHistory.ToList(),
+            TimeSpan.Zero);
 
-        PlayoutBuildResult result =
+        Either<BaseError, PlayoutBuildResult> buildResult =
             await blockPlayoutBuilder.Build(
                 DateTimeOffset.Now,
                 playout,
@@ -76,42 +78,47 @@ public class PreviewBlockPlayoutHandler(
                 PlayoutBuildMode.Reset,
                 cancellationToken);
 
-        // load playout item details for title
-        foreach (PlayoutItem playoutItem in result.AddedItems)
-        {
-            Option<MediaItem> maybeMediaItem = await dbContext.MediaItems
-                .AsNoTracking()
-                .Include(mi => (mi as Movie).MovieMetadata)
-                .Include(mi => (mi as Movie).MediaVersions)
-                .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
-                .Include(mi => (mi as MusicVideo).MediaVersions)
-                .Include(mi => (mi as MusicVideo).Artist)
-                .ThenInclude(mm => mm.ArtistMetadata)
-                .Include(mi => (mi as Episode).EpisodeMetadata)
-                .Include(mi => (mi as Episode).MediaVersions)
-                .Include(mi => (mi as Episode).Season)
-                .ThenInclude(s => s.SeasonMetadata)
-                .Include(mi => (mi as Episode).Season.Show)
-                .ThenInclude(s => s.ShowMetadata)
-                .Include(mi => (mi as OtherVideo).OtherVideoMetadata)
-                .Include(mi => (mi as OtherVideo).MediaVersions)
-                .Include(mi => (mi as FillerMediaItem).FillerMetadata)
-                .Include(mi => (mi as FillerMediaItem).MediaVersions)
-                .Include(mi => (mi as Song).SongMetadata)
-                .Include(mi => (mi as Song).MediaVersions)
-                .Include(mi => (mi as Image).ImageMetadata)
-                .Include(mi => (mi as Image).MediaVersions)
-                .Include(mi => (mi as RemoteStream).RemoteStreamMetadata)
-                .Include(mi => (mi as RemoteStream).MediaVersions)
-                .SelectOneAsync(mi => mi.Id, mi => mi.Id == playoutItem.MediaItemId, cancellationToken);
-
-            foreach (MediaItem mediaItem in maybeMediaItem)
+        return await buildResult.MatchAsync(
+            async result =>
             {
-                playoutItem.MediaItem = mediaItem;
-            }
-        }
+                // load playout item details for title
+                foreach (PlayoutItem playoutItem in result.AddedItems)
+                {
+                    Option<MediaItem> maybeMediaItem = await dbContext.MediaItems
+                        .AsNoTracking()
+                        .Include(mi => (mi as Movie).MovieMetadata)
+                        .Include(mi => (mi as Movie).MediaVersions)
+                        .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
+                        .Include(mi => (mi as MusicVideo).MediaVersions)
+                        .Include(mi => (mi as MusicVideo).Artist)
+                        .ThenInclude(mm => mm.ArtistMetadata)
+                        .Include(mi => (mi as Episode).EpisodeMetadata)
+                        .Include(mi => (mi as Episode).MediaVersions)
+                        .Include(mi => (mi as Episode).Season)
+                        .ThenInclude(s => s.SeasonMetadata)
+                        .Include(mi => (mi as Episode).Season.Show)
+                        .ThenInclude(s => s.ShowMetadata)
+                        .Include(mi => (mi as OtherVideo).OtherVideoMetadata)
+                        .Include(mi => (mi as OtherVideo).MediaVersions)
+                        .Include(mi => (mi as FillerMediaItem).FillerMetadata)
+                        .Include(mi => (mi as FillerMediaItem).MediaVersions)
+                        .Include(mi => (mi as Song).SongMetadata)
+                        .Include(mi => (mi as Song).MediaVersions)
+                        .Include(mi => (mi as Image).ImageMetadata)
+                        .Include(mi => (mi as Image).MediaVersions)
+                        .Include(mi => (mi as RemoteStream).RemoteStreamMetadata)
+                        .Include(mi => (mi as RemoteStream).MediaVersions)
+                        .SelectOneAsync(mi => mi.Id, mi => mi.Id == playoutItem.MediaItemId, cancellationToken);
 
-        return result.AddedItems.Map(Mapper.ProjectToViewModel).ToList();
+                    foreach (MediaItem mediaItem in maybeMediaItem)
+                    {
+                        playoutItem.MediaItem = mediaItem;
+                    }
+                }
+
+                return result.AddedItems.Map(Mapper.ProjectToViewModel).ToList();
+            },
+            _ => []);
     }
 
     private static Block MapToBlock(ReplaceBlockItems request) =>
@@ -132,6 +139,8 @@ public class PreviewBlockPlayoutHandler(
             CollectionId = request.CollectionId,
             MultiCollectionId = request.MultiCollectionId,
             SmartCollectionId = request.SmartCollectionId,
+            SearchTitle = request.SearchTitle,
+            SearchQuery = request.SearchQuery,
             MediaItemId = request.MediaItemId,
             PlaybackOrder = request.PlaybackOrder
         };

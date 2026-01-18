@@ -14,10 +14,13 @@ namespace ErsatzTV.Controllers.Api;
 public class ChannelController(ChannelWriter<IBackgroundServiceRequest> workerChannel, IMediator mediator)
 {
     [HttpGet("/api/channels")]
-    [V2ApiActionFilter]
+    [EndpointGroupName("general")]
     public async Task<List<ChannelResponseModel>> GetAll() => await mediator.Send(new GetAllChannelsForApi());
 
     [HttpPost("/api/channels/{channelNumber}/playout/reset")]
+    [Tags("Channels")]
+    [EndpointSummary("Reset channel playout")]
+    [EndpointGroupName("general")]
     public async Task<IActionResult> ResetPlayout(string channelNumber)
     {
         Option<int> maybePlayoutId = await mediator.Send(new GetPlayoutIdByChannelNumber(channelNumber));

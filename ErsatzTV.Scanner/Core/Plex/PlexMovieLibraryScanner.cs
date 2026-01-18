@@ -1,11 +1,12 @@
-﻿using ErsatzTV.Core;
+﻿using System.IO.Abstractions;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Extensions;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
 using ErsatzTV.Core.Plex;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
@@ -21,25 +22,27 @@ public class PlexMovieLibraryScanner :
     private readonly IMetadataRepository _metadataRepository;
     private readonly IMovieRepository _movieRepository;
     private readonly IPlexMovieRepository _plexMovieRepository;
+    private readonly IPlexMetadataRepository _plexMetadataRepository;
     private readonly IPlexPathReplacementService _plexPathReplacementService;
     private readonly IPlexServerApiClient _plexServerApiClient;
 
     public PlexMovieLibraryScanner(
+        IScannerProxy scannerProxy,
         IPlexServerApiClient plexServerApiClient,
         IMovieRepository movieRepository,
         IMetadataRepository metadataRepository,
-        IMediator mediator,
         IMediaSourceRepository mediaSourceRepository,
         IPlexMovieRepository plexMovieRepository,
+        IPlexMetadataRepository plexMetadataRepository,
         IPlexPathReplacementService plexPathReplacementService,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         ILocalChaptersProvider localChaptersProvider,
         ILogger<PlexMovieLibraryScanner> logger)
         : base(
-            localFileSystem,
+            scannerProxy,
+            fileSystem,
             localChaptersProvider,
             metadataRepository,
-            mediator,
             logger)
     {
         _plexServerApiClient = plexServerApiClient;
@@ -47,6 +50,7 @@ public class PlexMovieLibraryScanner :
         _metadataRepository = metadataRepository;
         _mediaSourceRepository = mediaSourceRepository;
         _plexMovieRepository = plexMovieRepository;
+        _plexMetadataRepository = plexMetadataRepository;
         _plexPathReplacementService = plexPathReplacementService;
         _logger = logger;
     }
@@ -382,9 +386,9 @@ public class PlexMovieLibraryScanner :
 
             if (maybeIncomingArtwork.IsNone)
             {
-                existingMetadata.Artwork ??= new List<Artwork>();
+                existingMetadata.Artwork ??= [];
                 existingMetadata.Artwork.RemoveAll(a => a.ArtworkKind == artworkKind);
-                await _metadataRepository.RemoveArtwork(existingMetadata, artworkKind);
+                await _plexMetadataRepository.RemoveArtwork(existingMetadata, artworkKind);
             }
 
             foreach (Artwork incomingArtwork in maybeIncomingArtwork)
@@ -396,7 +400,7 @@ public class PlexMovieLibraryScanner :
 
                 if (maybeExistingArtwork.IsNone)
                 {
-                    existingMetadata.Artwork ??= new List<Artwork>();
+                    existingMetadata.Artwork ??= [];
                     existingMetadata.Artwork.Add(incomingArtwork);
                     await _metadataRepository.AddArtwork(existingMetadata, incomingArtwork);
                 }

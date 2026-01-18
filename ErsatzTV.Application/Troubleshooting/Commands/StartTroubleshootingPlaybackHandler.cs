@@ -2,6 +2,7 @@ using System.IO.Pipelines;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CliWrap;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -11,15 +12,19 @@ using ErsatzTV.Core.Interfaces.Troubleshooting;
 using ErsatzTV.Core.Notifications;
 using ErsatzTV.FFmpeg.Runtime;
 using Microsoft.Extensions.Logging;
+using Serilog.Context;
+using Serilog.Events;
 
 namespace ErsatzTV.Application.Troubleshooting;
 
-public class StartTroubleshootingPlaybackHandler(
+public partial class StartTroubleshootingPlaybackHandler(
     ITroubleshootingNotifier notifier,
     IMediator mediator,
     IEntityLocker entityLocker,
     IRuntimeInfo runtimeInfo,
     IGraphicsEngine graphicsEngine,
+    InMemoryLogService logService,
+    LoggingLevelSwitches loggingLevelSwitches,
     ILogger<StartTroubleshootingPlaybackHandler> logger)
     : IRequestHandler<StartTroubleshootingPlayback>
 {
@@ -32,14 +37,22 @@ public class StartTroubleshootingPlaybackHandler(
 
     public async Task Handle(StartTroubleshootingPlayback request, CancellationToken cancellationToken)
     {
+        var currentStreamingLevel = loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel;
+        loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel = LogEventLevel.Debug;
+
         try
         {
+            using var logContext = LogContext.PushProperty(InMemoryLogService.CorrelationIdKey, request.SessionId);
+
             // write media info without title
-            string infoJson = JsonSerializer.Serialize(request.MediaItemInfo with { Title = null }, Options);
-            await File.WriteAllTextAsync(
-                Path.Combine(FileSystemLayout.TranscodeTroubleshootingFolder, "media_info.json"),
-                infoJson,
-                cancellationToken);
+            foreach (var mediaInfo in request.MediaItemInfo)
+            {
+                string infoJson = JsonSerializer.Serialize(mediaInfo with { Title = null }, Options);
+                await File.WriteAllTextAsync(
+                    Path.Combine(FileSystemLayout.TranscodeTroubleshootingFolder, "media_info.json"),
+                    infoJson,
+                    cancellationToken);
+            }
 
             // write troubleshooting info
             string troubleshootingInfoJson = JsonSerializer.Serialize(
@@ -60,6 +73,18 @@ public class StartTroubleshootingPlaybackHandler(
                 Path.Combine(FileSystemLayout.TranscodeTroubleshootingFolder, "troubleshooting_info.json"),
                 troubleshootingInfoJson,
                 cancellationToken);
+
+            // write stream selector
+            if (!string.IsNullOrWhiteSpace(request.StreamSelector))
+            {
+                string fullPath = Path.Combine(FileSystemLayout.ChannelStreamSelectorsFolder, request.StreamSelector);
+                if (File.Exists(fullPath))
+                {
+                    File.Copy(
+                        fullPath,
+                        Path.Combine(FileSystemLayout.TranscodeTroubleshootingFolder, "stream-selector.yml"));
+                }
+            }
 
             HardwareAccelerationKind hwAccel = request.TroubleshootingInfo.FFmpegProfiles.Head().HardwareAcceleration;
             if (hwAccel is HardwareAccelerationKind.Qsv)
@@ -95,7 +120,8 @@ public class StartTroubleshootingPlaybackHandler(
 
             try
             {
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cts.Token);
 
                 Command processWithPipe = request.PlayoutItemResult.Process;
                 foreach (GraphicsEngineContext graphicsEngineContext in request.PlayoutItemResult.GraphicsEngineContext)
@@ -113,15 +139,48 @@ public class StartTroubleshootingPlaybackHandler(
                 }
 
                 CommandResult commandResult = await processWithPipe
+                    .WithWorkingDirectory(FileSystemLayout.TranscodeTroubleshootingFolder)
                     .WithStandardErrorPipe(PipeTarget.Null)
                     .WithValidation(CommandResultValidation.None)
                     .ExecuteAsync(linkedCts.Token);
 
-                await mediator.Publish(
-                    new PlaybackTroubleshootingCompletedNotification(commandResult.ExitCode),
-                    linkedCts.Token);
-
                 logger.LogDebug("Troubleshooting playback completed with exit code {ExitCode}", commandResult.ExitCode);
+
+                try
+                {
+                    IEnumerable<string> logs = logService.Sink.GetLogs(request.SessionId);
+                    await File.WriteAllLinesAsync(
+                        Path.Combine(FileSystemLayout.TranscodeTroubleshootingFolder, "logs.txt"),
+                        logs,
+                        linkedCts.Token);
+                    logService.Sink.ClearLogs(request.SessionId);
+                }
+                catch (Exception)
+                {
+                    // do nothing
+                }
+
+                Option<double> maybeSpeed =  Option<double>.None;
+                Option<string> maybeFile = Directory.GetFiles(FileSystemLayout.TranscodeTroubleshootingFolder, "ffmpeg*.log").HeadOrNone();
+                foreach (string file in maybeFile)
+                {
+                    await foreach (string line in File.ReadLinesAsync(file, linkedCts.Token))
+                    {
+                        Match match = FFmpegSpeed().Match(line);
+                        if (match.Success && double.TryParse(match.Groups[1].Value, out double speed))
+                        {
+                            maybeSpeed = speed;
+                            break;
+                        }
+                    }
+                }
+
+                await mediator.Publish(
+                    new PlaybackTroubleshootingCompletedNotification(
+                        commandResult.ExitCode,
+                        Option<Exception>.None,
+                        maybeSpeed),
+                    linkedCts.Token);
 
                 if (commandResult.ExitCode != 0)
                 {
@@ -148,6 +207,10 @@ public class StartTroubleshootingPlaybackHandler(
         finally
         {
             entityLocker.UnlockTroubleshootingPlayback();
+            loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel = currentStreamingLevel;
         }
     }
+
+    [GeneratedRegex(@"speed=\s*([\d\.]+)x", RegexOptions.IgnoreCase)]
+    private static partial Regex FFmpegSpeed();
 }

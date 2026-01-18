@@ -14,7 +14,7 @@ public interface IFFmpegProcessService
         string ffprobePath,
         bool saveReports,
         Channel channel,
-        MediaVersion videoVersion,
+        MediaItemVideoVersion videoVersion,
         MediaItemAudioVersion audioVersion,
         string videoPath,
         string audioPath,
@@ -26,6 +26,7 @@ public interface IFFmpegProcessService
         DateTimeOffset start,
         DateTimeOffset finish,
         DateTimeOffset now,
+        TimeSpan originalContentDuration,
         List<WatermarkOptions> watermarks,
         List<PlayoutItemGraphicsElement> graphicsElements,
         string vaapiDisplay,
@@ -36,21 +37,22 @@ public interface IFFmpegProcessService
         StreamInputKind streamInputKind,
         FillerKind fillerKind,
         TimeSpan inPoint,
-        TimeSpan outPoint,
         DateTimeOffset channelStartTime,
-        long ptsOffset,
-        Option<int> targetFramerate,
+        TimeSpan ptsOffset,
+        Option<FrameRate> targetFramerate,
         Option<string> customReportsFolder,
         Action<FFmpegPipeline> pipelineAction,
+        bool canProxy,
         CancellationToken cancellationToken);
 
     Task<Command> ForError(
         string ffmpegPath,
         Channel channel,
+        DateTimeOffset now,
         Option<TimeSpan> duration,
         string errorMessage,
         bool hlsRealtime,
-        long ptsOffset,
+        TimeSpan ptsOffset,
         string vaapiDisplay,
         VaapiDriver vaapiDriver,
         string vaapiDevice,
@@ -58,20 +60,14 @@ public interface IFFmpegProcessService
 
     Task<Command> ConcatChannel(string ffmpegPath, bool saveReports, Channel channel, string scheme, string host);
 
-    Task<Command> ConcatSegmenterChannel(
-        string ffmpegPath,
-        bool saveReports,
-        Channel channel,
-        string scheme,
-        string host);
-
     Task<Command> WrapSegmenter(
         string ffmpegPath,
         bool saveReports,
         Channel channel,
         string scheme,
         string host,
-        string accessToken);
+        string accessToken,
+        CancellationToken cancellationToken);
 
     Task<Command> ResizeImage(string ffmpegPath, string inputFile, string outputFile, int height);
 
@@ -90,5 +86,5 @@ public interface IFFmpegProcessService
         int watermarkWidthPercent,
         CancellationToken cancellationToken);
 
-    Task<Command> SeekTextSubtitle(string ffmpegPath, string inputFile, TimeSpan seek);
+    Task<Command> SeekTextSubtitle(string ffmpegPath, string inputFile, string codec, TimeSpan seek);
 }

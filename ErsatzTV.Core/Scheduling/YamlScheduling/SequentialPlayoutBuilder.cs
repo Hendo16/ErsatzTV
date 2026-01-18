@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
+using System.IO.Abstractions;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Scheduling;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Scheduling;
 //using ErsatzTV.Core.Scheduling.Engine;
@@ -17,7 +17,7 @@ namespace ErsatzTV.Core.Scheduling.YamlScheduling;
 
 public class SequentialPlayoutBuilder(
     //ISchedulingEngine schedulingEngine,
-    ILocalFileSystem localFileSystem,
+    IFileSystem fileSystem,
     IConfigElementRepository configElementRepository,
     IMediaCollectionRepository mediaCollectionRepository,
     IChannelRepository channelRepository,
@@ -26,7 +26,7 @@ public class SequentialPlayoutBuilder(
     ILogger<SequentialPlayoutBuilder> logger)
     : ISequentialPlayoutBuilder
 {
-    public async Task<PlayoutBuildResult> Build(
+    public async Task<Either<BaseError, PlayoutBuildResult>> Build(
         DateTimeOffset start,
         Playout playout,
         PlayoutReferenceData referenceData,
@@ -38,10 +38,10 @@ public class SequentialPlayoutBuilder(
 
         PlayoutBuildResult result = PlayoutBuildResult.Empty;
 
-        if (!localFileSystem.FileExists(playout.ScheduleFile))
+        if (!fileSystem.File.Exists(playout.ScheduleFile))
         {
             logger.LogWarning("Sequential schedule file {File} does not exist; aborting.", playout.ScheduleFile);
-            return result;
+            return BaseError.New($"Sequential schedule file {playout.ScheduleFile} does not exist");
         }
 
         Option<YamlPlayoutDefinition> maybePlayoutDefinition =
@@ -49,7 +49,7 @@ public class SequentialPlayoutBuilder(
         if (maybePlayoutDefinition.IsNone)
         {
             logger.LogWarning("Sequential schedule file {File} is invalid; aborting.", playout.ScheduleFile);
-            return result;
+            return BaseError.New($"Sequential schedule file {playout.ScheduleFile} is invalid");
         }
 
         // using ValueUnsafe to avoid nesting
@@ -96,12 +96,13 @@ public class SequentialPlayoutBuilder(
                 if (maybeImportedDefinition.IsNone)
                 {
                     logger.LogWarning("YAML playout import {File} is invalid; aborting.", import);
-                    return result;
+                    return BaseError.New($"YAML playout import {import} is invalid");
                 }
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Unexpected exception loading YAML playout import");
+                return BaseError.New($"Unexpected exception loading YAML playout import: {ex}");
             }
         }
 
@@ -235,7 +236,7 @@ public class SequentialPlayoutBuilder(
         if (DetectCycle(context.Definition))
         {
             logger.LogError("YAML sequence contains a cycle; unable to build playout");
-            return result;
+            return BaseError.New("YAML sequence contains a cycle; unable to build playout");
         }
 
         var flattenCount = 0;
@@ -535,7 +536,7 @@ public class SequentialPlayoutBuilder(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error loading YAML playout definition");
-            throw;
+            return Option<YamlPlayoutDefinition>.None;
         }
     }
 

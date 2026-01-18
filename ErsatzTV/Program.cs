@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using Destructurama;
 using ErsatzTV.Core;
+using ErsatzTV.Services.Validators;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.SystemConsole.Themes;
@@ -35,11 +36,14 @@ public class Program
             .Build();
 
         LoggingLevelSwitches = new LoggingLevelSwitches();
+        InMemoryLogService = new InMemoryLogService();
     }
 
     private static IConfiguration Configuration { get; }
 
     private static LoggingLevelSwitches LoggingLevelSwitches { get; }
+
+    internal static InMemoryLogService InMemoryLogService { get; }
 
     public static async Task<int> Main(string[] args)
     {
@@ -81,13 +85,9 @@ public class Program
 
             // streaming
             .MinimumLevel.Override("ErsatzTV.Application.Streaming", LoggingLevelSwitches.StreamingLevelSwitch)
+            .MinimumLevel.Override("ErsatzTV.Application.Troubleshooting", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.FFmpeg", LoggingLevelSwitches.StreamingLevelSwitch)
-            .MinimumLevel.Override(
-                "ErsatzTV.Core.FFmpeg.FFmpegLibraryProcessService",
-                LoggingLevelSwitches.StreamingLevelSwitch)
-            .MinimumLevel.Override(
-                "ErsatzTV.Core.FFmpeg.FFmpegStreamSelector",
-                LoggingLevelSwitches.StreamingLevelSwitch)
+            .MinimumLevel.Override("ErsatzTV.Core.FFmpeg", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.Controllers.IptvController", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.Controllers.InternalController", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override(
@@ -98,6 +98,7 @@ public class Program
             .MinimumLevel.Override("Serilog.AspNetCore.RequestLoggingMiddleware", LoggingLevelSwitches.HttpLevelSwitch)
             .Destructure.UsingAttributes()
             .Enrich.FromLogContext()
+            .WriteTo.Sink(InMemoryLogService.Sink)
             .WriteTo.File(
                 FileSystemLayout.LogFilePath,
                 rollingInterval: RollingInterval.Day,
@@ -126,7 +127,19 @@ public class Program
         try
         {
             Environment.SetEnvironmentVariable("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false");
-            await CreateHostBuilder(args).Build().RunAsync();
+
+            IHost host = CreateHostBuilder(args).Build();
+
+            //HibernatingRhinos.Profiler.Appender.EntityFramework.EntityFrameworkProfiler.Initialize();
+
+            // run environment validation and exit on failure
+            var validator = host.Services.GetRequiredService<IEnvironmentValidator>();
+            if (!await validator.Validate())
+            {
+                return 1;
+            }
+
+            await host.RunAsync();
             return 0;
         }
         catch (Exception ex)

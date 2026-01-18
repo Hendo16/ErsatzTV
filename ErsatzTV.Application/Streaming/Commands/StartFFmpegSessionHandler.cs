@@ -1,4 +1,5 @@
-﻿using System.Threading.Channels;
+﻿using System.IO.Abstractions;
+using System.Threading.Channels;
 using Bugsnag;
 using ErsatzTV.Application.Channels;
 using ErsatzTV.Application.Graphics;
@@ -11,6 +12,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
+using ErsatzTV.FFmpeg;
+using ErsatzTV.FFmpeg.OutputFormat;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,28 +23,30 @@ namespace ErsatzTV.Application.Streaming;
 public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Either<BaseError, Unit>>
 {
     private readonly IClient _client;
+    private readonly IFileSystem _fileSystem;
     private readonly IConfigElementRepository _configElementRepository;
     private readonly IFFmpegSegmenterService _ffmpegSegmenterService;
     private readonly IGraphicsEngine _graphicsEngine;
     private readonly IHlsPlaylistFilter _hlsPlaylistFilter;
+    private readonly IHlsInitSegmentCache _hlsInitSegmentCache;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<StartFFmpegSessionHandler> _logger;
     private readonly IMediator _mediator;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<HlsSessionWorker> _sessionWorkerLogger;
-    private readonly ILogger<HlsSessionWorkerV2> _sessionWorkerV2Logger;
     private readonly ChannelWriter<IBackgroundServiceRequest> _workerChannel;
 
     public StartFFmpegSessionHandler(
         IHlsPlaylistFilter hlsPlaylistFilter,
+        IHlsInitSegmentCache hlsInitSegmentCache,
         IServiceScopeFactory serviceScopeFactory,
         IMediator mediator,
         IClient client,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ILogger<StartFFmpegSessionHandler> logger,
         ILogger<HlsSessionWorker> sessionWorkerLogger,
-        ILogger<HlsSessionWorkerV2> sessionWorkerV2Logger,
         IFFmpegSegmenterService ffmpegSegmenterService,
         IConfigElementRepository configElementRepository,
         IGraphicsEngine graphicsEngine,
@@ -49,13 +54,14 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
         ChannelWriter<IBackgroundServiceRequest> workerChannel)
     {
         _hlsPlaylistFilter = hlsPlaylistFilter;
+        _hlsInitSegmentCache = hlsInitSegmentCache;
         _serviceScopeFactory = serviceScopeFactory;
         _mediator = mediator;
         _client = client;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _logger = logger;
         _sessionWorkerLogger = sessionWorkerLogger;
-        _sessionWorkerV2Logger = sessionWorkerV2Logger;
         _ffmpegSegmenterService = ffmpegSegmenterService;
         _configElementRepository = configElementRepository;
         _graphicsEngine = graphicsEngine;
@@ -77,7 +83,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
             .GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout, cancellationToken)
             .Map(maybeTimeout => maybeTimeout.Match(i => TimeSpan.FromSeconds(i), () => TimeSpan.FromMinutes(1)));
 
-        Option<int> targetFramerate = await _mediator.Send(
+        Option<FrameRate> targetFramerate = await _mediator.Send(
             new GetChannelFramerate(request.ChannelNumber),
             cancellationToken);
 
@@ -91,7 +97,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
 
         await _mediator.Send(new RefreshGraphicsElements(), cancellationToken);
 
-        IHlsSessionWorker worker = GetSessionWorker(request, targetFramerate);
+        HlsSessionWorker worker = GetSessionWorker(request, targetFramerate);
 
         _ffmpegSegmenterService.AddOrUpdateWorker(request.ChannelNumber, worker);
 
@@ -117,22 +123,18 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
         return Unit.Default;
     }
 
-    private IHlsSessionWorker GetSessionWorker(StartFFmpegSession request, Option<int> targetFramerate) =>
+    private HlsSessionWorker GetSessionWorker(StartFFmpegSession request, Option<FrameRate> targetFramerate) =>
         request.Mode switch
         {
-            "segmenter-v2" => new HlsSessionWorkerV2(
-                _serviceScopeFactory,
-                _localFileSystem,
-                _sessionWorkerV2Logger,
-                targetFramerate,
-                request.Scheme,
-                request.Host),
             _ => new HlsSessionWorker(
                 _serviceScopeFactory,
                 _graphicsEngine,
                 _client,
+                OutputFormatKind.Hls,
                 _hlsPlaylistFilter,
+                _hlsInitSegmentCache,
                 _configElementRepository,
+                _fileSystem,
                 _localFileSystem,
                 _sessionWorkerLogger,
                 targetFramerate)
@@ -153,7 +155,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
                 request.ChannelNumber,
                 out IHlsSessionWorker worker))
         {
-            worker?.Touch();
+            worker?.Touch(Option<string>.None);
         }
 
         return result.AsTask();

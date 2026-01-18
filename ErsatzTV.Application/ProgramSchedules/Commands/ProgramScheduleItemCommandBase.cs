@@ -73,7 +73,7 @@ public abstract class ProgramScheduleItemCommandBase
                 break;
             case PlayoutMode.Multiple:
                 if (item.MultipleMode is MultipleMode.PlaylistItemSize &&
-                    item.CollectionType is not ProgramScheduleItemCollectionType.Playlist)
+                    item.CollectionType is not CollectionType.Playlist)
                 {
                     return BaseError.New(
                         "[MultipleMode] cannot be [PlaylistItemSize] when collection is not a playlist");
@@ -126,52 +126,73 @@ public abstract class ProgramScheduleItemCommandBase
     {
         switch (item.CollectionType)
         {
-            case ProgramScheduleItemCollectionType.Collection:
+            case CollectionType.Collection:
                 if (item.CollectionId is null)
                 {
                     return BaseError.New("[Collection] is required for collection type 'Collection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.TelevisionShow:
+            case CollectionType.TelevisionShow:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'TelevisionShow'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.TelevisionSeason:
+            case CollectionType.TelevisionSeason:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'TelevisionSeason'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.Artist:
+            case CollectionType.Artist:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'Artist'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.MultiCollection:
+            case CollectionType.MultiCollection:
                 if (item.MultiCollectionId is null)
                 {
                     return BaseError.New("[MultiCollection] is required for collection type 'MultiCollection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.SmartCollection:
+            case CollectionType.SmartCollection:
                 if (item.SmartCollectionId is null)
                 {
                     return BaseError.New("[SmartCollection] is required for collection type 'SmartCollection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.Playlist:
+            case CollectionType.RerunFirstRun:
+                if (item.RerunCollectionId is null)
+                {
+                    return BaseError.New("[RerunCollection] is required for collection type 'RerunFirstRun'");
+                }
+
+                break;
+            case CollectionType.RerunRerun:
+                if (item.RerunCollectionId is null)
+                {
+                    return BaseError.New("[RerunCollection] is required for collection type 'RerunRerun'");
+                }
+
+                break;
+            case CollectionType.Playlist:
                 if (item.PlaylistId is null)
                 {
                     return BaseError.New("[Playlist] is required for collection type 'Playlist'");
+                }
+
+                break;
+            case CollectionType.SearchQuery:
+                if (string.IsNullOrWhiteSpace(item.SearchQuery))
+                {
+                    return BaseError.New("[SearchQuery] is required for collection type 'SearchQuery'");
                 }
 
                 break;
@@ -199,9 +220,16 @@ public abstract class ProgramScheduleItemCommandBase
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
                 SmartCollectionId = item.SmartCollectionId,
+                RerunCollectionId = item.RerunCollectionId,
                 MediaItemId = item.MediaItemId,
                 PlaylistId = item.PlaylistId,
+                SearchTitle = item.SearchTitle,
+                SearchQuery = item.SearchQuery,
                 PlaybackOrder = item.PlaybackOrder,
+                MarathonGroupBy = item.MarathonGroupBy,
+                MarathonShuffleGroups = item.MarathonShuffleGroups,
+                MarathonShuffleItems = item.MarathonShuffleItems,
+                MarathonBatchSize = item.MarathonBatchSize,
                 FillWithGroupMode = FillWithGroupMode.None,
                 CustomTitle = item.CustomTitle,
                 GuideMode = item.GuideMode,
@@ -225,9 +253,16 @@ public abstract class ProgramScheduleItemCommandBase
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
                 SmartCollectionId = item.SmartCollectionId,
+                RerunCollectionId = item.RerunCollectionId,
                 MediaItemId = item.MediaItemId,
                 PlaylistId = item.PlaylistId,
+                SearchTitle = item.SearchTitle,
+                SearchQuery = item.SearchQuery,
                 PlaybackOrder = item.PlaybackOrder,
+                MarathonGroupBy = item.MarathonGroupBy,
+                MarathonShuffleGroups = item.MarathonShuffleGroups,
+                MarathonShuffleItems = item.MarathonShuffleItems,
+                MarathonBatchSize = item.MarathonBatchSize,
                 FillWithGroupMode = FillWithGroupMode.None,
                 CustomTitle = item.CustomTitle,
                 GuideMode = item.GuideMode,
@@ -251,9 +286,16 @@ public abstract class ProgramScheduleItemCommandBase
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
                 SmartCollectionId = item.SmartCollectionId,
+                RerunCollectionId = item.RerunCollectionId,
                 MediaItemId = item.MediaItemId,
                 PlaylistId = item.PlaylistId,
+                SearchTitle = item.SearchTitle,
+                SearchQuery = item.SearchQuery,
                 PlaybackOrder = item.PlaybackOrder,
+                MarathonGroupBy = item.MarathonGroupBy,
+                MarathonShuffleGroups = item.MarathonShuffleGroups,
+                MarathonShuffleItems = item.MarathonShuffleItems,
+                MarathonBatchSize = item.MarathonBatchSize,
                 FillWithGroupMode = item.FillWithGroupMode,
                 MultipleMode = item.MultipleMode,
                 Count = item.MultipleMode is MultipleMode.Count ? item.MultipleCount.GetValueOrDefault() : 0,
@@ -279,9 +321,16 @@ public abstract class ProgramScheduleItemCommandBase
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
                 SmartCollectionId = item.SmartCollectionId,
+                RerunCollectionId = item.RerunCollectionId,
                 MediaItemId = item.MediaItemId,
                 PlaylistId = item.PlaylistId,
+                SearchTitle = item.SearchTitle,
+                SearchQuery = item.SearchQuery,
                 PlaybackOrder = item.PlaybackOrder,
+                MarathonGroupBy = item.MarathonGroupBy,
+                MarathonShuffleGroups = item.MarathonShuffleGroups,
+                MarathonShuffleItems = item.MarathonShuffleItems,
+                MarathonBatchSize = item.MarathonBatchSize,
                 FillWithGroupMode = item.FillWithGroupMode,
                 PlayoutDuration = item.PlayoutDuration.GetValueOrDefault(),
                 TailMode = item.TailMode,
@@ -311,6 +360,17 @@ public abstract class ProgramScheduleItemCommandBase
                 {
                     ProgramScheduleItem = result,
                     WatermarkId = watermarkId
+                });
+        }
+
+        foreach (int graphicsElementId in item.GraphicsElementIds)
+        {
+            result.ProgramScheduleItemGraphicsElements ??= [];
+            result.ProgramScheduleItemGraphicsElements.Add(
+                new ProgramScheduleItemGraphicsElement
+                {
+                    ProgramScheduleItem = result,
+                    GraphicsElementId = graphicsElementId
                 });
         }
 

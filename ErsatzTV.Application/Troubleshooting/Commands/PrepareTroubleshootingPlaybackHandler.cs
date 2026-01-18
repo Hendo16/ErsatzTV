@@ -1,8 +1,8 @@
-using Dapper;
+using System.IO.Abstractions;
+using ErsatzTV.Application.Streaming;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
-using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.Emby;
@@ -18,6 +18,8 @@ using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Serilog.Context;
+using Serilog.Events;
 
 namespace ErsatzTV.Application.Troubleshooting;
 
@@ -27,21 +29,98 @@ public class PrepareTroubleshootingPlaybackHandler(
     IJellyfinPathReplacementService jellyfinPathReplacementService,
     IEmbyPathReplacementService embyPathReplacementService,
     IFFmpegProcessService ffmpegProcessService,
+    IFileSystem fileSystem,
     ILocalFileSystem localFileSystem,
     ISongVideoGenerator songVideoGenerator,
     IWatermarkSelector watermarkSelector,
     IEntityLocker entityLocker,
     IMediator mediator,
+    LoggingLevelSwitches loggingLevelSwitches,
     ILogger<PrepareTroubleshootingPlaybackHandler> logger)
-    : IRequestHandler<PrepareTroubleshootingPlayback, Either<BaseError, PlayoutItemResult>>
+    : TroubleshootingHandlerBase(
+        plexPathReplacementService,
+        jellyfinPathReplacementService,
+        embyPathReplacementService,
+        fileSystem), IRequestHandler<PrepareTroubleshootingPlayback, Either<BaseError, PlayoutItemResult>>
 {
     public async Task<Either<BaseError, PlayoutItemResult>> Handle(
         PrepareTroubleshootingPlayback request,
         CancellationToken cancellationToken)
     {
+        var currentStreamingLevel = loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel;
+        loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel = LogEventLevel.Debug;
+
         try
         {
+            using var logContext = LogContext.PushProperty(InMemoryLogService.CorrelationIdKey, request.SessionId);
             await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+            if (request.ChannelId > 0)
+            {
+                if (request.Start.IsNone)
+                {
+                    return BaseError.New("Channel start is required");
+                }
+
+                if (entityLocker.IsTroubleshootingPlaybackLocked())
+                {
+                    return BaseError.New("Troubleshooting playback is locked");
+                }
+
+                entityLocker.LockTroubleshootingPlayback();
+
+                localFileSystem.EnsureFolderExists(FileSystemLayout.TranscodeTroubleshootingFolder);
+                localFileSystem.EmptyFolder(FileSystemLayout.TranscodeTroubleshootingFolder);
+
+                foreach (var start in request.Start)
+                {
+                    Option<Channel> maybeChannel = await dbContext.Channels
+                        .AsNoTracking()
+                        .SelectOneAsync(c => c.Id, c => c.Id == request.ChannelId, cancellationToken);
+
+                    foreach (var channel in maybeChannel)
+                    {
+                        Either<BaseError, PlayoutItemProcessModel> result = await mediator.Send(
+                            new GetPlayoutItemProcessByChannelNumber(
+                                channel.Number,
+                                request.StreamingMode,
+                                start,
+                                StartAtZero: false,
+                                HlsRealtime: false,
+                                start,
+                                TimeSpan.Zero,
+                                TargetFramerate: Option<FrameRate>.None,
+                                IsTroubleshooting: true,
+                                request.FFmpegProfileId),
+                            cancellationToken);
+
+                        foreach (var error in result.LeftToSeq())
+                        {
+                            await mediator.Publish(
+                                new PlaybackTroubleshootingCompletedNotification(
+                                    -1,
+#pragma warning disable CA2201
+                                    new Exception(error.ToString()),
+#pragma warning restore CA2201
+                                    Option<double>.None),
+                                cancellationToken);
+                            entityLocker.UnlockTroubleshootingPlayback();
+                        }
+
+                        return result.Map(model => new PlayoutItemResult(
+                            model.Process,
+                            model.GraphicsEngineContext,
+                            model.MediaItemId));
+                    }
+
+                    if (maybeChannel.IsNone)
+                    {
+                        entityLocker.UnlockTroubleshootingPlayback();
+                        return BaseError.New($"Channel {request.ChannelId} does not exist");
+                    }
+                }
+            }
+
             Validation<BaseError, Tuple<MediaItem, string, string, FFmpegProfile>> validation = await Validate(
                 dbContext,
                 request,
@@ -60,9 +139,15 @@ public class PrepareTroubleshootingPlaybackHandler(
         catch (Exception ex)
         {
             entityLocker.UnlockTroubleshootingPlayback();
-            await mediator.Publish(new PlaybackTroubleshootingCompletedNotification(-1), cancellationToken);
+            await mediator.Publish(
+                new PlaybackTroubleshootingCompletedNotification(-1, ex, Option<double>.None),
+                cancellationToken);
             logger.LogError(ex, "Error while preparing troubleshooting playback");
             return BaseError.New(ex.Message);
+        }
+        finally
+        {
+            loggingLevelSwitches.StreamingLevelSwitch.MinimumLevel = currentStreamingLevel;
         }
     }
 
@@ -102,11 +187,17 @@ public class PrepareTroubleshootingPlaybackHandler(
             Name = "ETV",
             Number = ".troubleshooting",
             FFmpegProfile = ffmpegProfile,
-            StreamingMode = StreamingMode.HttpLiveStreamingSegmenter,
+            StreamingMode = request.StreamingMode,
             StreamSelectorMode = ChannelStreamSelectorMode.Troubleshooting,
             SubtitleMode = SUBTITLE_MODE
             //SongVideoMode = ChannelSongVideoMode.WithProgress
         };
+
+        if (!string.IsNullOrEmpty(request.StreamSelector))
+        {
+            channel.StreamSelectorMode = ChannelStreamSelectorMode.Custom;
+            channel.StreamSelector = request.StreamSelector;
+        }
 
         List<WatermarkOptions> watermarks = [];
         if (request.WatermarkIds.Count > 0)
@@ -205,13 +296,13 @@ public class PrepareTroubleshootingPlaybackHandler(
         PlayoutItemResult playoutItemResult = await ffmpegProcessService.ForPlayoutItem(
             ffmpegPath,
             ffprobePath,
-            true,
+            saveReports: true,
             channel,
-            videoVersion,
+            new MediaItemVideoVersion(mediaItem, videoVersion),
             new MediaItemAudioVersion(mediaItem, version),
             videoPath,
             mediaPath,
-            _ => GetSelectedSubtitle(mediaItem, request),
+            _ => GetSubtitles(mediaItem, request),
             string.Empty,
             string.Empty,
             string.Empty,
@@ -219,6 +310,7 @@ public class PrepareTroubleshootingPlaybackHandler(
             now,
             now + duration,
             now,
+            duration,
             watermarks,
             graphicsElements.Map(ge => new PlayoutItemGraphicsElement { GraphicsElement = ge }).ToList(),
             ffmpegProfile.VaapiDisplay,
@@ -229,46 +321,44 @@ public class PrepareTroubleshootingPlaybackHandler(
             mediaItem is RemoteStream { IsLive: true } ? StreamInputKind.Live : StreamInputKind.Vod,
             FillerKind.None,
             inPoint,
-            outPoint,
             channelStartTime: DateTimeOffset.Now,
-            0,
-            None,
+            TimeSpan.Zero,
+            Option<FrameRate>.None,
             FileSystemLayout.TranscodeTroubleshootingFolder,
             _ => { },
+            canProxy: true,
             cancellationToken);
 
         return playoutItemResult;
     }
 
-    private static async Task<List<Subtitle>> GetSelectedSubtitle(
-        MediaItem mediaItem,
-        PrepareTroubleshootingPlayback request)
+    private static async Task<List<Subtitle>> GetSubtitles(MediaItem mediaItem, PrepareTroubleshootingPlayback request)
     {
+        List<Subtitle> allSubtitles = mediaItem switch
+        {
+            Episode episode => await Optional(episode.EpisodeMetadata).Flatten().HeadOrNone()
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
+            Movie movie => await Optional(movie.MovieMetadata).Flatten().HeadOrNone()
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
+            OtherVideo otherVideo => await Optional(otherVideo.OtherVideoMetadata).Flatten().HeadOrNone()
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
+            _ => []
+        };
+
+        bool isMediaServer = mediaItem is PlexMovie or PlexEpisode or
+            JellyfinMovie or JellyfinEpisode or EmbyMovie or EmbyEpisode;
+
+        if (isMediaServer)
+        {
+            // closed captions are currently unsupported
+            allSubtitles.RemoveAll(s => s.Codec == "eia_608");
+        }
+
         if (request.SubtitleId is not null)
         {
-            List<Subtitle> allSubtitles = mediaItem switch
-            {
-                Episode episode => await Optional(episode.EpisodeMetadata).Flatten().HeadOrNone()
-                    .Map(mm => mm.Subtitles ?? [])
-                    .IfNoneAsync([]),
-                Movie movie => await Optional(movie.MovieMetadata).Flatten().HeadOrNone()
-                    .Map(mm => mm.Subtitles ?? [])
-                    .IfNoneAsync([]),
-                OtherVideo otherVideo => await Optional(otherVideo.OtherVideoMetadata).Flatten().HeadOrNone()
-                    .Map(mm => mm.Subtitles ?? [])
-                    .IfNoneAsync([]),
-                _ => []
-            };
-
-            bool isMediaServer = mediaItem is PlexMovie or PlexEpisode or
-                JellyfinMovie or JellyfinEpisode or EmbyMovie or EmbyEpisode;
-
-            if (isMediaServer)
-            {
-                // closed captions are currently unsupported
-                allSubtitles.RemoveAll(s => s.Codec == "eia_608");
-            }
-
             allSubtitles.RemoveAll(s => s.Id != request.SubtitleId.Value);
 
             foreach (Subtitle subtitle in allSubtitles)
@@ -278,87 +368,24 @@ public class PrepareTroubleshootingPlaybackHandler(
                 return [subtitle];
             }
         }
+        else if (string.IsNullOrWhiteSpace(request.StreamSelector))
+        {
+            allSubtitles.Clear();
+        }
 
-        return [];
+        return allSubtitles;
     }
 
     private static async Task<Validation<BaseError, Tuple<MediaItem, string, string, FFmpegProfile>>> Validate(
         TvContext dbContext,
         PrepareTroubleshootingPlayback request,
         CancellationToken cancellationToken) =>
-        (await MediaItemMustExist(dbContext, request, cancellationToken),
+        (await MediaItemMustExist(dbContext, request.MediaItemId, cancellationToken),
             await FFmpegPathMustExist(dbContext, cancellationToken),
             await FFprobePathMustExist(dbContext, cancellationToken),
             await FFmpegProfileMustExist(dbContext, request, cancellationToken))
         .Apply((mediaItem, ffmpegPath, ffprobePath, ffmpegProfile) =>
             Tuple(mediaItem, ffmpegPath, ffprobePath, ffmpegProfile));
-
-    private static async Task<Validation<BaseError, MediaItem>> MediaItemMustExist(
-        TvContext dbContext,
-        PrepareTroubleshootingPlayback request,
-        CancellationToken cancellationToken) =>
-        await dbContext.MediaItems
-            .AsNoTracking()
-            .Include(mi => (mi as Episode).EpisodeMetadata)
-            .ThenInclude(em => em.Subtitles)
-            .Include(mi => (mi as Episode).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as Episode).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as Episode).Season)
-            .ThenInclude(s => s.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .Include(mi => (mi as Movie).MovieMetadata)
-            .ThenInclude(mm => mm.Subtitles)
-            .Include(mi => (mi as Movie).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as Movie).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Subtitles)
-            .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Artists)
-            .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Studios)
-            .Include(mi => (mi as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Directors)
-            .Include(mi => (mi as MusicVideo).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as MusicVideo).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as MusicVideo).Artist)
-            .ThenInclude(mv => mv.ArtistMetadata)
-            .Include(mi => (mi as OtherVideo).OtherVideoMetadata)
-            .ThenInclude(ovm => ovm.Subtitles)
-            .Include(mi => (mi as OtherVideo).MediaVersions)
-            .ThenInclude(ov => ov.MediaFiles)
-            .Include(mi => (mi as OtherVideo).MediaVersions)
-            .ThenInclude(ov => ov.Streams)
-            .Include(mi => (mi as Song).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as Song).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as Song).SongMetadata)
-            .ThenInclude(sm => sm.Artwork)
-            .Include(mi => (mi as Image).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as Image).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as Image).ImageMetadata)
-            .Include(mi => (mi as RemoteStream).MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mi => (mi as RemoteStream).MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(mi => (mi as RemoteStream).RemoteStreamMetadata)
-            .SelectOneAsync(mi => mi.Id, mi => mi.Id == request.MediaItemId, cancellationToken)
-            .Map(o => o.ToValidation<BaseError>(new UnableToLocatePlayoutItem()));
-
-    private static Task<Validation<BaseError, string>> FFmpegPathMustExist(
-        TvContext dbContext,
-        CancellationToken cancellationToken) =>
-        dbContext.ConfigElements.GetValue<string>(ConfigElementKey.FFmpegPath, cancellationToken)
-            .FilterT(File.Exists)
-            .Map(maybePath => maybePath.ToValidation<BaseError>("FFmpeg path does not exist on filesystem"));
 
     private static Task<Validation<BaseError, string>> FFprobePathMustExist(
         TvContext dbContext,
@@ -375,115 +402,4 @@ public class PrepareTroubleshootingPlaybackHandler(
             .Include(p => p.Resolution)
             .SelectOneAsync(p => p.Id, p => p.Id == request.FFmpegProfileId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>($"FFmpegProfile {request.FFmpegProfileId} does not exist"));
-
-    private async Task<string> GetMediaItemPath(
-        TvContext dbContext,
-        MediaItem mediaItem,
-        CancellationToken cancellationToken)
-    {
-        string path = await GetLocalPath(mediaItem, cancellationToken);
-
-        // check filesystem first
-        if (localFileSystem.FileExists(path))
-        {
-            if (mediaItem is RemoteStream remoteStream)
-            {
-                path = !string.IsNullOrWhiteSpace(remoteStream.Url)
-                    ? remoteStream.Url
-                    : $"http://localhost:{Settings.StreamingPort}/ffmpeg/remote-stream/{remoteStream.Id}";
-            }
-
-            return path;
-        }
-
-        // attempt to remotely stream plex
-        MediaFile file = mediaItem.GetHeadVersion().MediaFiles.Head();
-        switch (file)
-        {
-            case PlexMediaFile pmf:
-                Option<int> maybeId = await dbContext.Connection.QuerySingleOrDefaultAsync<int>(
-                        @"SELECT PMS.Id FROM PlexMediaSource PMS
-                  INNER JOIN Library L on PMS.Id = L.MediaSourceId
-                  INNER JOIN LibraryPath LP on L.Id = LP.LibraryId
-                  WHERE LP.Id = @LibraryPathId",
-                        new { mediaItem.LibraryPathId })
-                    .Map(Optional);
-
-                foreach (int plexMediaSourceId in maybeId)
-                {
-                    logger.LogDebug(
-                        "Attempting to stream Plex file {PlexFileName} using key {PlexKey}",
-                        pmf.Path,
-                        pmf.Key);
-
-                    return $"http://localhost:{Settings.StreamingPort}/media/plex/{plexMediaSourceId}/{pmf.Key}";
-                }
-
-                break;
-        }
-
-        // attempt to remotely stream jellyfin
-        Option<string> jellyfinItemId = mediaItem switch
-        {
-            JellyfinEpisode e => e.ItemId,
-            JellyfinMovie m => m.ItemId,
-            _ => None
-        };
-
-        foreach (string itemId in jellyfinItemId)
-        {
-            return $"http://localhost:{Settings.StreamingPort}/media/jellyfin/{itemId}";
-        }
-
-        // attempt to remotely stream emby
-        Option<string> embyItemId = mediaItem switch
-        {
-            EmbyEpisode e => e.ItemId,
-            EmbyMovie m => m.ItemId,
-            _ => None
-        };
-
-        foreach (string itemId in embyItemId)
-        {
-            return $"http://localhost:{Settings.StreamingPort}/media/emby/{itemId}";
-        }
-
-        return null;
-    }
-
-    private async Task<string> GetLocalPath(MediaItem mediaItem, CancellationToken cancellationToken)
-    {
-        MediaVersion version = mediaItem.GetHeadVersion();
-        MediaFile file = version.MediaFiles.Head();
-
-        string path = file.Path;
-        return mediaItem switch
-        {
-            PlexMovie plexMovie => await plexPathReplacementService.GetReplacementPlexPath(
-                plexMovie.LibraryPathId,
-                path,
-                cancellationToken),
-            PlexEpisode plexEpisode => await plexPathReplacementService.GetReplacementPlexPath(
-                plexEpisode.LibraryPathId,
-                path,
-                cancellationToken),
-            JellyfinMovie jellyfinMovie => await jellyfinPathReplacementService.GetReplacementJellyfinPath(
-                jellyfinMovie.LibraryPathId,
-                path,
-                cancellationToken),
-            JellyfinEpisode jellyfinEpisode => await jellyfinPathReplacementService.GetReplacementJellyfinPath(
-                jellyfinEpisode.LibraryPathId,
-                path,
-                cancellationToken),
-            EmbyMovie embyMovie => await embyPathReplacementService.GetReplacementEmbyPath(
-                embyMovie.LibraryPathId,
-                path,
-                cancellationToken),
-            EmbyEpisode embyEpisode => await embyPathReplacementService.GetReplacementEmbyPath(
-                embyEpisode.LibraryPathId,
-                path,
-                cancellationToken),
-            _ => path
-        };
-    }
 }

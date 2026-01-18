@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
     <PropertyGroup>
-        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <TypeScriptCompileBlocked>true</TypeScriptCompileBlocked>
         <TypeScriptToolsVersion>Latest</TypeScriptToolsVersion>
         <IsPackable>false</IsPackable>
@@ -13,37 +13,53 @@
         <UserSecretsId>bf31217d-f4ec-4520-8cc3-138059044ede</UserSecretsId>
         <AnalysisLevel>latest-Recommended</AnalysisLevel>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
     </PropertyGroup>
 
+    <PropertyGroup>
+        <OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)\wwwroot\openapi</OpenApiDocumentsDirectory>
+        <OpenApiGenerateDocumentsOnBuild>false</OpenApiGenerateDocumentsOnBuild>
+    </PropertyGroup>
+
+    <Target Name="RenameOpenApiFiles" AfterTargets="GenerateOpenApiDocuments">
+        <Move SourceFiles="$(OpenApiDocumentsDirectory)\ErsatzTV.json" DestinationFiles="$(OpenApiDocumentsDirectory)\v1.json" />
+        <Move SourceFiles="$(OpenApiDocumentsDirectory)\ErsatzTV_scripted-schedule.json" DestinationFiles="$(OpenApiDocumentsDirectory)\scripted-schedule.json" />
+        <Move SourceFiles="$(OpenApiDocumentsDirectory)\ErsatzTV_scripted-schedule-tagged.json" DestinationFiles="$(OpenApiDocumentsDirectory)\scripted-schedule-tagged.json" />
+    </Target>
+
     <ItemGroup>
+        <!-- <PackageReference Include="EntityFrameworkProfiler.Appender" Version="6.0.6049" /> -->
         <PackageReference Include="Blazored.FluentValidation" Version="2.2.0" />
+        <PackageReference Include="BlazorSortable" Version="5.2.1" />
         <PackageReference Include="Bugsnag.AspNet.Core" Version="4.1.0" />
-        <PackageReference Include="FluentValidation" Version="12.0.0" />
+        <PackageReference Include="Chronic.Core" Version="0.4.0" />
+        <PackageReference Include="FluentValidation" Version="12.1.1" />
         <PackageReference Include="FluentValidation.AspNetCore" Version="11.3.1" />
-        <PackageReference Include="Heron.MudCalendar" Version="3.2.0" />
-        <PackageReference Include="HtmlSanitizer" Version="9.0.886" />
+        <PackageReference Include="Heron.MudCalendar" Version="3.4.0" />
+        <PackageReference Include="HtmlSanitizer" Version="9.0.889" />
         <PackageReference Include="LanguageExt.Core" Version="4.4.9" />
-        <PackageReference Include="Markdig" Version="0.41.3" />
+        <PackageReference Include="Markdig" Version="0.44.0" />
         <PackageReference Include="MediatR.Courier.DependencyInjection" Version="5.0.0" />
-        <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.8" />
-        <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="9.0.8" />
-        <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="9.0.8" />
-        <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="9.0.8" />
-        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.8">
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.2" />
+        <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.2" />
+        <PackageReference Include="Microsoft.AspNetCore.Mvc.NewtonsoftJson" Version="10.0.2" />
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+        <PackageReference Include="Microsoft.AspNetCore.SpaServices.Extensions" Version="10.0.2" />
+        <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.12">
             <PrivateAssets>all</PrivateAssets>
             <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="17.14.15">
-            <PrivateAssets>all</PrivateAssets>
-            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        <PackageReference Include="Microsoft.Extensions.ApiDescription.Server" Version="10.0.2">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="MudBlazor" Version="8.11.0" />
-        <PackageReference Include="NaturalSort.Extension" Version="4.3.0" />
-        <PackageReference Include="Refit.HttpClientFactory" Version="8.0.0" />
+        <PackageReference Include="MudBlazor" Version="8.15.0" />
+        <PackageReference Include="NaturalSort.Extension" Version="4.4.1" />
+        <PackageReference Include="Refit.HttpClientFactory" Version="9.0.2" />
+        <PackageReference Include="Scalar.AspNetCore" Version="2.12.10" />
         <PackageReference Include="Serilog" Version="4.3.0" />
-        <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
-        <PackageReference Include="Serilog.Settings.Configuration" Version="9.0.0" />
-        <PackageReference Include="System.IO.FileSystem.Primitives" Version="4.3.0" />
+        <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+        <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.0" />
         <PackageReference Include="VueCliMiddleware" Version="6.0.0" />
     </ItemGroup>
 
@@ -53,21 +69,25 @@
         <ProjectReference Include="..\ErsatzTV.Infrastructure.MySql\ErsatzTV.Infrastructure.MySql.csproj" />
         <ProjectReference Include="..\ErsatzTV.Infrastructure.Sqlite\ErsatzTV.Infrastructure.Sqlite.csproj" />
         <ProjectReference Include="..\ErsatzTV.Infrastructure\ErsatzTV.Infrastructure.csproj" />
+        <ProjectReference Include="..\ErsatzTV.Core.Nullable\ErsatzTV.Core.Nullable.csproj" />
         <ProjectReference Include="..\ErsatzTV.Scanner\ErsatzTV.Scanner.csproj" />
     </ItemGroup>
 
     <ItemGroup>
         <EmbeddedResource Include="Resources\Fonts\Sen.ttf" />
-        <EmbeddedResource Include="Resources\background.png" />
+        <EmbeddedResource Include="Resources\_background.png" />
         <EmbeddedResource Include="Resources\Fonts\OPTIKabel-Heavy.otf" />
         <EmbeddedResource Include="Resources\Fonts\Roboto-Regular.ttf" />
         <EmbeddedResource Include="Resources\Scripts\_threePartEpisodes.js" />
         <EmbeddedResource Include="Resources\Scripts\_episode.js" />
         <EmbeddedResource Include="Resources\Scripts\_movie.js" />
-        <EmbeddedResource Include="Resources\song_album_cover_512.png" />
-        <EmbeddedResource Include="Resources\song_background_1.png" />
-        <EmbeddedResource Include="Resources\song_background_2.png" />
-        <EmbeddedResource Include="Resources\song_background_3.png" />
+        <EmbeddedResource Include="Resources\Scripts\MpegTs\run.sh" />
+        <EmbeddedResource Include="Resources\Scripts\MpegTs\run.bat" />
+        <EmbeddedResource Include="Resources\Scripts\MpegTs\mpegts.yml" />
+        <EmbeddedResource Include="Resources\_song_album_cover_512.png" />
+        <EmbeddedResource Include="Resources\_song_background_1.png" />
+        <EmbeddedResource Include="Resources\_song_background_2.png" />
+        <EmbeddedResource Include="Resources\_song_background_3.png" />
         <EmbeddedResource Include="Resources\song_progress_overlay.png" />
         <EmbeddedResource Include="Resources\song_progress_overlay_43.png" />
         <EmbeddedResource Include="Resources\ErsatzTV.png" />
@@ -83,6 +103,9 @@
         <EmbeddedResource Include="Resources\Templates\_song.sbntxt" />
         <EmbeddedResource Include="Resources\sequential-schedule-import.schema.json" />
         <EmbeddedResource Include="Resources\sequential-schedule.schema.json" />
+        <EmbeddedResource Include="Resources\empty.sqlite3" />
+        <EmbeddedResource Include="Resources\test.avs" />
+        <EmbeddedResource Include="Resources\Templates\_remoteStream.sbntxt" />
     </ItemGroup>
 
     <ItemGroup>

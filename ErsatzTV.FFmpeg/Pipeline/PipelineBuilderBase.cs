@@ -75,12 +75,14 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         return new FFmpegPipeline(pipelineSteps, false);
     }
 
-    public FFmpegPipeline Seek(string inputFile, TimeSpan seek)
+    public FFmpegPipeline Seek(string inputFile, string codec, TimeSpan seek)
     {
         IPipelineStep outputFormat = Path.GetExtension(inputFile).ToLowerInvariant() switch
         {
             ".ass" or ".ssa" => new OutputFormatAss(),
             ".vtt" => new OutputFormatWebVtt(),
+            _ when codec.ToLowerInvariant() is "ass" or "ssa" => new OutputFormatAss(),
+            _ when codec.ToLowerInvariant() is "vtt" => new OutputFormatWebVtt(),
             _ => new OutputFormatSrt()
         };
 
@@ -114,7 +116,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         };
 
         concatInputFile.AddOption(new ConcatInputFormat());
-        concatInputFile.AddOption(new ReadrateInputOption(_ffmpegCapabilities, 0, _logger));
+        concatInputFile.AddOption(new ReadrateInputOption(1.0));
         concatInputFile.AddOption(new InfiniteLoopInputOption(HardwareAccelerationMode.None));
 
         foreach (int threadCount in ffmpegState.ThreadCount)
@@ -160,13 +162,24 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             new EncoderCopyAll()
         };
 
-        concatInputFile.AddOption(new ReadrateInputOption(_ffmpegCapabilities, 0, _logger));
+        // ffmpeg below 8 doesn't detect this without an explicit decoder
+        foreach (string _ in concatInputFile.AudioFormat.Where(af => af == AudioFormat.AacLatm))
+        {
+            concatInputFile.AddOption(new DecoderAacLatm());
+        }
+
+        concatInputFile.AddOption(new ReadrateInputOption(1.0));
 
         SetMetadataServiceProvider(ffmpegState, pipelineSteps);
         SetMetadataServiceName(ffmpegState, pipelineSteps);
 
         pipelineSteps.Add(new OutputFormatMpegTs(false));
         pipelineSteps.Add(new PipeProtocol());
+
+        // if (ffmpegState.SaveReport)
+        // {
+        //     pipelineSteps.Add(new FFReportVariable(_reportsFolder, concatInputFile));
+        // }
 
         return new FFmpegPipeline(pipelineSteps, false);
     }
@@ -176,7 +189,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         OutputOption.OutputOption outputOption = new FastStartOutputOption();
 
         var isFmp4Hls = false;
-        if (ffmpegState.OutputFormat is OutputFormatKind.Hls)
+        if (ffmpegState.OutputFormat is OutputFormatKind.Hls or OutputFormatKind.HlsMp4)
         {
             foreach (string segmentTemplate in ffmpegState.HlsSegmentTemplate)
             {
@@ -184,7 +197,11 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             }
         }
 
-        if (ffmpegState.OutputFormat == OutputFormatKind.Mp4 || isFmp4Hls)
+        if (ffmpegState.OutputFormat == OutputFormatKind.Mp4 && desiredState.VideoFormat == VideoFormat.Copy)
+        {
+            outputOption = new HlsDirectMp4OutputOptions();
+        }
+        else if (isFmp4Hls)
         {
             outputOption = new Mp4OutputOptions();
         }
@@ -212,12 +229,6 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             concatInputFile.AddOption(new InfiniteLoopInputOption(HardwareAccelerationMode.None));
         }
 
-        foreach (GraphicsEngineInput graphicsEngineInput in _graphicsEngineInput)
-        {
-            graphicsEngineInput.AddOption(
-                new RawVideoInputOption(PixelFormat.BGRA, desiredState.PaddedSize, desiredState.FrameRate.IfNone(24)));
-        }
-
         Debug.Assert(_videoInputFile.IsSome, "Pipeline builder requires exactly one video input file");
         VideoInputFile videoInputFile = _videoInputFile.Head();
 
@@ -225,13 +236,24 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         Debug.Assert(allVideoStreams.Count == 1, "Pipeline builder requires exactly one video stream");
         VideoStream videoStream = allVideoStreams.Head();
 
+        foreach (GraphicsEngineInput graphicsEngineInput in _graphicsEngineInput)
+        {
+            var targetSize = desiredState.CroppedSize.IfNone(desiredState.PaddedSize);
+
+            graphicsEngineInput.AddOption(
+                new RawVideoInputOption(
+                    PixelFormat.BGRA,
+                    targetSize,
+                    desiredState.FrameRate.IfNone(videoStream.FrameRate.IfNone(FrameRate.DefaultFrameRate))));
+        }
+
         var context = new PipelineContext(
             _hardwareAccelerationMode,
             _graphicsEngineInput.IsSome,
             _watermarkInputFile.IsSome,
             _subtitleInputFile.Map(s => s is { IsImageBased: true, Method: SubtitleMethod.Burn }).IfNone(false),
             _subtitleInputFile.Map(s => s is { IsImageBased: false, Method: SubtitleMethod.Burn }).IfNone(false),
-            desiredState.Deinterlaced,
+            desiredState.Deinterlaced && videoStream.ScanKind is ScanKind.Interlaced,
             desiredState.BitDepth == 10,
             false,
             videoStream.ColorParams.IsHdr);
@@ -242,6 +264,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         SetTimeLimit(ffmpegState, pipelineSteps);
 
         (FilterChain filterChain, ffmpegState) = BuildVideoPipeline(
+            isFmp4Hls,
             videoInputFile,
             videoStream,
             ffmpegState,
@@ -358,6 +381,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
                 pipelineSteps.Add(new PipeProtocol());
                 break;
             case OutputFormatKind.Hls:
+            case OutputFormatKind.HlsMp4:
                 foreach (string playlistPath in ffmpegState.HlsPlaylistPath)
                 {
                     foreach (string segmentTemplate in ffmpegState.HlsSegmentTemplate)
@@ -368,9 +392,12 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
                             new OutputFormatHls(
                                 desiredState,
                                 videoStream.FrameRate,
+                                ffmpegState.OutputFormat,
+                                ffmpegState.HlsSegmentOptions,
                                 segmentTemplate,
+                                ffmpegState.HlsInitTemplate,
                                 playlistPath,
-                                ffmpegState.PtsOffset == 0,
+                                ffmpegState.PtsOffset == TimeSpan.Zero,
                                 oneSecondGop,
                                 ffmpegState.IsTroubleshooting));
                     }
@@ -430,6 +457,27 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         AudioInputFile audioInputFile,
         List<IPipelineStep> pipelineSteps)
     {
+        // workaround for seeking with dts; certain seeks will change format when decoding (e.g. s16p to s32p)
+        foreach (TimeSpan _ in ffmpegState.Start.Filter(s => s > TimeSpan.Zero))
+        {
+            if (audioInputFile.Streams.OfType<AudioStream>().Any(s => s.Codec == AudioFormat.Dts))
+            {
+                audioInputFile.AddOption(new DecoderDtsCoreOnly());
+            }
+        }
+
+        // workaround for ac3 audio layout changes
+        // downmix from decoder so filter doesn't need to reinit (it can't, it will fail)
+        // this only really works when the desired output format matches the minimal input format
+        foreach (var audioInputStream in audioInputFile.Streams.OfType<AudioStream>()
+                     .Where(s => s.Codec == AudioFormat.Ac3).HeadOrNone())
+        {
+            foreach (int desiredAudioChannels in audioInputFile.DesiredState.AudioChannels)
+            {
+                audioInputFile.AddOption(new DecoderAc3Downmix(audioInputStream.Channels, desiredAudioChannels));
+            }
+        }
+
         // always need to specify audio codec so ffmpeg doesn't default to a codec we don't want
         foreach (IEncoder step in AvailableEncoders.ForAudioFormat(ffmpegState, audioInputFile.DesiredState, _logger))
         {
@@ -456,7 +504,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             audioInputFile.FilterSteps.Add(new AudioResampleFilter());
         }
 
-        foreach (TimeSpan _ in audioInputFile.DesiredState.AudioDuration)
+        if (audioInputFile.DesiredState.PadAudio)
         {
             audioInputFile.FilterSteps.Add(new AudioPadFilter());
         }
@@ -468,6 +516,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         {
             var filter = new NormalizeLoudnessFilter(
                 audioInputFile.DesiredState.NormalizeLoudnessFilter,
+                audioInputFile.DesiredState.TargetLoudness,
                 audioInputFile.DesiredState.AudioSampleRate);
 
             _audioInputFile.Iter(f => f.FilterSteps.Add(filter));
@@ -523,6 +572,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
         ICollection<IPipelineStep> pipelineSteps);
 
     private FilterChainAndState BuildVideoPipeline(
+        bool isFmp4Hls,
         VideoInputFile videoInputFile,
         VideoStream videoStream,
         FFmpegState ffmpegState,
@@ -552,6 +602,20 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             ? None
             : SetDecoder(videoInputFile, videoStream, ffmpegState, context);
 
+        Option<IPixelFormat> videoStreamPixelFormat = videoStream.PixelFormat;
+
+        // bt.2020 needs to immediately change to bt709 and a new format
+        if (videoStream.ColorParams.IsBt2020Ten)
+        {
+            IPixelFormat targetFormat = desiredState.PixelFormat.IfNone(new PixelFormatYuv420P());
+
+            videoInputFile.FilterSteps.Add(new ColorspaceFilter(desiredState, videoStream, targetFormat));
+
+            // update pipeline to have accurate color params and pixel format
+            videoStream.ResetColorParams(ColorParams.Default);
+            videoStreamPixelFormat = Some(targetFormat);
+        }
+
         //SetStillImageInfiniteLoop(videoInputFile, videoStream, ffmpegState);
         SetRealtimeInput(videoInputFile, desiredState);
         SetInfiniteLoop(videoInputFile, videoStream, ffmpegState, desiredState);
@@ -566,7 +630,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
 
         FilterChain filterChain = SetVideoFilters(
             videoInputFile,
-            videoStream,
+            videoStream with { PixelFormat = videoStreamPixelFormat },
             _watermarkInputFile,
             _subtitleInputFile,
             _graphicsEngineInput,
@@ -577,7 +641,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             _fontsFolder,
             pipelineSteps);
 
-        SetOutputTsOffset(ffmpegState, desiredState, pipelineSteps);
+        SetOutputTsOffset(isFmp4Hls, ffmpegState, desiredState, pipelineSteps);
 
         return new FilterChainAndState(filterChain, ffmpegState);
     }
@@ -620,6 +684,8 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             VideoFormat.H264 => new EncoderLibx264(desiredState.VideoProfile, desiredState.VideoPreset),
             VideoFormat.Mpeg2Video => new EncoderMpeg2Video(),
 
+            VideoFormat.Av1 => throw new NotSupportedException("AV1 software encoding is not supported"),
+
             VideoFormat.Copy => new EncoderCopyVideo(),
             VideoFormat.Undetermined => new EncoderImplicitVideo(),
 
@@ -656,6 +722,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
     }
 
     private static void SetOutputTsOffset(
+        bool isFmp4Hls,
         FFmpegState ffmpegState,
         FrameState desiredState,
         List<IPipelineStep> pipelineSteps)
@@ -665,12 +732,9 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             return;
         }
 
-        if (ffmpegState.PtsOffset > 0)
+        if (ffmpegState.PtsOffset > TimeSpan.Zero && !isFmp4Hls)
         {
-            foreach (int videoTrackTimeScale in desiredState.VideoTrackTimeScale)
-            {
-                pipelineSteps.Add(new OutputTsOffsetOption(ffmpegState.PtsOffset, videoTrackTimeScale));
-            }
+            pipelineSteps.Add(new OutputTsOffsetOption(ffmpegState.PtsOffset));
         }
     }
 
@@ -720,7 +784,7 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
             return;
         }
 
-        foreach (int desiredFrameRate in desiredState.FrameRate)
+        foreach (FrameRate desiredFrameRate in desiredState.FrameRate)
         {
             pipelineSteps.Add(new FrameRateOutputOption(desiredFrameRate));
         }
@@ -750,26 +814,14 @@ public abstract class PipelineBuilderBase : IPipelineBuilder
 
     private void SetRealtimeInput(VideoInputFile videoInputFile, FrameState desiredState)
     {
-        int initialBurst;
-        if (!desiredState.Realtime)
+        if (videoInputFile.StreamInputKind is StreamInputKind.Live || !desiredState.Realtime)
         {
-            initialBurst = 45;
-        }
-        else
-        {
-            AudioFilter filter = _audioInputFile
-                .Map(a => a.DesiredState.NormalizeLoudnessFilter)
-                .IfNone(AudioFilter.None);
-
-            initialBurst = filter switch
-            {
-                AudioFilter.LoudNorm => 5,
-                _ => 0
-            };
+            return;
         }
 
-        _audioInputFile.Iter(a => a.AddOption(new ReadrateInputOption(_ffmpegCapabilities, initialBurst, _logger)));
-        videoInputFile.AddOption(new ReadrateInputOption(_ffmpegCapabilities, initialBurst, _logger));
+        double readRate = desiredState.VideoFormat == VideoFormat.Copy ? 1.0 : 1.05;
+        _audioInputFile.Iter(a => a.AddOption(new ReadrateInputOption(readRate)));
+        videoInputFile.AddOption(new ReadrateInputOption(readRate));
     }
 
     protected static void SetStillImageLoop(

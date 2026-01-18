@@ -38,7 +38,7 @@ public class PipelineBuilderBaseTests
                     new FrameSize(1920, 1080),
                     "1:1",
                     "16:9",
-                    "24",
+                    FrameRate.DefaultFrameRate,
                     false,
                     ScanKind.Progressive)
             });
@@ -52,8 +52,9 @@ public class PipelineBuilderBaseTests
                 320,
                 640,
                 48,
-                Option<TimeSpan>.None,
-                AudioFilter.None));
+                false,
+                AudioFilter.None,
+                Option<double>.None));
 
         var desiredState = new FrameState(
             true,
@@ -66,8 +67,9 @@ public class PipelineBuilderBaseTests
             new FrameSize(1920, 1080),
             new FrameSize(1920, 1080),
             Option<FrameSize>.None,
+            FFmpegFilterMode.HardwareIfPossible,
             false,
-            Option<int>.None,
+            Option<FrameRate>.None,
             2000,
             4000,
             90_000,
@@ -90,7 +92,9 @@ public class PipelineBuilderBaseTests
             OutputFormatKind.MpegTs,
             Option<string>.None,
             Option<string>.None,
-            0,
+            Option<string>.None,
+            Option<string>.None,
+            TimeSpan.Zero,
             Option<int>.None,
             Option<int>.None,
             false,
@@ -117,7 +121,7 @@ public class PipelineBuilderBaseTests
 
         string command = PrintCommand(videoInputFile, audioInputFile, None, None, None, result);
         command.ShouldBe(
-            "-nostdin -hide_banner -nostats -loglevel error -fflags +genpts+discardcorrupt+igndts -ss 00:00:01 -c:v h264 -readrate 1.0 -i /tmp/whatever.mkv -filter_complex [0:1]aresample=async=1[a] -map 0:0 -map [a] -muxdelay 0 -muxpreload 0 -movflags +faststart -flags cgop -bf 0 -sc_threshold 0 -video_track_timescale 90000 -b:v 2000k -maxrate:v 2000k -bufsize:v 4000k -c:v libx265 -tag:v hvc1 -x265-params log-level=error -c:a aac -b:a 320k -maxrate:a 320k -bufsize:a 640k -ar 48k -f mpegts -mpegts_flags +initial_discontinuity pipe:1");
+            "-nostdin -hide_banner -nostats -loglevel error -fflags +genpts+discardcorrupt+igndts -ss 00:00:01 -c:v h264 -readrate 1.05 -i /tmp/whatever.mkv -filter_complex [0:1]aresample=async=1[a] -map 0:0 -map [a] -muxdelay 0 -muxpreload 0 -movflags +faststart -flags cgop -bf 0 -sc_threshold 0 -video_track_timescale 90000 -b:v 2000k -maxrate:v 2000k -bufsize:v 4000k -c:v libx265 -tag:v hvc1 -x265-params log-level=error -c:a aac -b:a 320k -maxrate:a 320k -bufsize:a 640k -ar 48k -f mpegts -mpegts_flags +initial_discontinuity pipe:1");
     }
 
     [Test]
@@ -136,7 +140,7 @@ public class PipelineBuilderBaseTests
                     new FrameSize(1920, 1080),
                     "1:1",
                     "16:9",
-                    "24",
+                    FrameRate.DefaultFrameRate,
                     false,
                     ScanKind.Progressive)
             });
@@ -150,8 +154,9 @@ public class PipelineBuilderBaseTests
                 320,
                 640,
                 48,
-                Option<TimeSpan>.None,
-                AudioFilter.None));
+                false,
+                AudioFilter.None,
+                Option<double>.None));
 
         var desiredState = new FrameState(
             true,
@@ -164,8 +169,9 @@ public class PipelineBuilderBaseTests
             new FrameSize(1920, 1080),
             new FrameSize(1920, 1080),
             Option<FrameSize>.None,
+            FFmpegFilterMode.HardwareIfPossible,
             false,
-            Option<int>.None,
+            Option<FrameRate>.None,
             2000,
             4000,
             90_000,
@@ -188,7 +194,9 @@ public class PipelineBuilderBaseTests
             OutputFormatKind.MpegTs,
             Option<string>.None,
             Option<string>.None,
-            0,
+            Option<string>.None,
+            Option<string>.None,
+            TimeSpan.Zero,
             Option<int>.None,
             Option<int>.None,
             false,
@@ -215,7 +223,7 @@ public class PipelineBuilderBaseTests
 
         string command = PrintCommand(videoInputFile, audioInputFile, None, None, None, result);
         command.ShouldBe(
-            "-nostdin -hide_banner -nostats -loglevel error -fflags +genpts+discardcorrupt+igndts -ss 00:00:01 -c:v h264 -readrate 1.0 -i /tmp/whatever.mkv -filter_complex [0:1]aresample=async=1[a] -map 0:0 -map [a] -muxdelay 0 -muxpreload 0 -movflags +faststart -flags cgop -bf 0 -sc_threshold 0 -video_track_timescale 90000 -b:v 2000k -maxrate:v 2000k -bufsize:v 4000k -c:v libx265 -tag:v hvc1 -x265-params log-level=error -c:a aac -ac 6 -b:a 320k -maxrate:a 320k -bufsize:a 640k -ar 48k -f mpegts -mpegts_flags +initial_discontinuity pipe:1");
+            "-nostdin -hide_banner -nostats -loglevel error -fflags +genpts+discardcorrupt+igndts -ss 00:00:01 -c:v h264 -readrate 1.05 -i /tmp/whatever.mkv -filter_complex [0:1]aresample=async=1[a] -map 0:0 -map [a] -muxdelay 0 -muxpreload 0 -movflags +faststart -flags cgop -bf 0 -sc_threshold 0 -video_track_timescale 90000 -b:v 2000k -maxrate:v 2000k -bufsize:v 4000k -c:v libx265 -tag:v hvc1 -x265-params log-level=error -c:a aac -ac 6 -b:a 320k -maxrate:a 320k -bufsize:a 640k -ar 48k -f mpegts -mpegts_flags +initial_discontinuity pipe:1");
     }
 
     [Test]
@@ -292,7 +300,7 @@ public class PipelineBuilderBaseTests
                     new FrameSize(1920, 1080),
                     "1:1",
                     "16:9",
-                    "24",
+                    FrameRate.DefaultFrameRate,
                     false,
                     ScanKind.Interlaced)
             });
@@ -306,8 +314,9 @@ public class PipelineBuilderBaseTests
                 None,
                 None,
                 None,
-                None,
-                AudioFilter.None));
+                false,
+                AudioFilter.None,
+                Option<double>.None));
 
         var desiredState = new FrameState(
             true,
@@ -320,8 +329,9 @@ public class PipelineBuilderBaseTests
             new FrameSize(1920, 1080),
             new FrameSize(1920, 1080),
             Option<FrameSize>.None,
+            FFmpegFilterMode.HardwareIfPossible,
             false,
-            Option<int>.None,
+            Option<FrameRate>.None,
             2000,
             4000,
             90_000,
@@ -344,7 +354,9 @@ public class PipelineBuilderBaseTests
             OutputFormatKind.Mp4,
             Option<string>.None,
             Option<string>.None,
-            0,
+            Option<string>.None,
+            Option<string>.None,
+            TimeSpan.Zero,
             Option<int>.None,
             Option<int>.None,
             false,
@@ -394,7 +406,7 @@ public class PipelineBuilderBaseTests
                     new FrameSize(1920, 1080),
                     "1:1",
                     "16:9",
-                    "24",
+                    FrameRate.DefaultFrameRate,
                     false,
                     ScanKind.Progressive)
             });
@@ -412,8 +424,9 @@ public class PipelineBuilderBaseTests
             new FrameSize(1920, 1080),
             new FrameSize(1920, 1080),
             Option<FrameSize>.None,
+            FFmpegFilterMode.HardwareIfPossible,
             false,
-            Option<int>.None,
+            Option<FrameRate>.None,
             2000,
             4000,
             90_000,
@@ -436,7 +449,9 @@ public class PipelineBuilderBaseTests
             OutputFormatKind.Mp4,
             Option<string>.None,
             Option<string>.None,
-            0,
+            Option<string>.None,
+            Option<string>.None,
+            TimeSpan.Zero,
             Option<int>.None,
             Option<int>.None,
             false,
@@ -486,7 +501,7 @@ public class PipelineBuilderBaseTests
                     FrameSize.Unknown,
                     string.Empty,
                     string.Empty,
-                    Option<string>.None,
+                    Option<FrameRate>.None,
                     true,
                     ScanKind.Progressive)
             });
@@ -536,16 +551,11 @@ public class PipelineBuilderBaseTests
         return command;
     }
 
-    public class DefaultFFmpegCapabilities : FFmpegCapabilities
-    {
-        public DefaultFFmpegCapabilities()
-            : base(
-                new System.Collections.Generic.HashSet<string>(),
-                new System.Collections.Generic.HashSet<string>(),
-                new System.Collections.Generic.HashSet<string>(),
-                new System.Collections.Generic.HashSet<string>(),
-                new System.Collections.Generic.HashSet<string>())
-        {
-        }
-    }
+    public class DefaultFFmpegCapabilities() : FFmpegCapabilities(
+        new System.Collections.Generic.HashSet<string>(),
+        new System.Collections.Generic.HashSet<string>(),
+        new System.Collections.Generic.HashSet<string>(),
+        new System.Collections.Generic.HashSet<string>(),
+        new System.Collections.Generic.HashSet<string>(),
+        new System.Collections.Generic.HashSet<string>());
 }

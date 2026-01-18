@@ -1,8 +1,9 @@
+using System.Globalization;
+using System.IO.Abstractions;
 using System.IO.Enumeration;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg.Selector;
 using ErsatzTV.Core.Interfaces.FFmpeg;
-using ErsatzTV.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
 using NCalc;
 using YamlDotNet.Serialization;
@@ -10,7 +11,7 @@ using YamlDotNet.Serialization.NamingConventions;
 
 namespace ErsatzTV.Core.FFmpeg;
 
-public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<CustomStreamSelector> logger)
+public class CustomStreamSelector(IFileSystem fileSystem, ILogger<CustomStreamSelector> logger)
     : ICustomStreamSelector
 {
     public async Task<StreamSelectorResult> SelectStreams(
@@ -25,7 +26,7 @@ public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<Cust
                 FileSystemLayout.ChannelStreamSelectorsFolder,
                 channel.StreamSelector);
 
-            if (!localFileSystem.FileExists(streamSelectorFile))
+            if (!fileSystem.File.Exists(streamSelectorFile))
             {
                 logger.LogWarning("YAML stream selector file {File} does not exist; aborting.", channel.StreamSelector);
                 return StreamSelectorResult.None;
@@ -205,7 +206,17 @@ public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<Cust
                             }
                         }
 
-                        if (!matches)
+                        if (channel.StreamingMode != StreamingMode.HttpLiveStreamingDirect &&
+                            subtitle.SubtitleKind is SubtitleKind.Embedded && !subtitle.IsImage &&
+                            !subtitle.IsExtracted)
+                        {
+                            candidateSubtitles.Remove(subtitle);
+
+                            logger.LogDebug(
+                                "Subtitle {@Subtitle} is embedded text subtitle and NOT extracted; ignoring",
+                                new { Language = safeLanguage, Title = safeTitle });
+                        }
+                        else if (!matches)
                         {
                             candidateSubtitles.Remove(subtitle);
 
@@ -305,7 +316,8 @@ public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<Cust
             {
                 "channel_number" => channel.Number,
                 "channel_name" => channel.Name,
-                "time_of_day_seconds" => contentStartTime.LocalDateTime.TimeOfDay.TotalSeconds,
+                "time_of_day_seconds" => contentStartTime.TimeOfDay.TotalSeconds,
+                "day_of_week" => GetLocalizedDayOfWeekIndex(contentStartTime),
                 _ => e.Result
             };
         };
@@ -317,7 +329,7 @@ public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<Cust
     {
         try
         {
-            string yaml = await localFileSystem.ReadAllText(streamSelectorFile);
+            string yaml = await fileSystem.File.ReadAllTextAsync(streamSelectorFile);
 
             IDeserializer deserializer = new DeserializerBuilder()
                 .WithNamingConvention(CamelCaseNamingConvention.Instance)
@@ -330,5 +342,12 @@ public class CustomStreamSelector(ILocalFileSystem localFileSystem, ILogger<Cust
             logger.LogWarning(ex, "Error loading YAML stream selector");
             throw;
         }
+    }
+
+    private static int GetLocalizedDayOfWeekIndex(DateTimeOffset date)
+    {
+        DayOfWeek first = CultureInfo.CurrentCulture.DateTimeFormat.FirstDayOfWeek;
+        DayOfWeek current = date.DayOfWeek;
+        return ((int)current - (int)first + 7) % 7;
     }
 }

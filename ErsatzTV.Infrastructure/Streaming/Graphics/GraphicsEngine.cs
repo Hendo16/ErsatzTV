@@ -1,9 +1,10 @@
 using System.IO.Pipelines;
 using ErsatzTV.Core;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
-using ErsatzTV.Core.Metadata;
 using Microsoft.Extensions.Logging;
 using SkiaSharp;
 
@@ -13,7 +14,8 @@ public class GraphicsEngine(
     TemplateFunctions templateFunctions,
     GraphicsEngineFonts graphicsEngineFonts,
     ITempFilePool tempFilePool,
-    ITemplateDataRepository templateDataRepository,
+    IConfigElementRepository configElementRepository,
+    ILocalStatisticsProvider localStatisticsProvider,
     ILogger<GraphicsEngine> logger)
     : IGraphicsEngine
 {
@@ -21,39 +23,9 @@ public class GraphicsEngine(
     {
         graphicsEngineFonts.LoadFonts(FileSystemLayout.FontsCacheFolder);
 
-        var templateVariables = new Dictionary<string, object>();
-
-        // init template element variables once
-        if (context.Elements.OfType<ITemplateDataContext>().Any())
-        {
-            // common variables
-            templateVariables[MediaItemTemplateDataKey.Resolution] = context.FrameSize;
-            templateVariables[MediaItemTemplateDataKey.StreamSeek] = context.Seek;
-
-            // media item variables
-            Option<Dictionary<string, object>> maybeTemplateData =
-                await templateDataRepository.GetMediaItemTemplateData(context.MediaItem, cancellationToken);
-            foreach (Dictionary<string, object> templateData in maybeTemplateData)
-            {
-                foreach (KeyValuePair<string, object> variable in templateData)
-                {
-                    templateVariables.Add(variable.Key, variable.Value);
-                }
-            }
-
-            // epg variables
-            int maxEpg = context.Elements.OfType<ITemplateDataContext>().Max(c => c.EpgEntries);
-            DateTimeOffset startTime = context.ContentStartTime + context.Seek;
-            Option<Dictionary<string, object>> maybeEpgData =
-                await templateDataRepository.GetEpgTemplateData(context.ChannelNumber, startTime, maxEpg);
-            foreach (Dictionary<string, object> templateData in maybeEpgData)
-            {
-                foreach (KeyValuePair<string, object> variable in templateData)
-                {
-                    templateVariables.Add(variable.Key, variable.Value);
-                }
-            }
-        }
+        Option<string> ffprobePath = await configElementRepository.GetValue<string>(
+            ConfigElementKey.FFprobePath,
+            cancellationToken);
 
         var elements = new List<IGraphicsElement>();
         foreach (GraphicsElementContext element in context.Elements)
@@ -74,27 +46,25 @@ public class GraphicsEngine(
                     break;
 
                 case TextElementDataContext textElementContext:
-                {
-                    var variables = templateVariables.ToDictionary();
-                    foreach (KeyValuePair<string, string> variable in textElementContext.Variables)
-                    {
-                        variables.Add(variable.Key, variable.Value);
-                    }
-
-                    var textElement = new TextElement(
-                        templateFunctions,
-                        graphicsEngineFonts,
-                        textElementContext.TextElement,
-                        variables,
-                        logger);
-
-                    elements.Add(textElement);
+                    elements.Add(new TextElement(graphicsEngineFonts, textElementContext.TextElement, logger));
                     break;
-                }
+
+                case MotionElementDataContext motionElementDataContext:
+                    elements.Add(
+                        new MotionElement(
+                            motionElementDataContext.MotionElement,
+                            ffprobePath,
+                            localStatisticsProvider,
+                            logger));
+                    break;
+
+                case ScriptElementDataContext scriptElementDataContext:
+                    elements.Add(new ScriptElement(scriptElementDataContext.ScriptElement, logger));
+                    break;
 
                 case SubtitleElementDataContext subtitleElementContext:
                 {
-                    var variables = templateVariables.ToDictionary();
+                    var variables = context.TemplateVariables.ToDictionary();
                     foreach (KeyValuePair<string, string> variable in subtitleElementContext.Variables)
                     {
                         variables.Add(variable.Key, variable.Value);
@@ -103,7 +73,7 @@ public class GraphicsEngine(
                     var subtitleElement = new SubtitleElement(
                         templateFunctions,
                         tempFilePool,
-                        subtitleElementContext.SubtitlesElement,
+                        subtitleElementContext.SubtitleElement,
                         variables,
                         logger);
 
@@ -114,32 +84,38 @@ public class GraphicsEngine(
         }
 
         // initialize all elements
-        await Task.WhenAll(
-            elements.Select(e =>
-                e.InitializeAsync(
-                    context.SquarePixelFrameSize,
-                    context.FrameSize,
-                    context.FrameRate,
-                    cancellationToken)));
+        await Task.WhenAll(elements.Select(e => e.InitializeAsync(context, cancellationToken)));
 
         long frameCount = 0;
-        var totalFrames = (long)(context.Duration.TotalSeconds * context.FrameRate);
+        var totalFrames = (long)(context.Duration.TotalSeconds * context.FrameRate.ParsedFrameRate);
 
-        using var outputBitmap = new SKBitmap(
-            context.FrameSize.Width,
-            context.FrameSize.Height,
-            SKColorType.Bgra8888,
-            SKAlphaType.Unpremul);
+        int width = context.FrameSize.Width;
+        int height = context.FrameSize.Height;
+        int frameBufferSize = width * height * 4; // BGRA = 4 bytes
+        var skImageInfo = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+
+        using var paint = new SKPaint();
+        var preparedElementImages = new List<PreparedElementImage>(elements.Count);
+
+        var prepareTasks = new List<Task<Option<PreparedElementImage>>>(elements.Count);
+
+        foreach (IGraphicsElement element in elements.OrderBy(e => e.ZIndex))
+        {
+            logger.LogDebug(
+                "Graphics element {Element} will draw with ZIndex {ZIndex}",
+                element.DebugKey,
+                element.ZIndex);
+        }
 
         try
         {
             // `content_total_seconds` - the total number of seconds in the content
-            TimeSpan contentTotalTime = context.Seek + context.Duration;
+            TimeSpan contentTotalTime = context.Seek + context.ContentTotalDuration;
 
             while (!cancellationToken.IsCancellationRequested && frameCount < totalFrames)
             {
                 // seconds since this specific stream started
-                double streamTimeSeconds = (double)frameCount / context.FrameRate;
+                double streamTimeSeconds = frameCount / context.FrameRate.ParsedFrameRate;
                 var streamTime = TimeSpan.FromSeconds(streamTimeSeconds);
 
                 // `content_seconds` - the total number of seconds the frame is into the content
@@ -151,63 +127,79 @@ public class GraphicsEngine(
                 // `channel_seconds` - the total number of seconds the frame is from when the channel started/activated
                 TimeSpan channelTime = frameTime - context.ChannelStartTime;
 
-                using var canvas = new SKCanvas(outputBitmap);
-                canvas.Clear(SKColors.Transparent);
-
                 // prepare images outside mutate to allow async image generation
-                var preparedElementImages = new List<PreparedElementImage>();
-                foreach (IGraphicsElement element in elements.Where(e => !e.IsFailed).OrderBy(e => e.ZIndex))
+                prepareTasks.Clear();
+                foreach (var element in elements)
                 {
-                    try
+                    if (!element.IsFinished)
                     {
-                        Option<PreparedElementImage> maybePreparedImage = await element.PrepareImage(
+                        Task<Option<PreparedElementImage>> task = SafePrepareImage(
+                            element,
                             frameTime.TimeOfDay,
                             contentTime,
                             contentTotalTime,
                             channelTime,
                             cancellationToken);
 
-                        preparedElementImages.AddRange(maybePreparedImage);
-                    }
-                    catch (Exception ex)
-                    {
-                        element.IsFailed = true;
-                        logger.LogWarning(
-                            ex,
-                            "Failed to draw graphics element of type {Type}; will disable for this content",
-                            element.GetType().Name);
+                        prepareTasks.Add(task);
                     }
                 }
 
-                // draw each element
-                using (var paint = new SKPaint())
-                {
-                    foreach (PreparedElementImage preparedImage in preparedElementImages)
-                    {
-                        using (var colorFilter = SKColorFilter.CreateBlendMode(
-                                   SKColors.White.WithAlpha((byte)(preparedImage.Opacity * 255)),
-                                   SKBlendMode.Modulate))
-                        {
-                            paint.ColorFilter = colorFilter;
-                            canvas.DrawBitmap(
-                                preparedImage.Image,
-                                new SKPoint(preparedImage.Point.X, preparedImage.Point.Y),
-                                paint);
-                        }
+                Option<PreparedElementImage>[] results = await Task.WhenAll(prepareTasks);
 
-                        if (preparedImage.Dispose)
-                        {
-                            preparedImage.Image.Dispose();
-                        }
+                preparedElementImages.Clear();
+                foreach (Option<PreparedElementImage> result in results)
+                {
+                    foreach (var preparedImage in result)
+                    {
+                        preparedElementImages.Add(preparedImage);
                     }
                 }
 
-                // pipe output
-                int frameBufferSize = context.FrameSize.Width * context.FrameSize.Height * 4;
-                using (SKPixmap pixmap = outputBitmap.PeekPixels())
+                preparedElementImages.Sort((a, _) => a.ZIndex);
+
+                Memory<byte> memory = pipeWriter.GetMemory(frameBufferSize);
+
+                unsafe
                 {
-                    Memory<byte> memory = pipeWriter.GetMemory(frameBufferSize);
-                    pixmap.GetPixelSpan().CopyTo(memory.Span);
+                    using (System.Buffers.MemoryHandle handle = memory.Pin())
+                    {
+                        using (var surface = SKSurface.Create(skImageInfo, (IntPtr)handle.Pointer, width * 4))
+                        {
+                            if (surface == null)
+                            {
+                                logger.LogWarning("Failed to create SKSurface for frame");
+                            }
+                            else
+                            {
+                                var canvas = surface.Canvas;
+                                canvas.Clear(SKColors.Transparent);
+
+                                foreach (PreparedElementImage preparedImage in preparedElementImages)
+                                {
+                                    // Optimization: Skip BlendMode if opacity is full
+                                    if (preparedImage.Opacity < 0.99f)
+                                    {
+                                        using var colorFilter = SKColorFilter.CreateBlendMode(
+                                            SKColors.White.WithAlpha((byte)(preparedImage.Opacity * 255)),
+                                            SKBlendMode.Modulate);
+                                        paint.ColorFilter = colorFilter;
+                                        canvas.DrawBitmap(preparedImage.Image, preparedImage.Point, paint);
+                                    }
+                                    else
+                                    {
+                                        paint.ColorFilter = null;
+                                        canvas.DrawBitmap(preparedImage.Image, preparedImage.Point, paint);
+                                    }
+
+                                    if (preparedImage.Dispose)
+                                    {
+                                        preparedImage.Image.Dispose();
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 pipeWriter.Advance(frameBufferSize);
@@ -228,6 +220,33 @@ public class GraphicsEngine(
             {
                 element.Dispose();
             }
+        }
+    }
+
+    private async Task<Option<PreparedElementImage>> SafePrepareImage(
+        IGraphicsElement element,
+        TimeSpan frameTimeOfDay,
+        TimeSpan contentTime,
+        TimeSpan contentTotalTime,
+        TimeSpan channelTime,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await element.PrepareImage(
+                frameTimeOfDay,
+                contentTime,
+                contentTotalTime,
+                channelTime,
+                ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to render element {Type}. Disabling.", element.GetType().Name);
+
+            element.IsFinished = true;
+
+            return Option<PreparedElementImage>.None;
         }
     }
 }

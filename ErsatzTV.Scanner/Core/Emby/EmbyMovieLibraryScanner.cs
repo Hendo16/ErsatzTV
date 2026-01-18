@@ -1,11 +1,12 @@
-﻿using ErsatzTV.Core;
+﻿using System.IO.Abstractions;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Emby;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
@@ -23,20 +24,20 @@ public class EmbyMovieLibraryScanner :
     private readonly IEmbyPathReplacementService _pathReplacementService;
 
     public EmbyMovieLibraryScanner(
+        IScannerProxy scannerProxy,
         IEmbyApiClient embyApiClient,
-        IMediator mediator,
         IMediaSourceRepository mediaSourceRepository,
         IEmbyMovieRepository embyMovieRepository,
         IEmbyPathReplacementService pathReplacementService,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         ILogger<EmbyMovieLibraryScanner> logger)
         : base(
-            localFileSystem,
+            scannerProxy,
+            fileSystem,
             localChaptersProvider,
             metadataRepository,
-            mediator,
             logger)
     {
         _embyApiClient = embyApiClient;

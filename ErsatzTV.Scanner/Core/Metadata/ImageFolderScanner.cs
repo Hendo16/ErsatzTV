@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -8,8 +9,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Images;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.FFmpeg;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
@@ -21,19 +22,21 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
     private readonly IClient _client;
     private readonly IImageRepository _imageRepository;
     private readonly ILibraryRepository _libraryRepository;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILogger<ImageFolderScanner> _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
-    private readonly IMediator _mediator;
 
     public ImageFolderScanner(
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalMetadataProvider localMetadataProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
-        IMediator mediator,
         IImageRepository imageRepository,
         ILibraryRepository libraryRepository,
         IMediaItemRepository mediaItemRepository,
@@ -41,7 +44,7 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
         ITempFilePool tempFilePool,
         IClient client,
         ILogger<ImageFolderScanner> logger) : base(
-        localFileSystem,
+        fileSystem,
         localStatisticsProvider,
         metadataRepository,
         mediaItemRepository,
@@ -51,9 +54,10 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
         client,
         logger)
     {
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _localMetadataProvider = localMetadataProvider;
-        _mediator = mediator;
         _imageRepository = imageRepository;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
@@ -109,14 +113,12 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
                 }
 
                 decimal percentCompletion = (decimal)foldersCompleted / (foldersCompleted + folderQueue.Count);
-                await _mediator.Publish(
-                    new ScannerProgressUpdate(
-                        libraryPath.LibraryId,
-                        null,
+                if (!await _scannerProxy.UpdateProgress(
                         progressMin + percentCompletion * progressSpread,
-                        [],
-                        []),
-                    cancellationToken);
+                        cancellationToken))
+                {
+                    return new ScanCanceled();
+                }
 
                 string imageFolder = folderQueue.Dequeue();
                 Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(
@@ -211,14 +213,10 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
                     {
                         if (result.IsAdded || result.IsUpdated)
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(
-                                    libraryPath.LibraryId,
-                                    null,
-                                    null,
-                                    [result.Item.Id],
-                                    []),
-                                cancellationToken);
+                            if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }
@@ -232,31 +230,23 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
 
             foreach (string path in await _imageRepository.FindImagePaths(libraryPath))
             {
-                if (!_localFileSystem.FileExists(path))
+                if (!_fileSystem.File.Exists(path))
                 {
                     _logger.LogInformation("Flagging missing image at {Path}", path);
                     List<int> imageIds = await FlagFileNotFound(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            imageIds.ToArray(),
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems(imageIds.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
                 }
                 else if (Path.GetFileName(path).StartsWith("._", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation("Removing dot underscore file at {Path}", path);
                     List<int> imageIds = await _imageRepository.DeleteByPath(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            Array.Empty<int>(),
-                            imageIds.ToArray()),
-                        cancellationToken);
+                    if (!await _scannerProxy.RemoveMediaItems(imageIds.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to remove media items from scanner process");
+                    }
                 }
             }
 

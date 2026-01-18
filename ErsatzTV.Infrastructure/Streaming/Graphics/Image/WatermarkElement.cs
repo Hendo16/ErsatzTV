@@ -1,5 +1,6 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
+using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.FFmpeg.State;
 using Microsoft.Extensions.Logging;
 using NCalc;
@@ -23,16 +24,18 @@ public class WatermarkElement : ImageElementBase
 
         _imagePath = watermarkOptions.ImagePath;
         _watermark = watermarkOptions.Watermark;
+
         ZIndex = watermarkOptions.Watermark.ZIndex;
+        DebugKey = $"Watermark {watermarkOptions.Watermark.Name}";
     }
 
     public bool IsValid => _imagePath != null && _watermark != null;
 
-    public override async Task InitializeAsync(
-        Resolution squarePixelFrameSize,
-        Resolution frameSize,
-        int frameRate,
-        CancellationToken cancellationToken)
+    public override int ZIndex { get; }
+
+    public override string DebugKey { get; }
+
+    public override async Task InitializeAsync(GraphicsEngineContext context, CancellationToken cancellationToken)
     {
         try
         {
@@ -48,7 +51,7 @@ public class WatermarkElement : ImageElementBase
                                 0
                             )
                         )
-                    )";
+                    ) * {_watermark.Opacity / 100.0f}";
                 _maybeOpacityExpression = new Expression(expressionString);
             }
             else if (_watermark.Mode is ChannelWatermarkMode.OpacityExpression &&
@@ -67,8 +70,8 @@ public class WatermarkElement : ImageElementBase
             }
 
             await LoadImage(
-                squarePixelFrameSize,
-                frameSize,
+                context.SquarePixelFrameSize,
+                context.FrameSize,
                 _imagePath,
                 _watermark.Location,
                 _watermark.Size == WatermarkSize.Scaled,
@@ -80,7 +83,7 @@ public class WatermarkElement : ImageElementBase
         }
         catch (Exception ex)
         {
-            IsFailed = true;
+            IsFinished = true;
             _logger.LogWarning(ex, "Failed to initialize watermark element; will disable for this content");
         }
     }
@@ -109,6 +112,7 @@ public class WatermarkElement : ImageElementBase
         }
 
         SKBitmap frameForTimestamp = GetFrameForTimestamp(contentTime);
-        return ValueTask.FromResult(Optional(new PreparedElementImage(frameForTimestamp, Location, opacity, false)));
+        return ValueTask.FromResult(
+            Optional(new PreparedElementImage(frameForTimestamp, Location, opacity, ZIndex, false)));
     }
 }

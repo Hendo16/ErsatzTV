@@ -1,16 +1,30 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Domain.Scheduling;
 
 namespace ErsatzTV.Application.Playouts;
 
 internal static class Mapper
 {
+    internal static PlayoutNameViewModel ProjectToViewModel(Playout playout) =>
+        new(
+            playout.Id,
+            playout.ScheduleKind,
+            playout.Channel.Name,
+            playout.Channel.Number,
+            playout.Channel.PlayoutMode,
+            playout.ProgramScheduleId == null ? string.Empty : playout.ProgramSchedule.Name,
+            playout.ScheduleFile,
+            playout.DailyRebuildTime,
+            playout.BuildStatus);
+
     internal static PlayoutItemViewModel ProjectToViewModel(PlayoutItem playoutItem) =>
         new(
             GetDisplayTitle(playoutItem.MediaItem, playoutItem.ChapterTitle),
             playoutItem.StartOffset,
             playoutItem.FinishOffset,
-            playoutItem.GetDisplayDuration());
+            playoutItem.GetDisplayDuration(),
+            Some(playoutItem.FillerKind));
 
     internal static PlayoutAlternateScheduleViewModel ProjectToViewModel(
         ProgramScheduleAlternate programScheduleAlternate) =>
@@ -20,7 +34,22 @@ internal static class Mapper
             programScheduleAlternate.ProgramScheduleId,
             programScheduleAlternate.DaysOfWeek,
             programScheduleAlternate.DaysOfMonth,
-            programScheduleAlternate.MonthsOfYear);
+            programScheduleAlternate.MonthsOfYear,
+            programScheduleAlternate.LimitToDateRange,
+            programScheduleAlternate.StartMonth,
+            programScheduleAlternate.StartDay,
+            programScheduleAlternate.StartYear,
+            programScheduleAlternate.EndMonth,
+            programScheduleAlternate.EndDay,
+            programScheduleAlternate.EndYear);
+
+    internal static PlayoutHistoryViewModel ProjectToViewModel(PlayoutHistory playoutHistory) =>
+        new(
+            playoutHistory.Id,
+            new DateTimeOffset(playoutHistory.When, TimeSpan.Zero).ToLocalTime(),
+            new DateTimeOffset(playoutHistory.Finish, TimeSpan.Zero).ToLocalTime(),
+            playoutHistory.Key,
+            playoutHistory.Details);
 
     internal static string GetDisplayTitle(MediaItem mediaItem, Option<string> maybeChapterTitle)
     {

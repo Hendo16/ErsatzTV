@@ -73,6 +73,9 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
+        bool aviSynthDemuxer = false;
+        bool aviSynthInstalled = false;
+
         string nvidiaCapabilities = null;
         StringBuilder qsvCapabilities = new();
         StringBuilder vaapiCapabilities = new();
@@ -157,6 +160,10 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
                     videoToolboxCapabilities.AppendLine();
                     videoToolboxCapabilities.AppendLine();
                 }
+
+                var ffmpegCapabilities = await _hardwareCapabilitiesFactory.GetFFmpegCapabilities(ffmpegPath.Value);
+                aviSynthDemuxer = ffmpegCapabilities.HasDemuxFormat(FFmpegKnownFormat.AviSynth);
+                aviSynthInstalled = _hardwareCapabilitiesFactory.IsAviSynthInstalled();
             }
         }
 
@@ -189,6 +196,8 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             ffmpegProfiles,
             channels,
             channelWatermarks,
+            aviSynthDemuxer,
+            aviSynthInstalled,
             nvidiaCapabilities,
             qsvCapabilities.ToString(),
             vaapiCapabilities.ToString(),
@@ -236,6 +245,10 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             await _configElementRepository.GetValue<OutputFormatKind>(
                 ConfigElementKey.FFmpegHlsDirectOutputFormat,
                 cancellationToken);
+        Option<string> defaultMpegTsScript =
+            await _configElementRepository.GetValue<string>(
+                ConfigElementKey.FFmpegDefaultMpegTsScript,
+                cancellationToken);
 
         var result = new FFmpegSettingsViewModel
         {
@@ -249,7 +262,8 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             HlsSegmenterIdleTimeout = await hlsSegmenterIdleTimeout.IfNoneAsync(60),
             WorkAheadSegmenterLimit = await workAheadSegmenterLimit.IfNoneAsync(1),
             InitialSegmentCount = await initialSegmentCount.IfNoneAsync(1),
-            HlsDirectOutputFormat = await outputFormatKind.IfNoneAsync(OutputFormatKind.MpegTs)
+            HlsDirectOutputFormat = await outputFormatKind.IfNoneAsync(OutputFormatKind.MpegTs),
+            DefaultMpegTsScript = await defaultMpegTsScript.IfNoneAsync("Default")
         };
 
         foreach (int watermarkId in watermark)

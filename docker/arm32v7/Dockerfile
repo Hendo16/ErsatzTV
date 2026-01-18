@@ -1,10 +1,10 @@
-﻿FROM mcr.microsoft.com/dotnet/aspnet:9.0-noble-arm32v7 AS dotnet-runtime
+﻿FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-arm32v7 AS dotnet-runtime
 
 FROM --platform=linux/arm/v7 ghcr.io/ersatztv/ersatztv-ffmpeg:7.1.1 AS runtime-base
 COPY --from=dotnet-runtime /usr/share/dotnet /usr/share/dotnet
 
 # https://hub.docker.com/_/microsoft-dotnet
-FROM mcr.microsoft.com/dotnet/sdk:9.0-noble-amd64 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble-amd64 AS build
 RUN apt-get update && apt-get install -y ca-certificates gnupg
 WORKDIR /source
 
@@ -14,6 +14,7 @@ COPY artwork/* ./artwork/
 COPY ErsatzTV/*.csproj ./ErsatzTV/
 COPY ErsatzTV.Application/*.csproj ./ErsatzTV.Application/
 COPY ErsatzTV.Core/*.csproj ./ErsatzTV.Core/
+COPY ErsatzTV.Core.Nullable/*.csproj ./ErsatzTV.Core.Nullable/
 COPY ErsatzTV.FFmpeg/*.csproj ./ErsatzTV.FFmpeg/
 COPY ErsatzTV.Infrastructure/*.csproj ./ErsatzTV.Infrastructure/
 COPY ErsatzTV.Infrastructure.Sqlite/*.csproj ./ErsatzTV.Infrastructure.Sqlite/
@@ -25,6 +26,7 @@ RUN dotnet restore -r linux-arm ErsatzTV/
 COPY ErsatzTV/. ./ErsatzTV/
 COPY ErsatzTV.Application/. ./ErsatzTV.Application/
 COPY ErsatzTV.Core/. ./ErsatzTV.Core/
+COPY ErsatzTV.Core.Nullable/. ./ErsatzTV.Core.Nullable/
 COPY ErsatzTV.FFmpeg/. ./ErsatzTV.FFmpeg/
 COPY ErsatzTV.Infrastructure/. ./ErsatzTV.Infrastructure/
 COPY ErsatzTV.Infrastructure.Sqlite/. ./ErsatzTV.Infrastructure.Sqlite/
@@ -32,10 +34,11 @@ COPY ErsatzTV.Infrastructure.MySql/. ./ErsatzTV.Infrastructure.MySql/
 COPY ErsatzTV.Scanner/. ./ErsatzTV.Scanner/
 WORKDIR /source/ErsatzTV.Scanner
 ARG INFO_VERSION="unknown"
-RUN dotnet publish ErsatzTV.Scanner.csproj --framework net9.0 -c release -o /app --runtime linux-arm --no-self-contained --no-restore -p:DebugType=Embedded -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=${INFO_VERSION}
+ARG BUILD_CONFIG="release"
+RUN dotnet publish ErsatzTV.Scanner.csproj --framework net10.0 -c ${BUILD_CONFIG} -o /app --runtime linux-arm --no-self-contained --no-restore -p:DebugType=Embedded -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=${INFO_VERSION}
 WORKDIR /source/ErsatzTV
 RUN sed -i '/Scanner/d' ErsatzTV.csproj
-RUN dotnet publish ErsatzTV.csproj --framework net9.0 -c release -o /app --runtime linux-arm --no-self-contained --no-restore -p:DebugType=Embedded -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=${INFO_VERSION}
+RUN dotnet publish ErsatzTV.csproj --framework net10.0 -c ${BUILD_CONFIG} -o /app --runtime linux-arm --no-self-contained --no-restore -p:DebugType=Embedded -p:PublishSingleFile=false -p:PublishTrimmed=false -p:InformationalVersion=${INFO_VERSION}
 
 # final stage/image
 FROM runtime-base

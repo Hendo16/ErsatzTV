@@ -19,12 +19,14 @@ public class FFmpegProfileEditViewModel
         AudioFormat = viewModel.AudioFormat;
         AudioSampleRate = viewModel.AudioSampleRate;
         NormalizeLoudnessMode = viewModel.NormalizeLoudnessMode;
+        TargetLoudness = viewModel.TargetLoudness;
         Id = viewModel.Id;
         Name = viewModel.Name;
         NormalizeFramerate = viewModel.NormalizeFramerate;
         DeinterlaceVideo = viewModel.DeinterlaceVideo;
         Resolution = viewModel.Resolution;
         ScalingBehavior = viewModel.ScalingBehavior;
+        PadMode = viewModel.PadMode;
         ThreadCount = viewModel.ThreadCount;
         HardwareAcceleration = viewModel.HardwareAcceleration;
         VaapiDisplay = viewModel.VaapiDisplay;
@@ -46,13 +48,49 @@ public class FFmpegProfileEditViewModel
     public int AudioChannels { get; set; }
     public FFmpegProfileAudioFormat AudioFormat { get; set; }
     public int AudioSampleRate { get; set; }
-    public NormalizeLoudnessMode NormalizeLoudnessMode { get; set; }
+
+    public NormalizeLoudnessMode NormalizeLoudnessMode
+    {
+        get;
+
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                if (field is NormalizeLoudnessMode.LoudNorm)
+                {
+                    TargetLoudness = -16;
+                }
+                else
+                {
+                    TargetLoudness = null;
+                }
+            }
+        }
+    }
+
+    public double? TargetLoudness { get; set; }
     public int Id { get; set; }
     public string Name { get; set; }
     public bool NormalizeFramerate { get; set; }
     public bool DeinterlaceVideo { get; set; }
     public ResolutionViewModel Resolution { get; set; }
     public ScalingBehavior ScalingBehavior { get; set; }
+
+    public FilterMode PadMode
+    {
+        // only allow customization with VAAPI accel
+        get => HardwareAcceleration switch
+        {
+            HardwareAccelerationKind.None => FilterMode.Software,
+            HardwareAccelerationKind.Vaapi => field,
+            _ => FilterMode.HardwareIfPossible
+        };
+
+        set;
+    }
+
     public int ThreadCount { get; set; }
     public HardwareAccelerationKind HardwareAcceleration { get; set; }
     public string VaapiDisplay { get; set; }
@@ -62,7 +100,21 @@ public class FFmpegProfileEditViewModel
     public int VideoBitrate { get; set; }
     public int VideoBufferSize { get; set; }
     public FFmpegProfileVideoFormat VideoFormat { get; set; }
-    public string VideoProfile { get; set; }
+
+    public string VideoProfile
+    {
+        get =>
+            (HardwareAcceleration, VideoFormat, BitDepth) switch
+            {
+                (HardwareAccelerationKind.Nvenc, FFmpegProfileVideoFormat.H264, FFmpegProfileBitDepth.TenBit) => FFmpeg
+                    .Format.VideoProfile.High444p,
+                (_, FFmpegProfileVideoFormat.H264, _) => field,
+                _ => string.Empty
+            };
+
+        set;
+    }
+
     public string VideoPreset { get; set; }
     public bool AllowBFrames { get; set; }
     public FFmpegProfileBitDepth BitDepth { get; set; }
@@ -79,6 +131,7 @@ public class FFmpegProfileEditViewModel
             QsvExtraHardwareFrames,
             Resolution.Id,
             ScalingBehavior,
+            PadMode,
             VideoFormat,
             VideoProfile,
             VideoPreset,
@@ -91,6 +144,7 @@ public class FFmpegProfileEditViewModel
             AudioBitrate,
             AudioBufferSize,
             NormalizeLoudnessMode,
+            TargetLoudness,
             AudioChannels,
             AudioSampleRate,
             NormalizeFramerate,
@@ -109,6 +163,7 @@ public class FFmpegProfileEditViewModel
             QsvExtraHardwareFrames,
             Resolution.Id,
             ScalingBehavior,
+            PadMode,
             VideoFormat,
             VideoProfile,
             VideoPreset,
@@ -121,6 +176,7 @@ public class FFmpegProfileEditViewModel
             AudioBitrate,
             AudioBufferSize,
             NormalizeLoudnessMode,
+            TargetLoudness,
             AudioChannels,
             AudioSampleRate,
             NormalizeFramerate,

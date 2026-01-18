@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO.Abstractions;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
@@ -15,25 +16,25 @@ namespace ErsatzTV.Core.FFmpeg;
 public class FFmpegStreamSelector : IFFmpegStreamSelector
 {
     private readonly IConfigElementRepository _configElementRepository;
-    private readonly ILocalFileSystem _localFileSystem;
+    private readonly IFileSystem _fileSystem;
+    private readonly ILanguageCodeService _languageCodeService;
     private readonly ILogger<FFmpegStreamSelector> _logger;
     private readonly IScriptEngine _scriptEngine;
-    private readonly ISearchRepository _searchRepository;
     private readonly IStreamSelectorRepository _streamSelectorRepository;
 
     public FFmpegStreamSelector(
         IScriptEngine scriptEngine,
         IStreamSelectorRepository streamSelectorRepository,
-        ISearchRepository searchRepository,
         IConfigElementRepository configElementRepository,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
+        ILanguageCodeService languageCodeService,
         ILogger<FFmpegStreamSelector> logger)
     {
         _scriptEngine = scriptEngine;
         _streamSelectorRepository = streamSelectorRepository;
-        _searchRepository = searchRepository;
         _configElementRepository = configElementRepository;
-        _localFileSystem = localFileSystem;
+        _fileSystem = fileSystem;
+        _languageCodeService = languageCodeService;
         _logger = logger;
     }
 
@@ -73,8 +74,8 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
                 });
         }
 
-        List<string> allLanguageCodes = await _searchRepository.GetAllThreeLetterLanguageCodes([language])
-            .Map(GetTwoAndThreeLetterLanguageCodes);
+        List<string> allLanguageCodes =
+            GetTwoAndThreeLetterLanguageCodes(_languageCodeService.GetAllLanguageCodes([language]));
         if (allLanguageCodes.Count > 1)
         {
             _logger.LogDebug("Preferred audio language has multiple codes {Codes}", allLanguageCodes);
@@ -156,25 +157,28 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
             candidateSubtitles = candidateSubtitles.Filter(s => s.SubtitleKind is not SubtitleKind.Embedded).ToList();
         }
 
-        foreach (Subtitle subtitle in candidateSubtitles
-                     .Filter(s => s.SubtitleKind is SubtitleKind.Embedded && !s.IsImage)
-                     .ToList())
+        if (channel.StreamingMode is not StreamingMode.HttpLiveStreamingDirect)
         {
-            if (!subtitle.IsExtracted)
+            foreach (Subtitle subtitle in candidateSubtitles
+                       .Filter(s => s.SubtitleKind is SubtitleKind.Embedded && !s.IsImage)
+                       .ToList())
             {
-                _logger.LogDebug(
-                    "Ignoring embedded subtitle with index {Index} that has not been extracted",
-                    subtitle.StreamIndex);
+                if (!subtitle.IsExtracted)
+                {
+                    _logger.LogDebug(
+                        "Ignoring embedded subtitle with index {Index} that has not been extracted",
+                        subtitle.StreamIndex);
 
-                candidateSubtitles.Remove(subtitle);
-            }
-            else if (string.IsNullOrWhiteSpace(subtitle.Path))
-            {
-                _logger.LogDebug(
-                    "BUG: ignoring embedded subtitle with index {Index} that is missing a path",
-                    subtitle.StreamIndex);
+                    candidateSubtitles.Remove(subtitle);
+                }
+                else if (string.IsNullOrWhiteSpace(subtitle.Path))
+                {
+                    _logger.LogDebug(
+                        "BUG: ignoring embedded subtitle with index {Index} that is missing a path",
+                        subtitle.StreamIndex);
 
-                candidateSubtitles.Remove(subtitle);
+                    candidateSubtitles.Remove(subtitle);
+                }
             }
         }
 
@@ -187,8 +191,7 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
         else
         {
             // filter to preferred language
-            allCodes = await _searchRepository.GetAllThreeLetterLanguageCodes([language])
-                .Map(GetTwoAndThreeLetterLanguageCodes);
+            allCodes = GetTwoAndThreeLetterLanguageCodes(_languageCodeService.GetAllLanguageCodes([language]));
             if (allCodes.Count > 1)
             {
                 _logger.LogDebug("Preferred subtitle language has multiple codes {Codes}", allCodes);
@@ -316,7 +319,7 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
             "js");
 
         _logger.LogDebug("Checking for JS Script at {Path}", jsScriptPath);
-        if (!_localFileSystem.FileExists(jsScriptPath))
+        if (!_fileSystem.File.Exists(jsScriptPath))
         {
             _logger.LogDebug("Unable to locate episode audio stream selector script; falling back to built-in logic");
             return Option<MediaStream>.None;
@@ -356,7 +359,7 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
             "js");
 
         _logger.LogDebug("Checking for JS Script at {Path}", jsScriptPath);
-        if (!_localFileSystem.FileExists(jsScriptPath))
+        if (!_fileSystem.File.Exists(jsScriptPath))
         {
             _logger.LogDebug(
                 "Unable to locate movie audio stream selector script; falling back to built-in logic");

@@ -1,39 +1,25 @@
-﻿using System.Text;
+﻿using System.IO.Abstractions;
+using System.Text;
 using Bugsnag;
 using CliWrap;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.FFmpeg;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
 namespace ErsatzTV.Application.Streaming;
 
-public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<BaseError, PtsTime>>
+public class GetLastPtsTimeHandler(
+    IClient client,
+    IFileSystem fileSystem,
+    ITempFilePool tempFilePool,
+    IConfigElementRepository configElementRepository,
+    ILogger<GetLastPtsTimeHandler> logger)
+    : IRequestHandler<GetLastPtsTime, Either<BaseError, PtsTime>>
 {
-    private readonly IClient _client;
-    private readonly IConfigElementRepository _configElementRepository;
-    private readonly ILocalFileSystem _localFileSystem;
-    private readonly ILogger<GetLastPtsTimeHandler> _logger;
-    private readonly ITempFilePool _tempFilePool;
-
-    public GetLastPtsTimeHandler(
-        IClient client,
-        ILocalFileSystem localFileSystem,
-        ITempFilePool tempFilePool,
-        IConfigElementRepository configElementRepository,
-        ILogger<GetLastPtsTimeHandler> logger)
-    {
-        _client = client;
-        _localFileSystem = localFileSystem;
-        _tempFilePool = tempFilePool;
-        _configElementRepository = configElementRepository;
-        _logger = logger;
-    }
-
     public async Task<Either<BaseError, PtsTime>> Handle(
         GetLastPtsTime request,
         CancellationToken cancellationToken)
@@ -48,13 +34,13 @@ public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<Base
         GetLastPtsTime request,
         CancellationToken cancellationToken) =>
         await ValidateFFprobePath(cancellationToken)
-            .MapT(ffprobePath => new RequestParameters(request.ChannelNumber, ffprobePath));
+            .MapT(ffprobePath => new RequestParameters(request.InitSegmentCache, request.ChannelNumber, ffprobePath));
 
     private async Task<Either<BaseError, PtsTime>> Handle(
         RequestParameters parameters,
         CancellationToken cancellationToken)
     {
-        Option<FileInfo> maybeLastSegment = GetLastSegment(parameters.ChannelNumber);
+        Option<FileInfo> maybeLastSegment = GetLastSegment(parameters);
         foreach (FileInfo segment in maybeLastSegment)
         {
             return await GetPts(parameters, segment, cancellationToken).IfNoneAsync(PtsTime.Zero);
@@ -72,19 +58,32 @@ public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<Base
         {
             "-v", "0",
             "-show_entries",
-            "packet=pts,duration",
+            "packet=pts_time,duration_time",
             "-of", "compact=p=0:nk=1",
             segment.FullName
         };
 
-        string lastLine = string.Empty;
+        PtsTime maxTime = PtsTime.Zero;
         Action<string> replaceLine = s =>
         {
             if (!string.IsNullOrWhiteSpace(s))
             {
-                lastLine = s.Trim();
+                try
+                {
+                    var newPts = PtsTime.From(s.Trim());
+                    if (newPts.Value > maxTime.Value)
+                    {
+                        maxTime = newPts;
+                    }
+                }
+                catch
+                {
+                    // do nothing
+                }
             }
         };
+
+        logger.LogDebug("ffprobe arguments {FFmpegArguments}", argumentList.ToList());
 
         CommandResult probe = await Cli.Wrap(parameters.FFprobePath)
             .WithArguments(argumentList)
@@ -97,27 +96,66 @@ public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<Base
             return Option<PtsTime>.None;
         }
 
-        try
-        {
-            return PtsTime.From(lastLine);
-        }
-        catch (Exception ex)
-        {
-            _client.Notify(ex);
-            await SaveTroubleshootingData(parameters.ChannelNumber, lastLine);
-        }
-
-        return Option<PtsTime>.None;
+        return maxTime;
     }
 
-    private static Option<FileInfo> GetLastSegment(string channelNumber)
+    private Option<FileInfo> GetLastSegment(RequestParameters parameters)
     {
-        var directory = new DirectoryInfo(Path.Combine(FileSystemLayout.TranscodeFolder, channelNumber));
-        return Optional(directory.GetFiles("*.ts").OrderByDescending(f => f.Name).FirstOrDefault());
+        var directory = new DirectoryInfo(Path.Combine(FileSystemLayout.TranscodeFolder, parameters.ChannelNumber));
+        var allFiles = directory.GetFiles("*.ts").Append(directory.GetFiles("*.m4s")).ToList();
+        Option<FileInfo> maybeLastSegment = Optional(allFiles.OrderByDescending(f => f.Name).FirstOrDefault());
+        foreach (var lastSegment in maybeLastSegment)
+        {
+            if (lastSegment.Name.Contains("m4s"))
+            {
+                string[] split = lastSegment.Name.Split('_');
+                if (long.TryParse(split[1], out long generatedAt))
+                {
+                    try
+                    {
+                        string init = parameters.InitSegmentCache.EarliestSegmentByHash(generatedAt);
+                        string fullInit = Path.Combine(directory.FullName, init);
+                        string combined = tempFilePool.GetNextTempFile(TempFileCategory.Fmp4LastSegment);
+
+                        using (var output = File.OpenWrite(combined))
+                        {
+                            // copy init
+                            using (var readInit = File.OpenRead(fullInit))
+                            {
+                                readInit.CopyTo(output);
+                            }
+
+                            // copy segment
+                            using (var readSegment = File.OpenRead(lastSegment.FullName))
+                            {
+                                readSegment.CopyTo(output);
+                            }
+                        }
+
+                        // return concatenated init + segment
+                        return new FileInfo(combined);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(e);
+                        Console.WriteLine($"Can't find init for last segment {lastSegment.FullName}");
+                        foreach (var file in allFiles)
+                        {
+                            Console.WriteLine(file.FullName);
+                        }
+                        throw;
+                    }
+                }
+            }
+
+            return lastSegment;
+        }
+
+        return Option<FileInfo>.None;
     }
 
     private Task<Validation<BaseError, string>> ValidateFFprobePath(CancellationToken cancellationToken) =>
-        _configElementRepository.GetValue<string>(ConfigElementKey.FFprobePath, cancellationToken)
+        configElementRepository.GetValue<string>(ConfigElementKey.FFprobePath, cancellationToken)
             .FilterT(File.Exists)
             .Map(ffprobePath => ffprobePath.ToValidation<BaseError>("FFprobe path does not exist on the file system"));
 
@@ -130,7 +168,7 @@ public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<Base
 
             string playlistFileName = Path.Combine(FileSystemLayout.TranscodeFolder, channelNumber, "live.m3u8");
             string playlistContents = string.Empty;
-            if (_localFileSystem.FileExists(playlistFileName))
+            if (fileSystem.File.Exists(playlistFileName))
             {
                 playlistContents = await File.ReadAllTextAsync(playlistFileName);
             }
@@ -138,18 +176,21 @@ public class GetLastPtsTimeHandler : IRequestHandler<GetLastPtsTime, Either<Base
             var data = new TroubleshootingData(allFiles, playlistContents, output);
             string serialized = data.Serialize();
 
-            string file = _tempFilePool.GetNextTempFile(TempFileCategory.BadTranscodeFolder);
+            string file = tempFilePool.GetNextTempFile(TempFileCategory.BadTranscodeFolder);
             await File.WriteAllTextAsync(file, serialized);
 
-            _logger.LogWarning("Transcode folder is in bad state; troubleshooting info saved to {File}", file);
+            logger.LogWarning("Transcode folder is in bad state; troubleshooting info saved to {File}", file);
         }
         catch (Exception ex)
         {
-            _client.Notify(ex);
+            client.Notify(ex);
         }
     }
 
-    private sealed record RequestParameters(string ChannelNumber, string FFprobePath);
+    private sealed record RequestParameters(
+        IHlsInitSegmentCache InitSegmentCache,
+        string ChannelNumber,
+        string FFprobePath);
 
     private sealed record TroubleshootingData(IEnumerable<FileInfo> Files, string Playlist, string ProbeOutput)
     {

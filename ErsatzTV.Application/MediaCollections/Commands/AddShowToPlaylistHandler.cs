@@ -20,10 +20,12 @@ public class AddShowToPlaylistHandler(IDbContextFactory<TvContext> dbContextFact
 
     private static async Task<Unit> ApplyAddShowRequest(TvContext dbContext, Parameters parameters)
     {
+        int index = parameters.Playlist.Items.Count > 0 ? parameters.Playlist.Items.Max(i => i.Index) + 1 : 0;
+
         var playlistItem = new PlaylistItem
         {
-            Index = parameters.Playlist.Items.Max(i => i.Index) + 1,
-            CollectionType = ProgramScheduleItemCollectionType.TelevisionShow,
+            Index = index,
+            CollectionType = CollectionType.TelevisionShow,
             MediaItemId = parameters.Show.Id,
             PlaybackOrder = PlaybackOrder.Shuffle,
             IncludeInProgramGuide = true

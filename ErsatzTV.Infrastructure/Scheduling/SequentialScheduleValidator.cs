@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Abstractions;
 using System.Text.Json;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Interfaces.Scheduling;
@@ -8,30 +9,34 @@ using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Schema;
 using YamlDotNet.RepresentationModel;
 using JsonSerializer = System.Text.Json.JsonSerializer;
+using JsonSchemaNet = Json.Schema;
 
 namespace ErsatzTV.Infrastructure.Scheduling;
 
-public class SequentialScheduleValidator(ILogger<SequentialScheduleValidator> logger) : ISequentialScheduleValidator
+public class SequentialScheduleValidator(IFileSystem fileSystem, ILogger<SequentialScheduleValidator> logger)
+    : ISequentialScheduleValidator
 {
     public async Task<bool> ValidateSchedule(string yaml, bool isImport)
     {
         try
         {
-            string schemaFileName = Path.Combine(
-                FileSystemLayout.ResourcesCacheFolder,
-                isImport ? "sequential-schedule-import.schema.json" : "sequential-schedule.schema.json");
-            using StreamReader sr = File.OpenText(schemaFileName);
-            await using var reader = new JsonTextReader(sr);
-            var schema = JSchema.Load(reader);
+            string schemaFileName = GetSchemaPath(isImport);
+            string schemaText = await fileSystem.File.ReadAllTextAsync(schemaFileName);
 
-            using var textReader = new StringReader(yaml);
-            var yamlStream = new YamlStream();
-            yamlStream.Load(textReader);
-            var schedule = JObject.Parse(Convert(yamlStream));
-
-            if (!schedule.IsValid(schema, out IList<string> errorMessages))
+            var buildOptions = new JsonSchemaNet.BuildOptions
             {
-                logger.LogWarning("Failed to validate sequential schedule definition: {ErrorMessages}", errorMessages);
+                SchemaRegistry = new JsonSchemaNet.SchemaRegistry()
+            };
+            JsonSchemaNet.JsonSchema schema = JsonSchemaNet.JsonSchema.FromText(schemaText, buildOptions);
+
+            string jsonString = ConvertYamlToJsonString(yaml);
+            JsonElement jsonElement = JsonElement.Parse(jsonString);
+
+            JsonSchemaNet.EvaluationResults result = schema.Evaluate(jsonElement);
+
+            if (!result.IsValid)
+            {
+                logger.LogWarning("Sequential schedule definition failed validation");
                 return false;
             }
 
@@ -47,30 +52,27 @@ public class SequentialScheduleValidator(ILogger<SequentialScheduleValidator> lo
 
     public string ToJson(string yaml)
     {
-        using var textReader = new StringReader(yaml);
-        var yamlStream = new YamlStream();
-        yamlStream.Load(textReader);
-        var schedule = JObject.Parse(Convert(yamlStream));
+        string jsonString = ConvertYamlToJsonString(yaml);
+        var schedule = JObject.Parse(jsonString);
+
         string formatted = JsonConvert.SerializeObject(schedule, Formatting.Indented);
         string[] lines = formatted.Split('\n');
         return string.Join('\n', lines.Select((line, index) => $"{index + 1,4}: {line}"));
     }
 
+    // limited to 1000/hr, but only called manually from UI
     public async Task<IList<string>> GetValidationMessages(string yaml, bool isImport)
     {
         try
         {
-            string schemaFileName = Path.Combine(
-                FileSystemLayout.ResourcesCacheFolder,
-                isImport ? "sequential-schedule-import.schema.json" : "sequential-schedule.schema.json");
-            using StreamReader sr = File.OpenText(schemaFileName);
+            string schemaFileName = GetSchemaPath(isImport);
+
+            using StreamReader sr = fileSystem.File.OpenText(schemaFileName);
             await using var reader = new JsonTextReader(sr);
             var schema = JSchema.Load(reader);
 
-            using var textReader = new StringReader(yaml);
-            var yamlStream = new YamlStream();
-            yamlStream.Load(textReader);
-            var schedule = JObject.Parse(Convert(yamlStream));
+            string jsonString = ConvertYamlToJsonString(yaml);
+            var schedule = JObject.Parse(jsonString);
 
             return schedule.IsValid(schema, out IList<string> errorMessages) ? [] : errorMessages;
         }
@@ -80,11 +82,22 @@ public class SequentialScheduleValidator(ILogger<SequentialScheduleValidator> lo
         }
     }
 
-    private static string Convert(YamlStream yamlStream)
+    private static string ConvertYamlToJsonString(string yaml)
     {
+        using var textReader = new StringReader(yaml);
+        var yamlStream = new YamlStream();
+        yamlStream.Load(textReader);
+
         var visitor = new YamlToJsonVisitor();
         yamlStream.Accept(visitor);
         return JsonConvert.SerializeObject(JsonConvert.DeserializeObject(visitor.JsonString), Formatting.Indented);
+    }
+
+    private static string GetSchemaPath(bool isImport)
+    {
+        return Path.Combine(
+            FileSystemLayout.ResourcesCacheFolder,
+            isImport ? "sequential-schedule-import.schema.json" : "sequential-schedule.schema.json");
     }
 
     private sealed class YamlToJsonVisitor : IYamlVisitor

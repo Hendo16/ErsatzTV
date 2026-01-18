@@ -12,20 +12,23 @@ public class FFmpegProfileEditViewModelValidator : AbstractValidator<FFmpegProfi
     [
         FFmpegProfileVideoFormat.H264,
         FFmpegProfileVideoFormat.Hevc,
-        FFmpegProfileVideoFormat.Mpeg2Video
+        FFmpegProfileVideoFormat.Mpeg2Video,
+        FFmpegProfileVideoFormat.Av1
     ];
 
     private static readonly List<FFmpegProfileVideoFormat> NvencFormats =
     [
         FFmpegProfileVideoFormat.H264,
-        FFmpegProfileVideoFormat.Hevc
+        FFmpegProfileVideoFormat.Hevc,
+        FFmpegProfileVideoFormat.Av1
     ];
 
     private static readonly List<FFmpegProfileVideoFormat> VaapiFormats =
     [
         FFmpegProfileVideoFormat.H264,
         FFmpegProfileVideoFormat.Hevc,
-        FFmpegProfileVideoFormat.Mpeg2Video
+        FFmpegProfileVideoFormat.Mpeg2Video,
+        FFmpegProfileVideoFormat.Av1
     ];
 
     private static readonly List<FFmpegProfileVideoFormat> VideoToolboxFormats =
@@ -40,6 +43,17 @@ public class FFmpegProfileEditViewModelValidator : AbstractValidator<FFmpegProfi
         FFmpegProfileVideoFormat.Hevc
     ];
 
+    private static readonly List<FFmpegProfileVideoFormat> V4l2m2mFormats =
+    [
+        FFmpegProfileVideoFormat.H264,
+        FFmpegProfileVideoFormat.Hevc
+    ];
+
+    private static readonly List<FFmpegProfileVideoFormat> RkmppFormats =
+    [
+        FFmpegProfileVideoFormat.H264,
+        FFmpegProfileVideoFormat.Hevc
+    ];
     public FFmpegProfileEditViewModelValidator()
     {
         RuleFor(x => x.Name).NotEmpty();
@@ -66,7 +80,7 @@ public class FFmpegProfileEditViewModelValidator : AbstractValidator<FFmpegProfi
             () =>
             {
                 RuleFor(x => x.VideoFormat).Must(c => NvencFormats.Contains(c))
-                    .WithMessage("NVENC supports formats (h264, hevc)");
+                    .WithMessage("NVENC supports formats (h264, hevc, av1)");
             });
 
         When(
@@ -74,7 +88,7 @@ public class FFmpegProfileEditViewModelValidator : AbstractValidator<FFmpegProfi
             () =>
             {
                 RuleFor(x => x.VideoFormat).Must(c => VaapiFormats.Contains(c))
-                    .WithMessage("VAAPI supports formats (h264, hevc, mpeg2video)");
+                    .WithMessage("VAAPI supports formats (h264, hevc, av1, mpeg2video)");
             });
 
         When(
@@ -94,16 +108,38 @@ public class FFmpegProfileEditViewModelValidator : AbstractValidator<FFmpegProfi
             });
 
         When(
+            x => x.HardwareAcceleration == HardwareAccelerationKind.V4l2m2m,
+            () =>
+            {
+                RuleFor(x => x.VideoFormat).Must(c => V4l2m2mFormats.Contains(c))
+                    .WithMessage("V4L2 M2M supports formats (h264, hevc)");
+            });
+
+        When(
+            x => x.HardwareAcceleration == HardwareAccelerationKind.Rkmpp,
+            () =>
+            {
+                RuleFor(x => x.VideoFormat).Must(c => RkmppFormats.Contains(c))
+                    .WithMessage("Rkmpp supports formats (h264, hevc)");
+            });
+
+        When(
             x => x.VideoFormat == FFmpegProfileVideoFormat.Mpeg2Video,
             () => RuleFor(x => x.BitDepth)
                 .Must(bd => bd is FFmpegProfileBitDepth.EightBit)
                 .WithMessage("Mpeg2Video does not support 10-bit content"));
 
         When(
-            x => x.VideoFormat == FFmpegProfileVideoFormat.H264 && x.BitDepth == FFmpegProfileBitDepth.TenBit,
+            x => x.HardwareAcceleration != HardwareAccelerationKind.Nvenc && x.VideoFormat == FFmpegProfileVideoFormat.H264 && x.BitDepth == FFmpegProfileBitDepth.TenBit,
             () => RuleFor(x => x.VideoProfile)
                 .Must(vp => vp == VideoProfile.High10)
                 .WithMessage("VideoProfile must be high10 with 10-bit h264"));
+
+        When(
+            x => x.HardwareAcceleration == HardwareAccelerationKind.Nvenc && x.VideoFormat == FFmpegProfileVideoFormat.H264 && x.BitDepth == FFmpegProfileBitDepth.TenBit,
+            () => RuleFor(x => x.VideoProfile)
+                .Must(vp => vp == VideoProfile.High444p)
+                .WithMessage("VideoProfile must be high444p with NVIDIA 10-bit h264"));
 
         When(
             x => x.VideoFormat == FFmpegProfileVideoFormat.H264 && x.BitDepth == FFmpegProfileBitDepth.EightBit,

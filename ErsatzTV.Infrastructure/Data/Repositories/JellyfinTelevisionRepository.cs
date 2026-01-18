@@ -5,7 +5,6 @@ using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Metadata;
-using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -86,39 +85,39 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         JellyfinShow item,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Option<JellyfinShow> maybeExisting = await dbContext.JellyfinShows
-            .Include(m => m.LibraryPath)
-            .ThenInclude(lp => lp.Library)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Genres)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Tags)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Studios)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Actors)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Artwork)
-            .Include(m => m.ShowMetadata)
-            .ThenInclude(mm => mm.Guids)
-            .Include(m => m.TraktListItems)
-            .ThenInclude(tli => tli.TraktList)
-            .SelectOneAsync(s => s.ItemId, s => s.ItemId == item.ItemId, cancellationToken);
-
-        foreach (JellyfinShow jellyfinShow in maybeExisting)
+        using (ScanProfiler.Measure("DB Ins/Upd Show"))
         {
-            var result = new MediaItemScanResult<JellyfinShow>(jellyfinShow) { IsAdded = false };
-            if (jellyfinShow.Etag != item.Etag)
+            await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            Option<JellyfinShow> maybeExisting = await dbContext.JellyfinShows
+                .TagWithCallSite()
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Genres)
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Tags)
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Studios)
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Actors)
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Artwork)
+                .Include(m => m.ShowMetadata)
+                .ThenInclude(mm => mm.Guids)
+                .SingleOrDefaultAsync(s => s.ItemId == item.ItemId, cancellationToken);
+
+            foreach (JellyfinShow jellyfinShow in maybeExisting)
             {
-                await UpdateShow(dbContext, jellyfinShow, item, cancellationToken);
-                result.IsUpdated = true;
+                var result = new MediaItemScanResult<JellyfinShow>(jellyfinShow) { IsAdded = false };
+                if (jellyfinShow.Etag != item.Etag)
+                {
+                    await UpdateShow(dbContext, jellyfinShow, item, cancellationToken);
+                    result.IsUpdated = true;
+                }
+
+                return result;
             }
 
-            return result;
+            return await AddShow(dbContext, library, item, cancellationToken);
         }
-
-        return await AddShow(dbContext, library, item, cancellationToken);
     }
 
     public async Task<Either<BaseError, MediaItemScanResult<JellyfinSeason>>> GetOrAdd(
@@ -126,28 +125,31 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         JellyfinSeason item,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Option<JellyfinSeason> maybeExisting = await dbContext.JellyfinSeasons
-            .Include(m => m.LibraryPath)
-            .Include(m => m.SeasonMetadata)
-            .ThenInclude(mm => mm.Artwork)
-            .Include(m => m.SeasonMetadata)
-            .ThenInclude(mm => mm.Guids)
-            .SelectOneAsync(s => s.ItemId, s => s.ItemId == item.ItemId, cancellationToken);
-
-        foreach (JellyfinSeason jellyfinSeason in maybeExisting)
+        using (ScanProfiler.Measure("DB Ins/Upd Season"))
         {
-            var result = new MediaItemScanResult<JellyfinSeason>(jellyfinSeason) { IsAdded = false };
-            if (jellyfinSeason.Etag != item.Etag)
+            await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+            Option<JellyfinSeason> maybeExisting = await dbContext.JellyfinSeasons
+                .TagWithCallSite()
+                .Include(m => m.SeasonMetadata)
+                .ThenInclude(mm => mm.Artwork)
+                .Include(m => m.SeasonMetadata)
+                .ThenInclude(mm => mm.Guids)
+                .SingleOrDefaultAsync(s => s.ItemId == item.ItemId, cancellationToken);
+
+            foreach (JellyfinSeason jellyfinSeason in maybeExisting)
             {
-                await UpdateSeason(dbContext, jellyfinSeason, item, cancellationToken);
-                result.IsUpdated = true;
+                var result = new MediaItemScanResult<JellyfinSeason>(jellyfinSeason) { IsAdded = false };
+                if (jellyfinSeason.Etag != item.Etag)
+                {
+                    await UpdateSeason(dbContext, jellyfinSeason, item, cancellationToken);
+                    result.IsUpdated = true;
+                }
+
+                return result;
             }
 
-            return result;
+            return await AddSeason(dbContext, library, item, cancellationToken);
         }
-
-        return await AddSeason(dbContext, library, item, cancellationToken);
     }
 
     public async Task<Either<BaseError, MediaItemScanResult<JellyfinEpisode>>> GetOrAdd(
@@ -156,50 +158,68 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         bool deepScan,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Option<JellyfinEpisode> maybeExisting = await dbContext.JellyfinEpisodes
-            .Include(m => m.LibraryPath)
-            .ThenInclude(lp => lp.Library)
-            .Include(m => m.MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(m => m.MediaVersions)
-            .ThenInclude(mv => mv.Streams)
-            .Include(m => m.MediaVersions)
-            .ThenInclude(mv => mv.Chapters)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Artwork)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Guids)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Genres)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Tags)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Studios)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Actors)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Directors)
-            .Include(m => m.EpisodeMetadata)
-            .ThenInclude(mm => mm.Writers)
-            .Include(m => m.Season)
-            .Include(m => m.TraktListItems)
-            .ThenInclude(tli => tli.TraktList)
-            .SelectOneAsync(s => s.ItemId, s => s.ItemId == item.ItemId, cancellationToken);
-
-        foreach (JellyfinEpisode jellyfinEpisode in maybeExisting)
+        using (ScanProfiler.Measure("DB Ins/Upd Episode"))
         {
-            var result = new MediaItemScanResult<JellyfinEpisode>(jellyfinEpisode) { IsAdded = false };
-            if (jellyfinEpisode.Etag != item.Etag || deepScan)
+            await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+            Option<dynamic> maybeExistingState = await dbContext.JellyfinEpisodes
+                .TagWithCallSite()
+                .Where(s => s.ItemId == item.ItemId)
+                .Select(s => new { s.Id, s.Etag })
+                .SingleOrDefaultAsync(cancellationToken);
+
+            foreach (dynamic existingState in maybeExistingState)
             {
-                await UpdateEpisode(dbContext, jellyfinEpisode, item, cancellationToken);
-                result.IsUpdated = true;
+                int existingId = existingState.Id;
+
+                MediaItemScanResult<JellyfinEpisode> result;
+                if (existingState.Etag != item.Etag || deepScan)
+                {
+                    JellyfinEpisode existing;
+
+                    using (ScanProfiler.Measure("DB Ep Upd Load"))
+                    {
+                        existing = await dbContext.JellyfinEpisodes
+                            .TagWithCallSite()
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Artwork)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Guids)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Genres)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Tags)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Actors).ThenInclude(a => a.Artwork)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Directors)
+                            .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Writers)
+                            .Include(e => e.MediaVersions).ThenInclude(mv => mv.Streams)
+                            .AsSplitQuery()
+                            .SingleAsync(s => s.Id == existingId, cancellationToken);
+
+                        await dbContext.Entry(existing).Reference(e => e.Season).LoadAsync(cancellationToken);
+                    }
+
+                    await UpdateEpisode(dbContext, existing, item, cancellationToken);
+
+                    result = new MediaItemScanResult<JellyfinEpisode>(existing)
+                        { IsAdded = false, IsUpdated = true };
+                }
+                else
+                {
+                    JellyfinEpisode existing = await dbContext.JellyfinEpisodes
+                        .AsNoTracking()
+                        .TagWithCallSite()
+                        .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Actors)
+                        .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Directors)
+                        .Include(e => e.EpisodeMetadata).ThenInclude(em => em.Writers)
+                        .Include(e => e.MediaVersions).ThenInclude(mv => mv.Streams)
+                        .AsSplitQuery()
+                        .SingleAsync(s => s.Id == existingId, cancellationToken);
+
+                    result = new MediaItemScanResult<JellyfinEpisode>(existing) { IsAdded = false };
+                }
+
+                return result;
             }
 
-            return result;
+            return await AddEpisode(dbContext, library, item, cancellationToken);
         }
-
-        return await AddEpisode(dbContext, library, item, cancellationToken);
     }
 
     public async Task<Unit> SetEtag(JellyfinShow show, string etag, CancellationToken cancellationToken)
@@ -511,6 +531,8 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Option<JellyfinShow> maybeShow = await dbContext.JellyfinShows
+            .AsNoTracking()
+            .TagWithCallSite()
             .Where(s => s.Id == showId)
             .Where(s => s.LibraryPath.LibraryId == libraryId)
             .Include(s => s.ShowMetadata)
@@ -534,7 +556,7 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         CancellationToken cancellationToken)
     {
         // library path is used for search indexing later
-        incoming.LibraryPath = existing.LibraryPath;
+        incoming.LibraryPathId = existing.LibraryPathId;
         incoming.Id = existing.Id;
 
         // metadata
@@ -682,7 +704,7 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         CancellationToken cancellationToken)
     {
         // library path is used for search indexing later
-        incoming.LibraryPath = existing.LibraryPath;
+        incoming.LibraryPathId = existing.LibraryPathId;
         incoming.Id = existing.Id;
 
         existing.SeasonNumber = incoming.SeasonNumber;
@@ -780,137 +802,161 @@ public class JellyfinTelevisionRepository : IJellyfinTelevisionRepository
         JellyfinEpisode incoming,
         CancellationToken cancellationToken)
     {
-        // library path is used for search indexing later
-        incoming.LibraryPath = existing.LibraryPath;
-        incoming.Id = existing.Id;
-
-        // metadata
-        // TODO: multiple metadata?
-        EpisodeMetadata metadata = existing.EpisodeMetadata.Head();
-        EpisodeMetadata incomingMetadata = incoming.EpisodeMetadata.Head();
-        metadata.Title = incomingMetadata.Title;
-        metadata.SortTitle = incomingMetadata.SortTitle;
-        metadata.Plot = incomingMetadata.Plot;
-        metadata.Year = incomingMetadata.Year;
-        metadata.DateAdded = incomingMetadata.DateAdded;
-        metadata.DateUpdated = DateTime.UtcNow;
-        metadata.ReleaseDate = incomingMetadata.ReleaseDate;
-        metadata.EpisodeNumber = incomingMetadata.EpisodeNumber;
-
-        // thumbnail
-        Artwork incomingThumbnail =
-            incomingMetadata.Artwork.FirstOrDefault(a => a.ArtworkKind == ArtworkKind.Thumbnail);
-        if (incomingThumbnail != null)
+        using (ScanProfiler.Measure("DB Ep Upd Save"))
         {
-            Artwork thumbnail = metadata.Artwork.FirstOrDefault(a => a.ArtworkKind == ArtworkKind.Thumbnail);
-            if (thumbnail == null)
+            // library path is used for search indexing later
+            incoming.LibraryPathId = existing.LibraryPathId;
+            incoming.Id = existing.Id;
+
+            // metadata
+            // TODO: multiple metadata?
+            EpisodeMetadata metadata = existing.EpisodeMetadata.Head();
+            EpisodeMetadata incomingMetadata = incoming.EpisodeMetadata.Head();
+            metadata.Title = incomingMetadata.Title;
+            metadata.SortTitle = incomingMetadata.SortTitle;
+            metadata.Plot = incomingMetadata.Plot;
+            metadata.Year = incomingMetadata.Year;
+            metadata.DateAdded = incomingMetadata.DateAdded;
+            metadata.DateUpdated = DateTime.UtcNow;
+            metadata.ReleaseDate = incomingMetadata.ReleaseDate;
+            metadata.EpisodeNumber = incomingMetadata.EpisodeNumber;
+
+            // thumbnail
+            Artwork incomingThumbnail =
+                incomingMetadata.Artwork.FirstOrDefault(a => a.ArtworkKind == ArtworkKind.Thumbnail);
+            if (incomingThumbnail != null)
             {
-                thumbnail = new Artwork { ArtworkKind = ArtworkKind.Thumbnail };
-                metadata.Artwork.Add(thumbnail);
+                Artwork thumbnail = metadata.Artwork.FirstOrDefault(a => a.ArtworkKind == ArtworkKind.Thumbnail);
+                if (thumbnail == null)
+                {
+                    thumbnail = new Artwork { ArtworkKind = ArtworkKind.Thumbnail };
+                    metadata.Artwork.Add(thumbnail);
+                }
+
+                thumbnail.Path = incomingThumbnail.Path;
+                thumbnail.DateAdded = incomingThumbnail.DateAdded;
+                thumbnail.DateUpdated = incomingThumbnail.DateUpdated;
             }
 
-            thumbnail.Path = incomingThumbnail.Path;
-            thumbnail.DateAdded = incomingThumbnail.DateAdded;
-            thumbnail.DateUpdated = incomingThumbnail.DateUpdated;
+            // directors
+            foreach (Director director in metadata.Directors
+                         .Filter(d => incomingMetadata.Directors.All(d2 => d2.Name != d.Name))
+                         .ToList())
+            {
+                metadata.Directors.Remove(director);
+            }
+
+            foreach (Director director in incomingMetadata.Directors
+                         .Filter(d => metadata.Directors.All(d2 => d2.Name != d.Name))
+                         .ToList())
+            {
+                metadata.Directors.Add(director);
+            }
+
+            // writers
+            foreach (Writer writer in metadata.Writers
+                         .Filter(w => incomingMetadata.Writers.All(w2 => w2.Name != w.Name))
+                         .ToList())
+            {
+                metadata.Writers.Remove(writer);
+            }
+
+            foreach (Writer writer in incomingMetadata.Writers
+                         .Filter(w => metadata.Writers.All(w2 => w2.Name != w.Name))
+                         .ToList())
+            {
+                metadata.Writers.Add(writer);
+            }
+
+            // guids
+            foreach (MetadataGuid guid in metadata.Guids
+                         .Filter(g => incomingMetadata.Guids.All(g2 => g2.Guid != g.Guid))
+                         .ToList())
+            {
+                metadata.Guids.Remove(guid);
+            }
+
+            foreach (MetadataGuid guid in incomingMetadata.Guids
+                         .Filter(g => metadata.Guids.All(g2 => g2.Guid != g.Guid))
+                         .ToList())
+            {
+                metadata.Guids.Add(guid);
+            }
+
+            // genres
+            foreach (Genre genre in metadata.Genres
+                         .Filter(g => incomingMetadata.Genres.All(g2 => g2.Name != g.Name))
+                         .ToList())
+            {
+                metadata.Genres.Remove(genre);
+            }
+
+            foreach (Genre genre in incomingMetadata.Genres
+                         .Filter(g => metadata.Genres.All(g2 => g2.Name != g.Name))
+                         .ToList())
+            {
+                metadata.Genres.Add(genre);
+            }
+
+            // tags
+            foreach (Tag tag in metadata.Tags
+                         .Filter(g => incomingMetadata.Tags.All(g2 => g2.Name != g.Name))
+                         .Filter(g => g.ExternalCollectionId is null)
+                         .ToList())
+            {
+                metadata.Tags.Remove(tag);
+            }
+
+            foreach (Tag tag in incomingMetadata.Tags
+                         .Filter(g => metadata.Tags.All(g2 => g2.Name != g.Name))
+                         .ToList())
+            {
+                metadata.Tags.Add(tag);
+            }
+
+            var paths = incomingMetadata.Artwork.Map(a => a.Path).ToList();
+            foreach (Artwork artworkToRemove in metadata.Artwork
+                         .Filter(a => !paths.Contains(a.Path))
+                         .ToList())
+            {
+                metadata.Artwork.Remove(artworkToRemove);
+            }
+
+            // version
+            MediaVersion version = existing.MediaVersions.Head();
+            MediaVersion incomingVersion = incoming.MediaVersions.Head();
+            version.Name = incomingVersion.Name;
+            version.DateAdded = incomingVersion.DateAdded;
+
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+            // delete old chapters
+            await dbContext.MediaChapters
+                .TagWithCallSite()
+                .Where(c => c.MediaVersionId == version.Id)
+                .ExecuteDeleteAsync(cancellationToken);
+
+            // replace with new chapters
+            version.Chapters = incomingVersion.Chapters;
+            foreach (var ch in version.Chapters)
+            {
+                ch.MediaVersionId = version.Id;
+            }
+
+            // always update media file path (and hash)
+            MediaFile incomingFile = incomingVersion.MediaFiles.Head();
+            await dbContext.MediaFiles
+                .TagWithCallSite()
+                .Where(mf => mf.MediaVersionId == version.Id)
+                .ExecuteUpdateAsync(
+                    mf => mf.SetProperty(f => f.Path, incomingFile.Path)
+                        .SetProperty(f => f.PathHash, PathUtils.GetPathHash(incomingFile.Path)),
+                    cancellationToken);
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
         }
-
-        // directors
-        foreach (Director director in metadata.Directors
-                     .Filter(d => incomingMetadata.Directors.All(d2 => d2.Name != d.Name))
-                     .ToList())
-        {
-            metadata.Directors.Remove(director);
-        }
-
-        foreach (Director director in incomingMetadata.Directors
-                     .Filter(d => metadata.Directors.All(d2 => d2.Name != d.Name))
-                     .ToList())
-        {
-            metadata.Directors.Add(director);
-        }
-
-        // writers
-        foreach (Writer writer in metadata.Writers
-                     .Filter(w => incomingMetadata.Writers.All(w2 => w2.Name != w.Name))
-                     .ToList())
-        {
-            metadata.Writers.Remove(writer);
-        }
-
-        foreach (Writer writer in incomingMetadata.Writers
-                     .Filter(w => metadata.Writers.All(w2 => w2.Name != w.Name))
-                     .ToList())
-        {
-            metadata.Writers.Add(writer);
-        }
-
-        // guids
-        foreach (MetadataGuid guid in metadata.Guids
-                     .Filter(g => incomingMetadata.Guids.All(g2 => g2.Guid != g.Guid))
-                     .ToList())
-        {
-            metadata.Guids.Remove(guid);
-        }
-
-        foreach (MetadataGuid guid in incomingMetadata.Guids
-                     .Filter(g => metadata.Guids.All(g2 => g2.Guid != g.Guid))
-                     .ToList())
-        {
-            metadata.Guids.Add(guid);
-        }
-
-        // genres
-        foreach (Genre genre in metadata.Genres
-                     .Filter(g => incomingMetadata.Genres.All(g2 => g2.Name != g.Name))
-                     .ToList())
-        {
-            metadata.Genres.Remove(genre);
-        }
-
-        foreach (Genre genre in incomingMetadata.Genres
-                     .Filter(g => metadata.Genres.All(g2 => g2.Name != g.Name))
-                     .ToList())
-        {
-            metadata.Genres.Add(genre);
-        }
-
-        // tags
-        foreach (Tag tag in metadata.Tags
-                     .Filter(g => incomingMetadata.Tags.All(g2 => g2.Name != g.Name))
-                     .Filter(g => g.ExternalCollectionId is null)
-                     .ToList())
-        {
-            metadata.Tags.Remove(tag);
-        }
-
-        foreach (Tag tag in incomingMetadata.Tags
-                     .Filter(g => metadata.Tags.All(g2 => g2.Name != g.Name))
-                     .ToList())
-        {
-            metadata.Tags.Add(tag);
-        }
-
-        var paths = incomingMetadata.Artwork.Map(a => a.Path).ToList();
-        foreach (Artwork artworkToRemove in metadata.Artwork
-                     .Filter(a => !paths.Contains(a.Path))
-                     .ToList())
-        {
-            metadata.Artwork.Remove(artworkToRemove);
-        }
-
-        // version
-        MediaVersion version = existing.MediaVersions.Head();
-        MediaVersion incomingVersion = incoming.MediaVersions.Head();
-        version.Name = incomingVersion.Name;
-        version.DateAdded = incomingVersion.DateAdded;
-        version.Chapters = incomingVersion.Chapters;
-
-        // media file
-        MediaFile file = version.MediaFiles.Head();
-        MediaFile incomingFile = incomingVersion.MediaFiles.Head();
-        file.Path = incomingFile.Path;
-
-        await dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private static async Task<Either<BaseError, MediaItemScanResult<JellyfinShow>>> AddShow(

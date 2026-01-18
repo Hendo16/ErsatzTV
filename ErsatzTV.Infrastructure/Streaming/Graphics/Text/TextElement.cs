@@ -1,20 +1,16 @@
 using System.Text.RegularExpressions;
-using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Graphics;
+using ErsatzTV.Core.Interfaces.Streaming;
 using Microsoft.Extensions.Logging;
 using NCalc;
-using Scriban;
-using Scriban.Runtime;
 using SkiaSharp;
 using RichTextKit = Topten.RichTextKit;
 
 namespace ErsatzTV.Infrastructure.Streaming.Graphics;
 
 public partial class TextElement(
-    TemplateFunctions templateFunctions,
     GraphicsEngineFonts graphicsEngineFonts,
     TextGraphicsElement textElement,
-    Dictionary<string, object> variables,
     ILogger logger)
     : GraphicsElement, IDisposable
 {
@@ -25,6 +21,10 @@ public partial class TextElement(
     private Option<Expression> _maybeOpacityExpression;
     private float _opacity;
 
+    public override int ZIndex { get; } = textElement.ZIndex ?? 0;
+
+    public override string DebugKey { get; } = $"Text {textElement.DebugName()}";
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
@@ -33,11 +33,7 @@ public partial class TextElement(
         _image = null;
     }
 
-    public override async Task InitializeAsync(
-        Resolution squarePixelFrameSize,
-        Resolution frameSize,
-        int frameRate,
-        CancellationToken cancellationToken)
+    public override Task InitializeAsync(GraphicsEngineContext context, CancellationToken cancellationToken)
     {
         try
         {
@@ -51,8 +47,6 @@ public partial class TextElement(
             {
                 _opacity = (textElement.OpacityPercent ?? 100) / 100.0f;
             }
-
-            ZIndex = textElement.ZIndex ?? 0;
 
             if (!string.IsNullOrWhiteSpace(textElement.IncludeFontsFrom))
             {
@@ -68,16 +62,22 @@ public partial class TextElement(
                 }
             }
 
-            var scriptObject = new ScriptObject();
-            scriptObject.Import(variables, renamer: member => member.Name);
-            scriptObject.Import("convert_timezone", templateFunctions.ConvertTimeZone);
-            scriptObject.Import("format_datetime", templateFunctions.FormatDateTime);
+            RichTextKit.TextBlock textBlock = BuildTextBlock(textElement.Text);
 
-            var context = new TemplateContext { MemberRenamer = member => member.Name };
-            context.PushGlobal(scriptObject);
-            string textToRender = await Template.Parse(textElement.Text).RenderAsync(context);
+            if (textElement.WidthPercent.HasValue)
+            {
+                var maxWidth = (float)Math.Round(textElement.WidthPercent.Value / 100.0 * context.FrameSize.Width);
 
-            RichTextKit.TextBlock textBlock = BuildTextBlock(textToRender);
+                switch (textElement.Fit)
+                {
+                    case TextFit.Wrap:
+                        textBlock.MaxWidth = maxWidth;
+                        break;
+                    case TextFit.Scale:
+                        FitTextBlock(textBlock, maxWidth);
+                        break;
+                }
+            }
 
             _image = new SKBitmap(
                 (int)Math.Ceiling(textBlock.MeasuredWidth),
@@ -89,13 +89,14 @@ public partial class TextElement(
             }
 
             var horizontalMargin =
-                (int)Math.Round((textElement.HorizontalMarginPercent ?? 0) / 100.0 * frameSize.Width);
-            var verticalMargin = (int)Math.Round((textElement.VerticalMarginPercent ?? 0) / 100.0 * frameSize.Height);
+                (int)Math.Round((textElement.HorizontalMarginPercent ?? 0) / 100.0 * context.FrameSize.Width);
+            var verticalMargin =
+                (int)Math.Round((textElement.VerticalMarginPercent ?? 0) / 100.0 * context.FrameSize.Height);
 
             _location = CalculatePosition(
                 textElement.Location,
-                frameSize.Width,
-                frameSize.Height,
+                context.FrameSize.Width,
+                context.FrameSize.Height,
                 _image.Width,
                 _image.Height,
                 horizontalMargin,
@@ -103,9 +104,11 @@ public partial class TextElement(
         }
         catch (Exception ex)
         {
-            IsFailed = true;
+            IsFinished = true;
             logger.LogWarning(ex, "Failed to initialize text element; will disable for this content");
         }
+
+        return Task.CompletedTask;
     }
 
     public override ValueTask<Option<PreparedElementImage>> PrepareImage(
@@ -128,12 +131,22 @@ public partial class TextElement(
 
         return opacity == 0
             ? ValueTask.FromResult(Option<PreparedElementImage>.None)
-            : new ValueTask<Option<PreparedElementImage>>(new PreparedElementImage(_image, _location, opacity, false));
+            : new ValueTask<Option<PreparedElementImage>>(new PreparedElementImage(_image, _location, opacity, ZIndex, false));
     }
 
     private RichTextKit.TextBlock BuildTextBlock(string textToRender)
     {
-        var textBlock = new RichTextKit.TextBlock { FontMapper = graphicsEngineFonts.Mapper };
+        var textBlock = new RichTextKit.TextBlock
+        {
+            FontMapper = graphicsEngineFonts.Mapper,
+            Alignment = textElement.Align switch
+            {
+                TextAlignment.Center => RichTextKit.TextAlignment.Center,
+                TextAlignment.Right => RichTextKit.TextAlignment.Right,
+                TextAlignment.Left => RichTextKit.TextAlignment.Left,
+                _ => RichTextKit.TextAlignment.Auto
+            }
+        };
 
         (Dictionary<string, RichTextKit.Style> styles, RichTextKit.Style baseStyle) = BuildTextStyles();
 
@@ -191,6 +204,7 @@ public partial class TextElement(
             finalStyle.FontSize = s.FontSize ?? finalStyle.FontSize;
             finalStyle.FontWeight = s.FontWeight ?? finalStyle.FontWeight;
             finalStyle.LetterSpacing = s.LetterSpacing ?? finalStyle.LetterSpacing;
+            finalStyle.LineHeight = s.LineHeight ?? finalStyle.LineHeight;
 
             if (s.TextColor != null && SKColor.TryParse(s.TextColor, out SKColor parsedColor))
             {
@@ -211,6 +225,21 @@ public partial class TextElement(
                 TextColor = SKColor.TryParse(def.TextColor, out SKColor color) ? color : SKColors.White
             };
 
+            if (SKColor.TryParse(def.HaloColor, out SKColor parsedHaloColor))
+            {
+                style.HaloColor = parsedHaloColor;
+            }
+
+            foreach (float haloWidth in Optional(def.HaloWidth))
+            {
+                style.HaloWidth = haloWidth;
+            }
+
+            foreach (float haloBlur in Optional(def.HaloBlur))
+            {
+                style.HaloBlur = haloBlur;
+            }
+
             foreach (float fontSize in Optional(def.FontSize))
             {
                 style.FontSize = fontSize;
@@ -226,9 +255,74 @@ public partial class TextElement(
                 style.LetterSpacing = letterSpacing;
             }
 
+            foreach (float lineHeight in Optional(def.LineHeight))
+            {
+                style.LineHeight = lineHeight;
+            }
+
             return style;
         }
     }
+
+    private static void FitTextBlock(RichTextKit.TextBlock block, float maxWidth)
+    {
+        if (block.MeasuredWidth <= maxWidth)
+        {
+            return;
+        }
+
+        var originalContent = block.StyleRuns
+            .Select(run => (run.ToString(), run.Style))
+            .ToList();
+
+        float scale = maxWidth / block.MeasuredWidth;
+
+        const float MIN_FONT_SIZE = 5.0f;
+
+        while (true)
+        {
+            block.Clear();
+            var isAtMinSize = false;
+
+            foreach ((string text, RichTextKit.IStyle style) in originalContent)
+            {
+                var newStyle = new RichTextKit.Style
+                {
+                    FontFamily = style.FontFamily,
+                    FontItalic = style.FontItalic,
+                    FontSize = style.FontSize,
+                    FontWidth = style.FontWidth,
+                    FontWeight = style.FontWeight,
+                    LetterSpacing = style.LetterSpacing,
+                    TextColor = style.TextColor
+                };
+
+                float newSize = newStyle.FontSize * scale;
+
+                if (newSize < MIN_FONT_SIZE)
+                {
+                    newSize = MIN_FONT_SIZE;
+                    isAtMinSize = true;
+                }
+
+                newStyle.FontSize = newSize;
+                block.AddText(text, newStyle);
+            }
+
+            if (block.MeasuredWidth <= maxWidth)
+            {
+                break;
+            }
+
+            if (isAtMinSize)
+            {
+                break;
+            }
+
+            scale -= 0.01f;
+        }
+    }
+
 
     [GeneratedRegex(@"\[(\w+)\](.*?)\[/\1\]")]
     private static partial Regex StyleRegex();

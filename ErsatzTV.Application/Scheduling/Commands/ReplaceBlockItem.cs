@@ -4,11 +4,15 @@ namespace ErsatzTV.Application.Scheduling;
 
 public record ReplaceBlockItem(
     int Index,
-    ProgramScheduleItemCollectionType CollectionType,
+    CollectionType CollectionType,
     int? CollectionId,
     int? MultiCollectionId,
     int? SmartCollectionId,
     int? MediaItemId,
+    string SearchTitle,
+    string SearchQuery,
     PlaybackOrder PlaybackOrder,
     bool IncludeInProgramGuide,
-    bool DisableWatermarks);
+    bool DisableWatermarks,
+    List<int> WatermarkIds,
+    List<int> GraphicsElementIds);

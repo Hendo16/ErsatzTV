@@ -1,3 +1,4 @@
+using System.IO.Abstractions;
 using Bugsnag;
 using Bugsnag.Payload;
 using Dapper;
@@ -11,16 +12,16 @@ using ErsatzTV.Core.Interfaces.Jellyfin;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.Interfaces.Repositories.Caching;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Metadata;
 using ErsatzTV.Core.Plex;
 using ErsatzTV.Core.Search;
+using ErsatzTV.FFmpeg.Capabilities;
 using ErsatzTV.FFmpeg.Runtime;
+using ErsatzTV.Infrastructure;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Data.Repositories;
-using ErsatzTV.Infrastructure.Data.Repositories.Caching;
 using ErsatzTV.Infrastructure.Emby;
 using ErsatzTV.Infrastructure.Images;
 using ErsatzTV.Infrastructure.Jellyfin;
@@ -29,8 +30,10 @@ using ErsatzTV.Infrastructure.Plex;
 using ErsatzTV.Infrastructure.Runtime;
 using ErsatzTV.Infrastructure.Search;
 using ErsatzTV.Infrastructure.Sqlite.Data;
+using ErsatzTV.Scanner.Core;
 using ErsatzTV.Scanner.Core.Emby;
 using ErsatzTV.Scanner.Core.FFmpeg;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.FFmpeg;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata.Nfo;
@@ -46,6 +49,7 @@ using Microsoft.IO;
 using Serilog;
 using Serilog.Events;
 using Serilog.Formatting.Compact;
+using Testably.Abstractions;
 using Exception = System.Exception;
 using IConfiguration = Bugsnag.IConfiguration;
 
@@ -58,6 +62,7 @@ public class Program
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Error)
+            .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
             .Enrich.FromLogContext()
             .WriteTo.Console(new CompactJsonFormatter(), standardErrorFromLevel: LogEventLevel.Debug)
             .CreateLogger();
@@ -166,6 +171,10 @@ public class Program
                     TvContext.CaseInsensitiveCollation = "utf8mb4_general_ci";
                 }
 
+                services.AddHttpClient();
+
+                services.AddHttpClient("RefitCustomClient").AddHttpMessageHandler<SlowApiHandler>();
+
                 services.AddScoped<IConfigElementRepository, ConfigElementRepository>();
                 services.AddScoped<IMetadataRepository, MetadataRepository>();
                 services.AddScoped<IMediaSourceRepository, MediaSourceRepository>();
@@ -181,7 +190,7 @@ public class Program
                 services.AddScoped<IRemoteStreamRepository, RemoteStreamRepository>();
                 services.AddScoped<ILibraryRepository, LibraryRepository>();
                 services.AddScoped<ISearchRepository, SearchRepository>();
-                services.AddScoped<ICachingSearchRepository, CachingSearchRepository>();
+                services.AddScoped<ILanguageCodeService, LanguageCodeService>();
                 services.AddScoped<ILocalMetadataProvider, LocalMetadataProvider>();
                 services.AddScoped<IFallbackMetadataProvider, FallbackMetadataProvider>();
                 services.AddScoped<ILocalStatisticsProvider, LocalStatisticsProvider>();
@@ -206,6 +215,7 @@ public class Program
                 services.AddScoped<IFillerNfoReader, FillerNfoReader>();
                 services.AddScoped<IFFmpegPngService, FFmpegPngService>();
                 services.AddScoped<IRuntimeInfo, RuntimeInfo>();
+                services.AddScoped<IHardwareCapabilitiesFactory, HardwareCapabilitiesFactory>();
 
                 services.AddScoped<IPlexMovieLibraryScanner, PlexMovieLibraryScanner>();
                 services.AddScoped<IPlexOtherVideoLibraryScanner, PlexOtherVideoLibraryScanner>();
@@ -217,6 +227,7 @@ public class Program
                 services.AddScoped<IPlexMovieRepository, PlexMovieRepository>();
                 services.AddScoped<IPlexOtherVideoRepository, PlexOtherVideoRepository>();
                 services.AddScoped<IPlexTelevisionRepository, PlexTelevisionRepository>();
+                services.AddScoped<IPlexMetadataRepository, PlexMetadataRepository>();
                 services.AddScoped<IPlexPathReplacementService, PlexPathReplacementService>();
                 services.AddScoped<PlexEtag>();
 
@@ -248,6 +259,13 @@ public class Program
                 services.AddSingleton<RecyclableMemoryStreamManager>();
                 // TODO: real bugsnag?
                 services.AddSingleton<IClient>(_ => new BugsnagNoopClient());
+                services.AddSingleton<IScannerProxy, ScannerProxy>();
+                services.AddSingleton<ILanguageCodeCache, LanguageCodeCache>();
+
+                services.AddSingleton<IFileSystem, RealFileSystem>();
+
+                services.AddTransient<SlowApiHandler>();
+                services.AddTransient<SlowQueryInterceptor>();
 
                 services.AddMediatR(config => config.RegisterServicesFromAssemblyContaining<Worker>());
                 services.AddMemoryCache();

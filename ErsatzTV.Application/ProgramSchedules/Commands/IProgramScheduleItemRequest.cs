@@ -7,14 +7,21 @@ public interface IProgramScheduleItemRequest
 {
     TimeSpan? StartTime { get; }
     FixedStartTimeBehavior? FixedStartTimeBehavior { get; }
-    ProgramScheduleItemCollectionType CollectionType { get; }
+    CollectionType CollectionType { get; }
     int? CollectionId { get; }
     int? MultiCollectionId { get; }
     int? SmartCollectionId { get; }
+    int? RerunCollectionId { get; }
     int? MediaItemId { get; }
     int? PlaylistId { get; }
+    string SearchTitle { get; }
+    string SearchQuery { get; }
     PlayoutMode PlayoutMode { get; }
     PlaybackOrder PlaybackOrder { get; }
+    MarathonGroupBy MarathonGroupBy { get; }
+    bool MarathonShuffleGroups { get; }
+    bool MarathonShuffleItems { get; }
+    int? MarathonBatchSize { get; }
     FillWithGroupMode FillWithGroupMode { get; }
     MultipleMode MultipleMode { get; }
     int? MultipleCount { get; }
@@ -29,6 +36,7 @@ public interface IProgramScheduleItemRequest
     int? TailFillerId { get; }
     int? FallbackFillerId { get; }
     List<int> WatermarkIds { get; }
+    List<int> GraphicsElementIds { get; }
     string PreferredAudioLanguageCode { get; }
     string PreferredAudioTitle { get; }
     string PreferredSubtitleLanguageCode { get; }

@@ -10,8 +10,10 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Core.Iptv;
 using ErsatzTV.Extensions;
+using ErsatzTV.FFmpeg;
 using ErsatzTV.Filters;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -21,7 +23,7 @@ namespace ErsatzTV.Controllers;
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
 [ServiceFilter(typeof(ConditionalIptvAuthorizeFilter))]
-public class IptvController : ControllerBase
+public class IptvController : StreamingControllerBase
 {
     private readonly IFFmpegSegmenterService _ffmpegSegmenterService;
     private readonly ILogger<IptvController> _logger;
@@ -29,8 +31,10 @@ public class IptvController : ControllerBase
 
     public IptvController(
         IMediator mediator,
+        IGraphicsEngine graphicsEngine,
         ILogger<IptvController> logger,
         IFFmpegSegmenterService ffmpegSegmenterService)
+        : base(graphicsEngine, logger)
     {
         _mediator = mediator;
         _logger = logger;
@@ -205,9 +209,6 @@ public class IptvController : ControllerBase
                     case StreamingMode.HttpLiveStreamingSegmenter:
                         mode = "segmenter";
                         break;
-                    case StreamingMode.HttpLiveStreamingSegmenterV2:
-                        mode = "segmenter-v2";
-                        break;
                     default:
                         return Redirect($"~/iptv/channel/{channelNumber}.ts{AccessTokenQuery()}");
                 }
@@ -218,13 +219,14 @@ public class IptvController : ControllerBase
         {
             case "segmenter":
             case "segmenter-v2":
+            case "segmenter-fmp4":
                 _logger.LogDebug(
                     "Maybe starting ffmpeg session for channel {Channel}, mode {Mode}",
                     channelNumber,
                     mode);
                 var request = new StartFFmpegSession(channelNumber, mode, Request.Scheme, Request.Host.ToString());
                 Either<BaseError, Unit> result = await _mediator.Send(request);
-                string multiVariantPlaylist = await GetMultiVariantPlaylist(channelNumber, mode);
+                string multiVariantPlaylist = await GetMultiVariantPlaylist(channelNumber);
                 return result.Match<IActionResult>(
                     _ =>
                     {
@@ -280,52 +282,78 @@ public class IptvController : ControllerBase
             Right: r => new PhysicalFileResult(r.FileName, r.MimeType));
     }
 
-    private async Task<string> GetMultiVariantPlaylist(string channelNumber, string mode)
+    [HttpGet("iptv/hls-direct/{channelNumber}")]
+    [HttpGet("iptv/hls-direct/{channelNumber}.ts")]
+    [HttpGet("iptv/hls-direct/{channelNumber}.mkv")]
+    [HttpGet("iptv/hls-direct/{channelNumber}.mp4")]
+    public async Task<IActionResult> GetStream(string channelNumber) =>
+        await GetHlsDirectStream(channelNumber);
+
+    private async Task<string> GetMultiVariantPlaylist(string channelNumber)
     {
-        string file = mode switch
-        {
-            // this serves the unmodified playlist from disk
-            "segmenter-v2" => "live.m3u8",
-
-            _ => "hls.m3u8"
-        };
-
         var variantPlaylist =
-            $"{Request.Scheme}://{Request.Host}/iptv/session/{channelNumber}/{file}{AccessTokenQuery()}";
+            $"{Request.Scheme}://{Request.Host}{Request.PathBase}/iptv/session/{channelNumber}/hls.m3u8{AccessTokenQuery()}";
 
-        try
-        {
-            if (mode == "segmenter-v2")
-            {
-                string fileName = Path.Combine(FileSystemLayout.TranscodeFolder, channelNumber, "playlist.m3u8");
-                if (System.IO.File.Exists(fileName))
-                {
-                    string text = await System.IO.File.ReadAllTextAsync(fileName, Encoding.UTF8);
-                    return text.Replace("live.m3u8", variantPlaylist);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to return ffmpeg multi-variant playlist; falling back to generated playlist");
-        }
-
-        Option<ResolutionAndBitrateViewModel> maybeResolutionAndBitrate =
-            await _mediator.Send(new GetChannelResolutionAndBitrate(channelNumber));
+        Option<ChannelStreamingSpecsViewModel> maybeStreamingSpecs =
+            await _mediator.Send(new GetChannelStreamingSpecs(channelNumber));
         string resolution = string.Empty;
         var bitrate = "10000000";
-        foreach (ResolutionAndBitrateViewModel res in maybeResolutionAndBitrate)
+        foreach (ChannelStreamingSpecsViewModel streamingSpecs in maybeStreamingSpecs)
         {
-            resolution = $",RESOLUTION={res.Width}x{res.Height}";
-            bitrate = res.Bitrate.ToString(CultureInfo.InvariantCulture);
+            string videoCodec = streamingSpecs.VideoFormat switch
+            {
+                FFmpegProfileVideoFormat.Av1 => "av01.0.01M.08",
+                FFmpegProfileVideoFormat.Hevc => "hvc1.1.6.L93.B0",
+                FFmpegProfileVideoFormat.H264 => "avc1.4D4028",
+                _ => string.Empty
+            };
+
+            string audioCodec = streamingSpecs.AudioFormat switch
+            {
+                FFmpegProfileAudioFormat.Ac3 => "ac-3",
+                FFmpegProfileAudioFormat.Aac or FFmpegProfileAudioFormat.AacLatm => "mp4a.40.2",
+                _ => string.Empty
+            };
+
+            List<string> codecStrings = [];
+            if (!string.IsNullOrWhiteSpace(videoCodec))
+            {
+                codecStrings.Add(videoCodec);
+            }
+
+            if (!string.IsNullOrWhiteSpace(audioCodec))
+            {
+                codecStrings.Add(audioCodec);
+            }
+
+            string codecs = codecStrings.Count > 0 ? $",CODECS=\"{string.Join(",", codecStrings)}\"" : string.Empty;
+            resolution = $",RESOLUTION={streamingSpecs.Width}x{streamingSpecs.Height}{codecs}";
+            bitrate = streamingSpecs.Bitrate.ToString(CultureInfo.InvariantCulture);
         }
 
         return $@"#EXTM3U
 #EXT-X-VERSION:3
 #EXT-X-STREAM-INF:BANDWIDTH={bitrate}{resolution}
 {variantPlaylist}";
+    }
+
+    private async Task<IActionResult> GetHlsDirectStream(string channelNumber)
+    {
+        var request = new GetPlayoutItemProcessByChannelNumber(
+            channelNumber,
+            StreamingMode.HttpLiveStreamingDirect,
+            DateTimeOffset.Now,
+            false,
+            true,
+            DateTimeOffset.Now,
+            TimeSpan.Zero,
+            Option<FrameRate>.None,
+            IsTroubleshooting: false,
+            Option<int>.None);
+
+        Either<BaseError, PlayoutItemProcessModel> result = await _mediator.Send(request);
+
+        return GetProcessResponse(result, channelNumber, StreamingMode.HttpLiveStreamingDirect);
     }
 
     private string AccessTokenQuery() => string.IsNullOrWhiteSpace(Request.Query["access_token"])

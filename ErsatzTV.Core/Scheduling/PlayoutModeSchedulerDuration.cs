@@ -1,18 +1,16 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using LanguageExt.UnsafeValueAccess;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Core.Scheduling;
 
-public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramScheduleItemDuration>
+public class PlayoutModeSchedulerDuration(ILogger logger)
+    : PlayoutModeSchedulerBase<ProgramScheduleItemDuration>(logger)
 {
-    public PlayoutModeSchedulerDuration(ILogger logger) : base(logger)
-    {
-    }
-
-    public override Tuple<PlayoutBuilderState, List<PlayoutItem>> Schedule(
+    public override PlayoutSchedulerResult Schedule(
         PlayoutBuilderState playoutBuilderState,
         Dictionary<CollectionKey, IMediaCollectionEnumerator> collectionEnumerators,
         ProgramScheduleItemDuration scheduleItem,
@@ -20,6 +18,8 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
         DateTimeOffset hardStop,
         CancellationToken cancellationToken)
     {
+        var warnings = new PlayoutBuildWarnings();
+
         // Logger.LogDebug(
         //     "DurationSchedule: {ItemId} {CurrentTime} {DurationFinish} {InDurationFiller} {HardStop}",
         //     scheduleItem.Id,
@@ -74,7 +74,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
 
             durationUntil = nextState.DurationFinish;
 
-            TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+            TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
             List<MediaChapter> itemChapters = ChaptersForMediaItem(mediaItem);
 
             if (itemDuration > scheduleItem.PlayoutDuration)
@@ -110,7 +110,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                     itemDuration,
                     scheduleItem.PlayoutDuration);
 
-                contentEnumerator.MoveNext();
+                contentEnumerator.MoveNext(Option<DateTimeOffset>.None);
                 continue;
             }
 
@@ -137,7 +137,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                         itemDuration,
                         remainingDuration);
 
-                    contentEnumerator.MoveNext();
+                    contentEnumerator.MoveNext(Option<DateTimeOffset>.None);
                 }
             }
             else
@@ -162,7 +162,8 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                     PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                     PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
                     SubtitleMode = scheduleItem.SubtitleMode,
-                    PlayoutItemWatermarks = []
+                    PlayoutItemWatermarks = [],
+                    PlayoutItemGraphicsElements = []
                 };
 
                 foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
@@ -173,6 +174,17 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                         {
                             PlayoutItem = playoutItem,
                             WatermarkId = programScheduleItemWatermark.WatermarkId
+                        });
+                }
+
+                foreach (ProgramScheduleItemGraphicsElement programScheduleItemGraphicsElement in scheduleItem
+                             .ProgramScheduleItemGraphicsElements ?? [])
+                {
+                    playoutItem.PlayoutItemGraphicsElements.Add(
+                        new PlayoutItemGraphicsElement
+                        {
+                            PlayoutItem = playoutItem,
+                            GraphicsElementId = programScheduleItemGraphicsElement.GraphicsElementId
                         });
                 }
 
@@ -192,7 +204,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                     scheduleItem,
                     playoutItem,
                     itemChapters,
-                    false,
+                    warnings,
                     cancellationToken);
 
                 // foreach (PlayoutItem pi in maybePlayoutItems.OrderBy(pi => pi.StartOffset))
@@ -223,7 +235,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                             : nextState.NextGuideGroup
                     };
 
-                    contentEnumerator.MoveNext();
+                    contentEnumerator.MoveNext(itemStartTime);
                 }
                 else
                 {
@@ -281,6 +293,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                             scheduleItem,
                             playoutItems,
                             nextItemStart,
+                            warnings,
                             cancellationToken);
                     }
 
@@ -335,6 +348,6 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
 
         nextState = nextState with { NextGuideGroup = nextState.IncrementGuideGroup };
 
-        return Tuple(nextState, playoutItems);
+        return new PlayoutSchedulerResult(nextState, playoutItems, warnings);
     }
 }

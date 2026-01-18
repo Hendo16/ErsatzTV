@@ -19,6 +19,7 @@ public abstract class ImageElementBase : GraphicsElement, IDisposable
     private readonly List<double> _frameDelays = [];
     private readonly List<SKBitmap> _scaledFrames = [];
     private double _animatedDurationSeconds;
+    private ushort _repeatCount;
 
     private Image _sourceImage;
 
@@ -82,6 +83,11 @@ public abstract class ImageElementBase : GraphicsElement, IDisposable
             scaledHeight,
             horizontalMargin,
             verticalMargin);
+
+        if (_sourceImage.Metadata.DecodedImageFormat == GifFormat.Instance)
+        {
+            _repeatCount = _sourceImage.Metadata.GetFormatMetadata(GifFormat.Instance).RepeatCount;
+        }
 
         _animatedDurationSeconds = 0;
 
@@ -161,6 +167,11 @@ public abstract class ImageElementBase : GraphicsElement, IDisposable
             return _scaledFrames[0];
         }
 
+        if (_repeatCount > 0 && timestamp.TotalSeconds >= _animatedDurationSeconds * _repeatCount)
+        {
+            return _scaledFrames.Last();
+        }
+
         double currentTime = timestamp.TotalSeconds % _animatedDurationSeconds;
 
         double frameTime = 0;
@@ -175,36 +186,4 @@ public abstract class ImageElementBase : GraphicsElement, IDisposable
 
         return _scaledFrames.Last();
     }
-
-    private static WatermarkMargins NormalMargins(
-        Resolution frameSize,
-        double horizontalMarginPercent,
-        double verticalMarginPercent)
-    {
-        double horizontalMargin = Math.Round(horizontalMarginPercent / 100.0 * frameSize.Width);
-        double verticalMargin = Math.Round(verticalMarginPercent / 100.0 * frameSize.Height);
-
-        return new WatermarkMargins((int)Math.Round(horizontalMargin), (int)Math.Round(verticalMargin));
-    }
-
-    private static WatermarkMargins SourceContentMargins(
-        Resolution squarePixelFrameSize,
-        Resolution frameSize,
-        double horizontalMarginPercent,
-        double verticalMarginPercent)
-    {
-        int horizontalPadding = frameSize.Width - squarePixelFrameSize.Width;
-        int verticalPadding = frameSize.Height - squarePixelFrameSize.Height;
-
-        double horizontalMargin = Math.Round(
-            horizontalMarginPercent / 100.0 * squarePixelFrameSize.Width
-            + horizontalPadding / 2.0);
-        double verticalMargin = Math.Round(
-            verticalMarginPercent / 100.0 * squarePixelFrameSize.Height
-            + verticalPadding / 2.0);
-
-        return new WatermarkMargins((int)Math.Round(horizontalMargin), (int)Math.Round(verticalMargin));
-    }
-
-    private sealed record WatermarkMargins(int HorizontalMargin, int VerticalMargin);
 }

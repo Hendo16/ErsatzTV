@@ -1,6 +1,7 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
 using Microsoft.Extensions.Logging;
@@ -110,7 +111,7 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
 
             foreach (MediaItem mediaItem in enumerator.Current)
             {
-                TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
 
                 var playoutItem = new PlayoutItem
                 {
@@ -171,13 +172,13 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                     remainingToFill -= itemDuration;
                     context.CurrentTime += itemDuration;
 
-                    enumerator.MoveNext();
+                    enumerator.MoveNext(playoutItem.StartOffset);
                 }
                 else if (discardAttempts > 0)
                 {
                     // item won't fit; try the next one
                     discardAttempts--;
-                    enumerator.MoveNext();
+                    enumerator.MoveNext(Option<DateTimeOffset>.None);
                 }
                 else if (trim)
                 {
@@ -205,7 +206,7 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                     remainingToFill = TimeSpan.Zero;
                     context.CurrentTime = targetTime;
 
-                    enumerator.MoveNext();
+                    enumerator.MoveNext(playoutItem.StartOffset);
                 }
                 else if (fallbackEnumerator.IsSome)
                 {
@@ -238,7 +239,7 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                                 context.AddedHistory.Add(history);
                             }
 
-                            fallback.MoveNext();
+                            fallback.MoveNext(playoutItem.StartOffset);
                         }
                     }
                 }

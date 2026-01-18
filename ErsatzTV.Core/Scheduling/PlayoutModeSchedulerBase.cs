@@ -10,14 +10,14 @@ using Microsoft.Extensions.Logging;
 namespace ErsatzTV.Core.Scheduling;
 
 [SuppressMessage("Design", "CA1000:Do not declare static members on generic types")]
-public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> where T : ProgramScheduleItem
+public abstract class PlayoutModeSchedulerBase<T>(ILogger logger) : IPlayoutModeScheduler<T>
+    where T : ProgramScheduleItem
 {
     private readonly Random _random = new();
 
-    protected PlayoutModeSchedulerBase(ILogger logger) => Logger = logger;
-    protected ILogger Logger { get; }
+    protected ILogger Logger { get; } = logger;
 
-    public abstract Tuple<PlayoutBuilderState, List<PlayoutItem>> Schedule(
+    public abstract PlayoutSchedulerResult Schedule(
         PlayoutBuilderState playoutBuilderState,
         Dictionary<CollectionKey, IMediaCollectionEnumerator> collectionEnumerators,
         T scheduleItem,
@@ -44,30 +44,32 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
     public static DateTimeOffset GetStartTimeAfter(
         PlayoutBuilderState state,
         ProgramScheduleItem scheduleItem,
-        Option<ILogger> maybeLogger)
+        Option<ILogger> maybeLogger,
+        bool isPeek = false)
     {
         DateTimeOffset startTime = state.CurrentTime.ToLocalTime();
 
-        bool isIncomplete = scheduleItem is ProgramScheduleItemMultiple && state.MultipleRemaining.IsSome ||
-                            scheduleItem is ProgramScheduleItemDuration && state.DurationFinish.IsSome ||
-                            scheduleItem is ProgramScheduleItemFlood && state.InFlood ||
-                            scheduleItem is ProgramScheduleItemDuration && state.InDurationFiller;
+        bool isIncomplete = !isPeek &&
+                            (scheduleItem is ProgramScheduleItemMultiple && state.MultipleRemaining.IsSome ||
+                             scheduleItem is ProgramScheduleItemDuration && state.DurationFinish.IsSome ||
+                             scheduleItem is ProgramScheduleItemFlood && state.InFlood ||
+                             scheduleItem is ProgramScheduleItemDuration && state.InDurationFiller);
 
         if (scheduleItem.StartType == StartType.Fixed && !isIncomplete)
         {
             TimeSpan itemStartTime = scheduleItem.StartTime.GetValueOrDefault();
 
             DateTime date = startTime.Date;
-            DateTimeOffset result = new DateTimeOffset(
-                    date.Year,
-                    date.Month,
-                    date.Day,
-                    0,
-                    0,
-                    0,
-                    TimeZoneInfo.Local.GetUtcOffset(
-                        new DateTime(date.Year, date.Month, date.Day, 0, 0, 0, DateTimeKind.Local)))
-                .Add(itemStartTime);
+            var withStartTime = new DateTime(
+                date.Year,
+                date.Month,
+                date.Day,
+                0,
+                0,
+                0,
+                DateTimeKind.Unspecified).Add(itemStartTime);
+
+            DateTimeOffset result = new DateTimeOffset(withStartTime, TimeZoneInfo.Local.GetUtcOffset(withStartTime));
 
             // Serilog.Log.Logger.Debug(
             //     "StartTimeOfDay: {StartTimeOfDay} Item Start Time: {ItemStartTime}",
@@ -84,8 +86,14 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
             switch (fixedStartTimeBehavior)
             {
                 case FixedStartTimeBehavior.Flexible:
-                    // only wait for times on the same day
-                    if (result.Day == startTime.Day && result.TimeOfDay > startTime.TimeOfDay)
+                    // if we are peeking from a flood and the flexible time is in the past,
+                    // we should use the next day's time to allow the flood to continue.
+                    if (isPeek && state.InFlood && startTime > result)
+                    {
+                        startTime = result.AddDays(1);
+                    }
+                    // otherwise, only wait for times on the same day
+                    else if (result.Day == startTime.Day && result.TimeOfDay > startTime.TimeOfDay)
                     {
                         startTime = result;
                     }
@@ -122,6 +130,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         ProgramScheduleItem scheduleItem,
         List<PlayoutItem> playoutItems,
         DateTimeOffset nextItemStart,
+        PlayoutBuildWarnings warnings,
         CancellationToken cancellationToken)
     {
         var newItems = new List<PlayoutItem>(playoutItems);
@@ -136,16 +145,12 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
             {
                 MediaItem mediaItem = enumerator.Current.ValueUnsafe();
 
-                TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
                 TimeSpan inPoint = InPointForMediaItem(mediaItem);
 
                 if (nextState.CurrentTime + itemDuration > nextItemStart)
                 {
-                    Logger.LogDebug(
-                        "Filler with duration {Duration:hh\\:mm\\:ss} will go past next item start {NextItemStart}",
-                        itemDuration,
-                        nextItemStart);
-
+                    warnings.TailFillerTooLong++;
                     break;
                 }
 
@@ -170,7 +175,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                     CurrentTime = nextState.CurrentTime + itemDuration
                 };
 
-                enumerator.MoveNext();
+                enumerator.MoveNext(playoutItem.StartOffset);
             }
         }
 
@@ -215,30 +220,11 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                     CurrentTime = nextItemStart.UtcDateTime
                 };
 
-                enumerator.MoveNext();
+                enumerator.MoveNext(playoutItem.StartOffset);
             }
         }
 
         return Tuple(nextState, newItems);
-    }
-
-    protected static TimeSpan DurationForMediaItem(MediaItem mediaItem)
-    {
-        if (mediaItem is Image image)
-        {
-            return TimeSpan.FromSeconds(image.ImageMetadata.Head().DurationSeconds ?? Image.DefaultSeconds);
-        }
-
-        MediaVersion version = mediaItem.GetHeadVersion();
-
-        if (mediaItem is RemoteStream remoteStream)
-        {
-            return version.Duration == TimeSpan.Zero && remoteStream.Duration.HasValue
-                ? remoteStream.Duration.Value
-                : version.Duration;
-        }
-
-        return version.Duration;
     }
 
     private static TimeSpan InPointForMediaItem(MediaItem mediaItem) =>
@@ -286,7 +272,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         ProgramScheduleItem scheduleItem,
         PlayoutItem playoutItem,
         List<MediaChapter> chapters,
-        bool log,
+        PlayoutBuildWarnings warnings,
         CancellationToken cancellationToken)
     {
         var result = new List<PlayoutItem>();
@@ -323,8 +309,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         // convert mid-roll to post-roll if we have no chapters
         if (allFiller.Any(f => f.FillerKind is FillerKind.MidRoll) && effectiveChapters.Count == 0)
         {
-            Logger.LogInformation(
-                "Converting mid-roll filler preset to post-roll for content that has no chapter markers");
+            warnings.MidRollContentWithoutChapters++;
 
             var toRemove = allFiller.Filter(f => f.FillerKind is FillerKind.MidRoll).ToList();
             allFiller.RemoveAll(toRemove.Contains);
@@ -356,10 +341,10 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
             }
         }
 
-                // convert playlist filler
-        if (allFiller.Any(f => f.CollectionType is ProgramScheduleItemCollectionType.Playlist))
+        // convert playlist filler
+        if (allFiller.Any(f => f.CollectionType is CollectionType.Playlist))
         {
-            var toRemove = allFiller.Filter(f => f.CollectionType is ProgramScheduleItemCollectionType.Playlist)
+            var toRemove = allFiller.Filter(f => f.CollectionType is CollectionType.Playlist)
                 .ToList();
             allFiller.RemoveAll(toRemove.Contains);
 
@@ -383,7 +368,9 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                     SmartCollectionId = playlistFiller.SmartCollectionId,
                     SmartCollection = playlistFiller.SmartCollection,
                     PlaylistId = playlistFiller.PlaylistId,
-                    Playlist = playlistFiller.Playlist
+                    Playlist = playlistFiller.Playlist,
+                    Expression = playlistFiller.Expression,
+                    UseChaptersAsMediaItems = playlistFiller.UseChaptersAsMediaItems
                 };
 
                 // if filler count is 2, we need to schedule 2 * (number of items in one full playlist iteration)
@@ -412,8 +399,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             filler.Duration.Value,
                             scheduleItem.GuideMode == GuideMode.Filler ? FillerKind.GuideMode : FillerKind.PreRoll,
                             filler.AllowWatermarks,
-                            log,
-                            cancellationToken));
+                            warnings));
                     break;
                 case FillerMode.Count when filler.Count.HasValue:
                     IMediaCollectionEnumerator e2 = enumerators[CollectionKey.ForFillerPreset(filler)];
@@ -478,8 +464,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                                             ? FillerKind.GuideMode
                                             : FillerKind.MidRoll,
                                         filler.AllowWatermarks,
-                                        log,
-                                        cancellationToken));
+                                        warnings));
                             }
                         }
 
@@ -545,8 +530,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             filler.Duration.Value,
                             scheduleItem.GuideMode == GuideMode.Filler ? FillerKind.GuideMode : FillerKind.PostRoll,
                             filler.AllowWatermarks,
-                            log,
-                            cancellationToken));
+                            warnings));
                     break;
                 case FillerMode.Count when filler.Count.HasValue:
                     IMediaCollectionEnumerator e2 = enumerators[CollectionKey.ForFillerPreset(filler)];
@@ -640,8 +624,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             remainingToFill,
                             scheduleItem.GuideMode == GuideMode.Filler ? FillerKind.GuideMode : FillerKind.PreRoll,
                             padFiller.AllowWatermarks,
-                            log,
-                            cancellationToken));
+                            warnings));
                     totalDuration = TimeSpan.FromTicks(result.Sum(pi => (pi.Finish - pi.Start).Ticks));
                     remainingToFill = targetTime - totalDuration - playoutItem.StartOffset;
                     if (remainingToFill > TimeSpan.Zero)
@@ -666,8 +649,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             remainingToFill,
                             scheduleItem.GuideMode == GuideMode.Filler ? FillerKind.GuideMode : FillerKind.MidRoll,
                             padFiller.AllowWatermarks,
-                            log,
-                            cancellationToken));
+                            warnings));
                     TimeSpan average = filteredChapters.Count <= 1
                         ? remainingToFill
                         : remainingToFill / (filteredChapters.Count - 1);
@@ -730,8 +712,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                             remainingToFill,
                             scheduleItem.GuideMode == GuideMode.Filler ? FillerKind.GuideMode : FillerKind.PostRoll,
                             padFiller.AllowWatermarks,
-                            log,
-                            cancellationToken));
+                            warnings));
                     totalDuration = TimeSpan.FromTicks(result.Sum(pi => (pi.Finish - pi.Start).Ticks));
                     remainingToFill = targetTime - totalDuration - playoutItem.StartOffset;
                     if (remainingToFill > TimeSpan.Zero)
@@ -811,7 +792,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                         usedIds.Add((int)mappedFiller.FillerMetadata[0].MovieId);
                     }
                     result.Add(playoutItem);
-                    enumerator.MoveNext();
+                    enumerator.MoveNext(Option<DateTimeOffset>.None);
                     noDuplicate = true;
                 }
             }
@@ -820,14 +801,13 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         return result;
     }
 
-    private List<PlayoutItem> AddDurationFiller(
+    private static List<PlayoutItem> AddDurationFiller(
         PlayoutBuilderState playoutBuilderState,
         IMediaCollectionEnumerator enumerator,
         TimeSpan duration,
         FillerKind fillerKind,
         bool allowWatermarks,
-        bool log,
-        CancellationToken cancellationToken)
+        PlayoutBuildWarnings warnings)
     {
         var result = new List<PlayoutItem>();
 
@@ -837,7 +817,7 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
         {
             foreach (MediaItem mediaItem in enumerator.Current)
             {
-                TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
                 TimeSpan inPoint = InPointForMediaItem(mediaItem);
 
                 if (remainingToFill - itemDuration >= TimeSpan.Zero)
@@ -858,19 +838,16 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
 
                     remainingToFill -= itemDuration;
                     result.Add(playoutItem);
-                    enumerator.MoveNext();
+
+                    // TODO: this won't work with reruns
+                    enumerator.MoveNext(Option<DateTimeOffset>.None);
                 }
                 else
                 {
-                    if (log)
-                    {
-                        Logger.LogDebug(
-                            "Filler item is too long {FillerDuration:g} to fill {GapDuration:g}; skipping to next filler item",
-                            itemDuration,
-                            remainingToFill);
-                    }
+                    warnings.DurationFillerSkipped++;
 
-                    enumerator.MoveNext();
+                    // TODO: this won't work with reruns
+                    enumerator.MoveNext(Option<DateTimeOffset>.None);
                 }
             }
         }
@@ -905,7 +882,8 @@ public abstract class PlayoutModeSchedulerBase<T> : IPlayoutModeScheduler<T> whe
                     DisableWatermarks = !scheduleItem.FallbackFiller.AllowWatermarks
                 };
 
-                enumerator.MoveNext();
+                // TODO: this won't work with reruns
+                enumerator.MoveNext(Option<DateTimeOffset>.None);
 
                 return result;
             }

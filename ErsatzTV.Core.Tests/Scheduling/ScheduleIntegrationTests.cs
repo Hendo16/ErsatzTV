@@ -5,15 +5,14 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.Interfaces.Repositories.Caching;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Metadata;
 using ErsatzTV.Core.Scheduling;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Data.Repositories;
-using ErsatzTV.Infrastructure.Data.Repositories.Caching;
 using ErsatzTV.Infrastructure.Extensions;
+using ErsatzTV.Infrastructure.Metadata;
 using ErsatzTV.Infrastructure.Search;
 using ErsatzTV.Infrastructure.Sqlite.Data;
 using LanguageExt.UnsafeValueAccess;
@@ -25,6 +24,7 @@ using NUnit.Framework;
 using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
+using MockFileSystem = Testably.Abstractions.Testing.MockFileSystem;
 
 namespace ErsatzTV.Core.Tests.Scheduling;
 
@@ -86,11 +86,12 @@ public class ScheduleIntegrationTests
         services.AddSingleton((Func<IServiceProvider, ILoggerFactory>)(_ => new SerilogLoggerFactory()));
 
         services.AddScoped<ISearchRepository, SearchRepository>();
-        services.AddScoped<ICachingSearchRepository, CachingSearchRepository>();
+        services.AddScoped<ILanguageCodeService, LanguageCodeService>();
         services.AddScoped<IConfigElementRepository, ConfigElementRepository>();
         services.AddScoped<IFallbackMetadataProvider, FallbackMetadataProvider>();
 
         services.AddSingleton<ISearchIndex, LuceneSearchIndex>();
+        services.AddSingleton<ILanguageCodeCache, LanguageCodeCache>();
 
         services.AddSingleton(_ => Substitute.For<IClient>());
 
@@ -108,14 +109,16 @@ public class ScheduleIntegrationTests
         ISearchIndex searchIndex = provider.GetRequiredService<ISearchIndex>();
         await searchIndex.Initialize(
             new LocalFileSystem(
+                new MockFileSystem(),
                 provider.GetRequiredService<IClient>(),
                 provider.GetRequiredService<ILogger<LocalFileSystem>>()),
             provider.GetRequiredService<IConfigElementRepository>(),
             _cancellationToken);
 
         await searchIndex.Rebuild(
-            provider.GetRequiredService<ICachingSearchRepository>(),
+            provider.GetRequiredService<ISearchRepository>(),
             provider.GetRequiredService<IFallbackMetadataProvider>(),
+            provider.GetRequiredService<ILanguageCodeService>(),
             _cancellationToken);
 
         var builder = new PlayoutBuilder(
@@ -124,7 +127,8 @@ public class ScheduleIntegrationTests
             new TelevisionRepository(factory, provider.GetRequiredService<ILogger<TelevisionRepository>>()),
             new ArtistRepository(factory),
             Substitute.For<IMultiEpisodeShuffleCollectionEnumeratorFactory>(),
-            Substitute.For<ILocalFileSystem>(),
+            new MockFileSystem(),
+            Substitute.For<IRerunHelper>(),
             provider.GetRequiredService<ILogger<PlayoutBuilder>>());
 
         {
@@ -319,7 +323,8 @@ public class ScheduleIntegrationTests
             new TelevisionRepository(factory, provider.GetRequiredService<ILogger<TelevisionRepository>>()),
             new ArtistRepository(factory),
             Substitute.For<IMultiEpisodeShuffleCollectionEnumeratorFactory>(),
-            Substitute.For<ILocalFileSystem>(),
+            new MockFileSystem(),
+            Substitute.For<IRerunHelper>(),
             provider.GetRequiredService<ILogger<PlayoutBuilder>>());
 
         for (var i = 0; i <= 24 * 4; i++)
@@ -439,6 +444,9 @@ public class ScheduleIntegrationTests
             .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
             .ThenInclude(psi => psi.Watermark)
             .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemGraphicsElements)
+            .ThenInclude(psi => psi.GraphicsElement)
+            .Include(ps => ps.Items)
             .ThenInclude(psi => psi.Collection)
             .Include(ps => ps.Items)
             .ThenInclude(psi => psi.MediaItem)
@@ -461,6 +469,10 @@ public class ScheduleIntegrationTests
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
             .ThenInclude(psi => psi.Watermark)
+            .Include(a => a.ProgramSchedule)
+            .ThenInclude(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemGraphicsElements)
+            .ThenInclude(psi => psi.GraphicsElement)
             .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.Collection)
@@ -496,6 +508,7 @@ public class ScheduleIntegrationTests
             playoutTemplates,
             programSchedule,
             programScheduleAlternates,
-            playoutHistory);
+            playoutHistory,
+            TimeSpan.Zero);
     }
 }

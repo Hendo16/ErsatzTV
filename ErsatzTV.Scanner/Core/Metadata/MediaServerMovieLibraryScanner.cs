@@ -1,13 +1,13 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.MediaServer;
 using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
 
@@ -20,22 +20,22 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
     where TEtag : MediaServerItemEtag
 {
     private readonly ILocalChaptersProvider _localChaptersProvider;
-    private readonly ILocalFileSystem _localFileSystem;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILogger _logger;
-    private readonly IMediator _mediator;
     private readonly IMetadataRepository _metadataRepository;
 
     protected MediaServerMovieLibraryScanner(
-        ILocalFileSystem localFileSystem,
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
-        IMediator mediator,
         ILogger logger)
     {
-        _localFileSystem = localFileSystem;
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localChaptersProvider = localChaptersProvider;
         _metadataRepository = metadataRepository;
-        _mediator = mediator;
         _logger = logger;
     }
 
@@ -90,14 +90,10 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
             incomingItemIds.Add(MediaServerItemId(incoming));
 
             decimal percentCompletion = Math.Clamp((decimal)incomingItemIds.Count / totalMovieCount, 0, 1);
-            await _mediator.Publish(
-                new ScannerProgressUpdate(
-                    library.Id,
-                    library.Name,
-                    percentCompletion,
-                    Array.Empty<int>(),
-                    Array.Empty<int>()),
-                cancellationToken);
+            if (!await _scannerProxy.UpdateProgress(percentCompletion, cancellationToken))
+            {
+                return new ScanCanceled();
+            }
 
             string localPath = getLocalPath(incoming);
 
@@ -171,7 +167,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
             {
                 await movieRepository.SetEtag(result.Item, MediaServerEtag(incoming));
 
-                if (_localFileSystem.FileExists(result.LocalPath))
+                if (_fileSystem.File.Exists(result.LocalPath))
                 {
                     Option<int> flagResult = await movieRepository.FlagNormal(library, result.Item);
                     if (flagResult.IsSome)
@@ -198,14 +194,10 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
 
                 if (result.IsAdded || result.IsUpdated)
                 {
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            library.Id,
-                            null,
-                            null,
-                            new[] { result.Item.Id },
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
                 }
             }
         }
@@ -213,18 +205,10 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         // trash movies that are no longer present on the media server
         var fileNotFoundItemIds = existingMovies.Keys.Except(incomingItemIds).ToList();
         List<int> ids = await movieRepository.FlagFileNotFound(library, fileNotFoundItemIds);
-        await _mediator.Publish(
-            new ScannerProgressUpdate(library.Id, null, null, ids.ToArray(), Array.Empty<int>()),
-            cancellationToken);
-
-        await _mediator.Publish(
-            new ScannerProgressUpdate(
-                library.Id,
-                library.Name,
-                0,
-                Array.Empty<int>(),
-                Array.Empty<int>()),
-            cancellationToken);
+        if (!await _scannerProxy.ReindexMediaItems(ids.ToArray(), cancellationToken))
+        {
+            _logger.LogWarning("Failed to reindex media items from scanner process");
+        }
 
         return Unit.Default;
     }
@@ -286,7 +270,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
             existingEtag == MediaServerEtag(incoming))
         {
             // skip scanning unavailable/file not found items that are unchanged and still don't exist locally
-            if (!_localFileSystem.FileExists(localPath) && !ServerSupportsRemoteStreaming)
+            if (!_fileSystem.File.Exists(localPath) && !ServerSupportsRemoteStreaming)
             {
                 return false;
             }
@@ -295,7 +279,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         {
             // item is unchanged, but file does not exist
             // don't scan, but mark as unavailable
-            if (!_localFileSystem.FileExists(localPath))
+            if (!_fileSystem.File.Exists(localPath))
             {
                 if (ServerSupportsRemoteStreaming)
                 {
@@ -303,9 +287,10 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
                     {
                         foreach (int id in await movieRepository.FlagRemoteOnly(library, incoming))
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(library.Id, null, null, new[] { id }, Array.Empty<int>()),
-                                CancellationToken.None);
+                            if (!await _scannerProxy.ReindexMediaItems([id], CancellationToken.None))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }
@@ -315,9 +300,10 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
                     {
                         foreach (int id in await movieRepository.FlagUnavailable(library, incoming))
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(library.Id, null, null, new[] { id }, Array.Empty<int>()),
-                                CancellationToken.None);
+                            if (!await _scannerProxy.ReindexMediaItems([id], CancellationToken.None))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }

@@ -20,6 +20,11 @@ public class PlayoutConfiguration : IEntityTypeConfiguration<Playout>
             .HasForeignKey(pi => pi.PlayoutId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.HasMany(p => p.Gaps)
+            .WithOne(pi => pi.Playout)
+            .HasForeignKey(pi => pi.PlayoutId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.OwnsOne(p => p.Anchor)
             .ToTable("PlayoutAnchor")
             .OwnsOne(a => a.ScheduleItemsEnumeratorState)
@@ -43,6 +48,11 @@ public class PlayoutConfiguration : IEntityTypeConfiguration<Playout>
         builder.HasMany(p => p.PlayoutHistory)
             .WithOne(h => h.Playout)
             .HasForeignKey(h => h.PlayoutId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasOne(p => p.BuildStatus)
+            .WithOne(pbr => pbr.Playout)
+            .HasForeignKey<PlayoutBuildStatus>(p => p.PlayoutId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

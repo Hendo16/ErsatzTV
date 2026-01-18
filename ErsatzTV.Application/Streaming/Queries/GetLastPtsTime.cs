@@ -1,5 +1,7 @@
 ﻿using ErsatzTV.Core;
+using ErsatzTV.Core.FFmpeg;
 
 namespace ErsatzTV.Application.Streaming;
 
-public record GetLastPtsTime(string ChannelNumber) : IRequest<Either<BaseError, PtsTime>>;
+public record GetLastPtsTime(IHlsInitSegmentCache InitSegmentCache, string ChannelNumber)
+    : IRequest<Either<BaseError, PtsTime>>;

@@ -1,15 +1,18 @@
-﻿namespace ErsatzTV.Application.Streaming;
+﻿using ErsatzTV.Core.Domain;
+
+namespace ErsatzTV.Application.Streaming;
 
 public record GetConcatProcessByChannelNumber : FFmpegProcessRequest
 {
     public GetConcatProcessByChannelNumber(string scheme, string host, string channelNumber) : base(
         channelNumber,
-        "ts-legacy",
+        StreamingMode.TransportStream,
         DateTimeOffset.Now,
         false,
         true,
         DateTimeOffset.Now, // unused
-        0)
+        TimeSpan.Zero,
+        Option<int>.None)
     {
         Scheme = scheme;
         Host = host;

@@ -6,11 +6,12 @@ namespace ErsatzTV.Application.MediaCollections;
 public record PlaylistItemViewModel(
     int Id,
     int Index,
-    ProgramScheduleItemCollectionType CollectionType,
+    CollectionType CollectionType,
     MediaCollectionViewModel Collection,
     MultiCollectionViewModel MultiCollection,
     SmartCollectionViewModel SmartCollection,
     NamedMediaItemViewModel MediaItem,
     PlaybackOrder PlaybackOrder,
+    int? Count,
     bool PlayAll,
     bool IncludeInProgramGuide);

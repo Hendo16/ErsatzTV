@@ -2,7 +2,6 @@ using Destructurama;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling;
@@ -11,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NUnit.Framework;
 using Serilog;
+using Testably.Abstractions.Testing;
 
 namespace ErsatzTV.Core.Tests.Scheduling.ClassicScheduling;
 
@@ -37,14 +37,15 @@ public abstract class PlayoutBuilderTestBase
 
     protected static DateTimeOffset HoursAfterMidnight(int hours)
     {
-        DateTimeOffset now = DateTimeOffset.Now;
-        return now - now.TimeOfDay + TimeSpan.FromHours(hours);
+        // DateTimeOffset now = DateTimeOffset.Now;
+        // return now - now.TimeOfDay + TimeSpan.FromHours(hours);
 
-        // // pick a timezone that has DST and a known offset on a specific date
-        // TimeZoneInfo eastern = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-        // DateTime date = new DateTime(2025, 11, 2, 0, 0, 0, DateTimeKind.Unspecified);
-        // DateTimeOffset now = new DateTimeOffset(date, eastern.GetUtcOffset(date));
-        // return now.Date + TimeSpan.FromHours(hours);
+        // pick a timezone that has DST and a known offset on a specific date
+        TimeZoneInfo eastern = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+        //DateTime date = new DateTime(2025, 11, 2, 0, 0, 0, DateTimeKind.Unspecified);
+        DateTime date = new DateTime(2025, 10, 4, 0, 0, 0, DateTimeKind.Unspecified);
+        DateTimeOffset now = new DateTimeOffset(date, eastern.GetUtcOffset(date));
+        return now.Date + TimeSpan.FromHours(hours);
     }
 
     protected TestData TestDataFloodForItems(
@@ -65,14 +66,15 @@ public abstract class PlayoutBuilderTestBase
         IArtistRepository artistRepo = Substitute.For<IArtistRepository>();
         IMultiEpisodeShuffleCollectionEnumeratorFactory factory =
             Substitute.For<IMultiEpisodeShuffleCollectionEnumeratorFactory>();
-        ILocalFileSystem localFileSystem = Substitute.For<ILocalFileSystem>();
+        IRerunHelper rerunHelper = Substitute.For<IRerunHelper>();
         var builder = new PlayoutBuilder(
             configRepo,
             collectionRepo,
             televisionRepo,
             artistRepo,
             factory,
-            localFileSystem,
+            new MockFileSystem(),
+            rerunHelper,
             Logger);
 
         var items = new List<ProgramScheduleItem> { Flood(mediaCollection, playbackOrder) };
@@ -95,7 +97,8 @@ public abstract class PlayoutBuilderTestBase
             [],
             playout.ProgramSchedule,
             [],
-            []);
+            [],
+            TimeSpan.Zero);
 
         return new TestData(builder, playout, referenceData);
     }
@@ -119,7 +122,7 @@ public abstract class PlayoutBuilderTestBase
         {
             Id = 1,
             Index = 1,
-            CollectionType = ProgramScheduleItemCollectionType.Collection,
+            CollectionType = CollectionType.Collection,
             Collection = mediaCollection,
             CollectionId = mediaCollection.Id,
             StartTime = null,
@@ -134,7 +137,7 @@ public abstract class PlayoutBuilderTestBase
         {
             Id = 1,
             Index = 1,
-            CollectionType = ProgramScheduleItemCollectionType.SmartCollection,
+            CollectionType = CollectionType.SmartCollection,
             SmartCollection = smartCollection,
             SmartCollectionId = smartCollection.Id,
             StartTime = null,
@@ -142,7 +145,7 @@ public abstract class PlayoutBuilderTestBase
             FallbackFiller = new FillerPreset
             {
                 Id = 1,
-                CollectionType = ProgramScheduleItemCollectionType.SmartCollection,
+                CollectionType = CollectionType.SmartCollection,
                 SmartCollection = fillerCollection,
                 SmartCollectionId = fillerCollection.Id,
                 FillerKind = FillerKind.Fallback
@@ -178,14 +181,15 @@ public abstract class PlayoutBuilderTestBase
         IArtistRepository artistRepo = Substitute.For<IArtistRepository>();
         IMultiEpisodeShuffleCollectionEnumeratorFactory factory =
             Substitute.For<IMultiEpisodeShuffleCollectionEnumeratorFactory>();
-        ILocalFileSystem localFileSystem = Substitute.For<ILocalFileSystem>();
+        IRerunHelper rerunHelper = Substitute.For<IRerunHelper>();
         var builder = new PlayoutBuilder(
             configRepo,
             collectionRepo,
             televisionRepo,
             artistRepo,
             factory,
-            localFileSystem,
+            new MockFileSystem(),
+            rerunHelper,
             Logger);
 
         var items = new List<ProgramScheduleItem> { Flood(mediaCollection, fillerCollection, playbackOrder) };
@@ -208,7 +212,8 @@ public abstract class PlayoutBuilderTestBase
             [],
             playout.ProgramSchedule,
             [],
-            []);
+            [],
+            TimeSpan.Zero);
 
         return new TestData(builder, playout, referenceData);
     }

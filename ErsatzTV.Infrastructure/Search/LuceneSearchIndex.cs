@@ -5,7 +5,6 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.Interfaces.Repositories.Caching;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Search;
 using ErsatzTV.FFmpeg;
@@ -93,6 +92,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
     public const string SongType = "song";
     public const string ImageType = "image";
     public const string RemoteStreamType = "remote_stream";
+    public const string TitleAndYearSearchField = "title_and_year_search";
     private readonly string _cleanShutdownPath;
 
     private readonly List<CultureInfo> _cultureInfos;
@@ -121,7 +121,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         return Task.FromResult(directoryExists && fileExists);
     }
 
-    public int Version => 49;
+    public int Version => 50;
 
     public async Task<bool> Initialize(
         ILocalFileSystem localFileSystem,
@@ -157,8 +157,9 @@ public sealed class LuceneSearchIndex : ISearchIndex
     }
 
     public async Task<Unit> UpdateItems(
-        ICachingSearchRepository searchRepository,
+        ISearchRepository searchRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
+        ILanguageCodeService languageCodeService,
         List<MediaItem> items)
     {
         foreach (MediaItem item in items)
@@ -166,37 +167,37 @@ public sealed class LuceneSearchIndex : ISearchIndex
             switch (item)
             {
                 case Movie movie:
-                    await UpdateMovie(searchRepository, movie);
+                    UpdateMovie(languageCodeService, movie);
                     break;
                 case Show show:
-                    await UpdateShow(searchRepository, show);
+                    await UpdateShow(searchRepository, languageCodeService, show);
                     break;
                 case Season season:
-                    await UpdateSeason(searchRepository, season);
+                    await UpdateSeason(searchRepository, languageCodeService, season);
                     break;
                 case Artist artist:
-                    await UpdateArtist(searchRepository, artist);
+                    await UpdateArtist(searchRepository, languageCodeService, artist);
                     break;
                 case MusicVideo musicVideo:
-                    await UpdateMusicVideo(searchRepository, musicVideo);
+                    UpdateMusicVideo(languageCodeService, musicVideo);
                     break;
                 case Episode episode:
-                    await UpdateEpisode(searchRepository, fallbackMetadataProvider, episode);
+                    UpdateEpisode(languageCodeService, fallbackMetadataProvider, episode);
                     break;
                 case OtherVideo otherVideo:
-                    await UpdateOtherVideo(searchRepository, otherVideo);
+                    UpdateOtherVideo(languageCodeService, otherVideo);
                     break;
                 case FillerMediaItem filler:
-                    await UpdateFiller(searchRepository, filler);
+                    UpdateFiller(languageCodeService, filler);
                     break;
                 case Song song:
-                    await UpdateSong(searchRepository, song);
+                    UpdateSong(languageCodeService, song);
                     break;
                 case Image image:
-                    await UpdateImage(searchRepository, image);
+                    UpdateImage(languageCodeService, image);
                     break;
                 case RemoteStream remoteStream:
-                    await UpdateRemoteStream(searchRepository, remoteStream);
+                    UpdateRemoteStream(languageCodeService, remoteStream);
                     break;
             }
         }
@@ -214,12 +215,29 @@ public sealed class LuceneSearchIndex : ISearchIndex
         return Task.FromResult(true);
     }
 
+    // default to title field only
+    public Task<SearchResult> Search(
+        IClient client,
+        string query,
+        string smartCollectionName,
+        int skip,
+        int limit,
+        CancellationToken cancellationToken) => Search(
+        client,
+        query,
+        smartCollectionName,
+        skip,
+        limit,
+        [TitleField],
+        cancellationToken);
+
     public async Task<SearchResult> Search(
         IClient client,
         string query,
         string smartCollectionName,
         int skip,
         int limit,
+        List<string> defaultFields,
         CancellationToken cancellationToken)
     {
         var metadata = new Dictionary<string, string>
@@ -231,6 +249,8 @@ public sealed class LuceneSearchIndex : ISearchIndex
 
         client?.Breadcrumbs?.Leave("SearchIndex.Search", BreadcrumbType.State, metadata);
 
+        query ??= string.Empty;
+
         if (string.IsNullOrWhiteSpace(query.Replace("*", string.Empty).Replace("?", string.Empty)) ||
             _writer.MaxDoc == 0)
         {
@@ -240,7 +260,11 @@ public sealed class LuceneSearchIndex : ISearchIndex
         using DirectoryReader reader = _writer.GetReader(true);
         var searcher = new IndexSearcher(reader);
         int hitsLimit = limit == 0 ? searcher.IndexReader.MaxDoc : skip + limit;
-        Query parsedQuery = await _searchQueryParser.ParseQuery(query, smartCollectionName, cancellationToken);
+        Query parsedQuery = await _searchQueryParser.ParseQuery(
+            query,
+            smartCollectionName,
+            defaultFields,
+            cancellationToken);
         // TODO: figure out if this is actually needed
         // var filter = new DuplicateFilter(TitleAndYearField);
         var sort = new Sort(new SortField(SortTitleField, SortFieldType.STRING));
@@ -278,16 +302,17 @@ public sealed class LuceneSearchIndex : ISearchIndex
     }
 
     public async Task<Unit> Rebuild(
-        ICachingSearchRepository searchRepository,
+        ISearchRepository searchRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
+        ILanguageCodeService languageCodeService,
         CancellationToken cancellationToken)
     {
         _writer.DeleteAll();
         _writer.Commit();
 
-        await foreach (MediaItem mediaItem in searchRepository.GetAllMediaItems().WithCancellation(cancellationToken))
+        await foreach (MediaItem mediaItem in searchRepository.GetAllMediaItems(cancellationToken))
         {
-            await RebuildItem(searchRepository, fallbackMetadataProvider, mediaItem);
+            await RebuildItem(searchRepository, fallbackMetadataProvider, languageCodeService, mediaItem);
         }
 
         _writer.Commit();
@@ -295,8 +320,9 @@ public sealed class LuceneSearchIndex : ISearchIndex
     }
 
     public async Task<Unit> RebuildItems(
-        ICachingSearchRepository searchRepository,
+        ISearchRepository searchRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
+        ILanguageCodeService languageCodeService,
         IEnumerable<int> itemIds,
         CancellationToken cancellationToken)
     {
@@ -304,7 +330,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         {
             foreach (MediaItem mediaItem in await searchRepository.GetItemToIndex(id, cancellationToken))
             {
-                await RebuildItem(searchRepository, fallbackMetadataProvider, mediaItem);
+                await RebuildItem(searchRepository, fallbackMetadataProvider, languageCodeService, mediaItem);
             }
         }
 
@@ -340,42 +366,43 @@ public sealed class LuceneSearchIndex : ISearchIndex
     private async Task RebuildItem(
         ISearchRepository searchRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
+        ILanguageCodeService languageCodeService,
         MediaItem mediaItem)
     {
         switch (mediaItem)
         {
             case Movie movie:
-                await UpdateMovie(searchRepository, movie);
+                UpdateMovie(languageCodeService, movie);
                 break;
             case Show show:
-                await UpdateShow(searchRepository, show);
+                await UpdateShow(searchRepository, languageCodeService, show);
                 break;
             case Season season:
-                await UpdateSeason(searchRepository, season);
+                await UpdateSeason(searchRepository, languageCodeService, season);
                 break;
             case Artist artist:
-                await UpdateArtist(searchRepository, artist);
+                await UpdateArtist(searchRepository, languageCodeService, artist);
                 break;
             case MusicVideo musicVideo:
-                await UpdateMusicVideo(searchRepository, musicVideo);
+                UpdateMusicVideo(languageCodeService, musicVideo);
                 break;
             case Episode episode:
-                await UpdateEpisode(searchRepository, fallbackMetadataProvider, episode);
+                UpdateEpisode(languageCodeService, fallbackMetadataProvider, episode);
                 break;
             case OtherVideo otherVideo:
-                await UpdateOtherVideo(searchRepository, otherVideo);
+                UpdateOtherVideo(languageCodeService, otherVideo);
                 break;
             case FillerMediaItem filler:
                 await UpdateFiller(searchRepository, filler);
                 break;
             case Song song:
-                await UpdateSong(searchRepository, song);
+                UpdateSong(languageCodeService, song);
                 break;
             case Image image:
-                await UpdateImage(searchRepository, image);
+                UpdateImage(languageCodeService, image);
                 break;
             case RemoteStream remoteStream:
-                await UpdateRemoteStream(searchRepository, remoteStream);
+                UpdateRemoteStream(languageCodeService, remoteStream);
                 break;
         }
     }
@@ -427,7 +454,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         return new SearchPageMap(map);
     }
 
-    private async Task UpdateMovie(ISearchRepository searchRepository, Movie movie)
+    private void UpdateMovie(ILanguageCodeService languageCodeService, Movie movie)
     {
         Option<MovieMetadata> maybeMetadata = movie.MovieMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -448,12 +475,13 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         movie.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, movie.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
-                await AddLanguages(searchRepository, doc, movie.MediaVersions);
+                AddLanguages(languageCodeService, doc, movie.MediaVersions);
 
                 AddStatistics(doc, movie.MediaVersions);
                 AddCollections(doc, movie.Collections);
@@ -546,8 +574,8 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task AddLanguages(
-        ISearchRepository searchRepository,
+    private void AddLanguages(
+        ILanguageCodeService languageCodeService,
         Document doc,
         ICollection<MediaVersion> mediaVersions)
     {
@@ -558,7 +586,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
             .Distinct()
             .ToList();
 
-        await AddLanguages(searchRepository, doc, mediaCodes);
+        AddLanguages(languageCodeService, doc, mediaCodes);
 
         var subMediaCodes = mediaVersions
             .Map(mv => mv.Streams
@@ -569,10 +597,10 @@ public sealed class LuceneSearchIndex : ISearchIndex
             .Distinct()
             .ToList();
 
-        await AddSubLanguages(searchRepository, doc, subMediaCodes);
+        AddSubLanguages(languageCodeService, doc, subMediaCodes);
     }
 
-    private async Task AddLanguages(ISearchRepository searchRepository, Document doc, List<string> mediaCodes)
+    private void AddLanguages(ILanguageCodeService languageCodeService, Document doc, List<string> mediaCodes)
     {
         foreach (string code in mediaCodes.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct())
         {
@@ -580,7 +608,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
 
         var englishNames = new System.Collections.Generic.HashSet<string>();
-        foreach (string code in await searchRepository.GetAllThreeLetterLanguageCodes(mediaCodes))
+        foreach (string code in languageCodeService.GetAllLanguageCodes(mediaCodes))
         {
             Option<CultureInfo> maybeCultureInfo = _cultureInfos.Find(ci => string.Equals(
                 ci.ThreeLetterISOLanguageName,
@@ -598,7 +626,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task AddSubLanguages(ISearchRepository searchRepository, Document doc, List<string> mediaCodes)
+    private void AddSubLanguages(ILanguageCodeService languageCodeService, Document doc, List<string> mediaCodes)
     {
         foreach (string code in mediaCodes.Where(c => !string.IsNullOrWhiteSpace(c)).Distinct())
         {
@@ -606,7 +634,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
 
         var englishNames = new System.Collections.Generic.HashSet<string>();
-        foreach (string code in await searchRepository.GetAllThreeLetterLanguageCodes(mediaCodes))
+        foreach (string code in languageCodeService.GetAllLanguageCodes(mediaCodes))
         {
             Option<CultureInfo> maybeCultureInfo = _cultureInfos.Find(ci => string.Equals(
                 ci.ThreeLetterISOLanguageName,
@@ -624,7 +652,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateShow(ISearchRepository searchRepository, Show show)
+    private async Task UpdateShow(ISearchRepository searchRepository, ILanguageCodeService languageCodeService, Show show)
     {
         Option<ShowMetadata> maybeMetadata = show.ShowMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -645,16 +673,17 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         show.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, show.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
                 List<string> languages = await searchRepository.GetLanguagesForShow(show);
-                await AddLanguages(searchRepository, doc, languages);
+                AddLanguages(languageCodeService, doc, languages);
 
                 List<string> subLanguages = await searchRepository.GetSubLanguagesForShow(show);
-                await AddSubLanguages(searchRepository, doc, subLanguages);
+                AddSubLanguages(languageCodeService, doc, subLanguages);
 
                 AddCollections(doc, show.Collections);
 
@@ -736,7 +765,10 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateSeason(ISearchRepository searchRepository, Season season)
+    private async Task UpdateSeason(
+        ISearchRepository searchRepository,
+        ILanguageCodeService languageCodeService,
+        Season season)
     {
         Option<SeasonMetadata> maybeMetadata = season.SeasonMetadata.HeadOrNone();
         Option<ShowMetadata> maybeShowMetadata = season.Show.ShowMetadata.HeadOrNone();
@@ -765,6 +797,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         season.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, titleAndYear, Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(showMetadata), Field.Store.YES),
                     new StringField(StateField, season.State.ToString(), Field.Store.NO),
                     new Int32Field(SeasonNumberField, season.SeasonNumber, Field.Store.NO),
@@ -797,10 +830,10 @@ public sealed class LuceneSearchIndex : ISearchIndex
                 }
 
                 List<string> languages = await searchRepository.GetLanguagesForSeason(season);
-                await AddLanguages(searchRepository, doc, languages);
+                AddLanguages(languageCodeService, doc, languages);
 
                 List<string> subLanguages = await searchRepository.GetSubLanguagesForSeason(season);
-                await AddSubLanguages(searchRepository, doc, subLanguages);
+                AddSubLanguages(languageCodeService, doc, subLanguages);
 
                 AddCollections(doc, season.Collections);
 
@@ -855,7 +888,10 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateArtist(ISearchRepository searchRepository, Artist artist)
+    private async Task UpdateArtist(
+        ISearchRepository searchRepository,
+        ILanguageCodeService languageCodeService,
+        Artist artist)
     {
         Option<ArtistMetadata> maybeMetadata = artist.ArtistMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -876,15 +912,16 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         artist.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
                 List<string> languages = await searchRepository.GetLanguagesForArtist(artist);
-                await AddLanguages(searchRepository, doc, languages);
+                AddLanguages(languageCodeService, doc, languages);
 
                 List<string> subLanguages = await searchRepository.GetSubLanguagesForArtist(artist);
-                await AddSubLanguages(searchRepository, doc, subLanguages);
+                AddSubLanguages(languageCodeService, doc, subLanguages);
 
                 AddCollections(doc, artist.Collections);
 
@@ -921,7 +958,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateMusicVideo(ISearchRepository searchRepository, MusicVideo musicVideo)
+    private void UpdateMusicVideo(ILanguageCodeService languageCodeService, MusicVideo musicVideo)
     {
         Option<MusicVideoMetadata> maybeMetadata = musicVideo.MusicVideoMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -945,12 +982,13 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         musicVideo.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, musicVideo.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
-                await AddLanguages(searchRepository, doc, musicVideo.MediaVersions);
+                AddLanguages(languageCodeService, doc, musicVideo.MediaVersions);
 
                 AddStatistics(doc, musicVideo.MediaVersions);
                 AddCollections(doc, musicVideo.Collections);
@@ -1028,8 +1066,8 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateEpisode(
-        ISearchRepository searchRepository,
+    private void UpdateEpisode(
+        ILanguageCodeService languageCodeService,
         IFallbackMetadataProvider fallbackMetadataProvider,
         Episode episode)
     {
@@ -1058,6 +1096,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         episode.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, episode.State.ToString(), Field.Store.NO),
                     new Int32Field(SeasonNumberField, episode.Season?.SeasonNumber ?? 0, Field.Store.NO),
@@ -1112,7 +1151,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                     doc.Add(new StringField(SortTitleField, metadata.SortTitle.ToLowerInvariant(), Field.Store.NO));
                 }
 
-                await AddLanguages(searchRepository, doc, episode.MediaVersions);
+                AddLanguages(languageCodeService, doc, episode.MediaVersions);
 
                 AddStatistics(doc, episode.MediaVersions);
                 AddCollections(doc, episode.Collections);
@@ -1189,7 +1228,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateFiller(ISearchRepository searchRepository, FillerMediaItem filler)
+    private void UpdateFiller(ILanguageCodeService languageCodeService, FillerMediaItem filler)
     {
         Option<FillerMetadata> maybeMetadata = filler.FillerMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -1266,7 +1305,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateOtherVideo(ISearchRepository searchRepository, OtherVideo otherVideo)
+    private void UpdateOtherVideo(ILanguageCodeService languageCodeService, OtherVideo otherVideo)
     {
         Option<OtherVideoMetadata> maybeMetadata = otherVideo.OtherVideoMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -1287,12 +1326,13 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         otherVideo.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, otherVideo.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
-                await AddLanguages(searchRepository, doc, otherVideo.MediaVersions);
+                AddLanguages(languageCodeService, doc, otherVideo.MediaVersions);
 
                 AddStatistics(doc, otherVideo.MediaVersions);
                 AddCollections(doc, otherVideo.Collections);
@@ -1369,15 +1409,16 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateSong(ISearchRepository searchRepository, Song song)
+    private void UpdateSong(ILanguageCodeService languageCodeService, Song song)
     {
         Option<SongMetadata> maybeMetadata = song.SongMetadata.HeadOrNone();
-        if (maybeMetadata.IsSome)
+        foreach (var metadata in maybeMetadata)
         {
-            SongMetadata metadata = maybeMetadata.ValueUnsafe();
-
             try
             {
+                metadata.AlbumArtists ??= [];
+                metadata.Artists ??= [];
+
                 var doc = new Document
                 {
                     new StringField(IdField, song.Id.ToString(CultureInfo.InvariantCulture), Field.Store.YES),
@@ -1390,12 +1431,13 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         song.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, song.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
 
-                await AddLanguages(searchRepository, doc, song.MediaVersions);
+                AddLanguages(languageCodeService, doc, song.MediaVersions);
 
                 AddStatistics(doc, song.MediaVersions);
                 AddCollections(doc, song.Collections);
@@ -1444,7 +1486,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateImage(ISearchRepository searchRepository, Image image)
+    private void UpdateImage(ILanguageCodeService languageCodeService, Image image)
     {
         Option<ImageMetadata> maybeMetadata = image.ImageMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -1465,6 +1507,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         image.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, image.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
@@ -1483,7 +1526,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                             Field.Store.NO));
                 }
 
-                await AddLanguages(searchRepository, doc, image.MediaVersions);
+                AddLanguages(languageCodeService, doc, image.MediaVersions);
 
                 AddStatistics(doc, image.MediaVersions);
                 AddCollections(doc, image.Collections);
@@ -1517,7 +1560,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
         }
     }
 
-    private async Task UpdateRemoteStream(ISearchRepository searchRepository, RemoteStream remoteStream)
+    private void UpdateRemoteStream(ILanguageCodeService languageCodeService, RemoteStream remoteStream)
     {
         Option<RemoteStreamMetadata> maybeMetadata = remoteStream.RemoteStreamMetadata.HeadOrNone();
         if (maybeMetadata.IsSome)
@@ -1538,6 +1581,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                         remoteStream.LibraryPath.Library.Id.ToString(CultureInfo.InvariantCulture),
                         Field.Store.NO),
                     new StringField(TitleAndYearField, GetTitleAndYear(metadata), Field.Store.NO),
+                    new TextField(TitleAndYearSearchField, GetTitleAndYearSearch(metadata), Field.Store.NO),
                     new StringField(JumpLetterField, GetJumpLetter(metadata), Field.Store.YES),
                     new StringField(StateField, remoteStream.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
@@ -1556,7 +1600,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                             Field.Store.NO));
                 }
 
-                await AddLanguages(searchRepository, doc, remoteStream.MediaVersions);
+                AddLanguages(languageCodeService, doc, remoteStream.MediaVersions);
 
                 AddStatistics(doc, remoteStream.MediaVersions);
                 AddCollections(doc, remoteStream.Collections);
@@ -1681,6 +1725,16 @@ public sealed class LuceneSearchIndex : ISearchIndex
             SeasonMetadata sm => $"{Title(sm)}_{sm.Year}_{sm.Season.State}".ToLowerInvariant(),
             ShowMetadata sm => $"{Title(sm)}_{sm.Year}_{sm.Show.State}".ToLowerInvariant(),
             _ => $"{Title(metadata)}_{metadata.Year}".ToLowerInvariant()
+        };
+
+    internal static string GetTitleAndYearSearch(Core.Domain.Metadata metadata) =>
+        metadata switch
+        {
+            MovieMetadata mm => $"{mm.Title ?? string.Empty} {mm.Year}".ToLowerInvariant(),
+            SeasonMetadata sm => $"{sm.Season.Show.ShowMetadata.Head().Title ?? string.Empty} {sm.Title}"
+                .ToLowerInvariant(),
+            ShowMetadata sm => $"{sm.Title ?? string.Empty} {sm.Year}".ToLowerInvariant(),
+            _ => $"{metadata.Title ?? string.Empty} {metadata.Year}".ToLowerInvariant()
         };
 
     private static string Title(Core.Domain.Metadata metadata) =>

@@ -1,9 +1,12 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO.Abstractions;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using BlazorSortable;
 using Bugsnag.AspNet.Core;
 using Dapper;
 using ErsatzTV.Application;
@@ -16,6 +19,7 @@ using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Health;
 using ErsatzTV.Core.Health.Checks;
 using ErsatzTV.Core.Images;
+using ErsatzTV.Core.Interfaces.Database;
 using ErsatzTV.Core.Interfaces.Emby;
 using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.GitHub;
@@ -25,7 +29,6 @@ using ErsatzTV.Core.Interfaces.Locking;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.Interfaces.Repositories.Caching;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Interfaces.Scripting;
 using ErsatzTV.Core.Interfaces.Search;
@@ -48,9 +51,10 @@ using ErsatzTV.FFmpeg.Pipeline;
 using ErsatzTV.FFmpeg.Runtime;
 using ErsatzTV.Filters;
 using ErsatzTV.Formatters;
+using ErsatzTV.Infrastructure;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Data.Repositories;
-using ErsatzTV.Infrastructure.Data.Repositories.Caching;
+using ErsatzTV.Infrastructure.Database;
 using ErsatzTV.Infrastructure.Emby;
 using ErsatzTV.Infrastructure.FFmpeg;
 using ErsatzTV.Infrastructure.GitHub;
@@ -72,6 +76,7 @@ using ErsatzTV.Infrastructure.Trakt;
 using ErsatzTV.Serialization;
 using ErsatzTV.Services;
 using ErsatzTV.Services.RunOnce;
+using ErsatzTV.Services.Validators;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Ganss.Xss;
@@ -89,12 +94,15 @@ using Microsoft.Extensions.Primitives;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.IO;
+using Microsoft.OpenApi;
 using MudBlazor.Services;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Refit;
+using Scalar.AspNetCore;
 using Serilog;
 using Serilog.Events;
+using Testably.Abstractions;
 
 namespace ErsatzTV;
 
@@ -119,7 +127,7 @@ public class Startup
         {
             options.ForwardedHeaders = ForwardedHeaders.All;
             options.ForwardLimit = 2;
-            options.KnownNetworks.Clear();
+            options.KnownIPNetworks.Clear();
             options.KnownProxies.Clear();
         });
 
@@ -143,6 +151,35 @@ public class Startup
         });
 
         services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(FileSystemLayout.DataProtectionFolder));
+
+        services.AddOpenApi("v1", options => { options.ShouldInclude += a => a.GroupName == "general"; });
+
+        services.AddOpenApi(
+            "scripted-schedule-tagged",
+            options => { options.ShouldInclude += a => a.GroupName == "scripted-schedule"; });
+
+        services.AddOpenApi(
+            "scripted-schedule",
+            options =>
+            {
+                options.ShouldInclude += a => a.GroupName == "scripted-schedule";
+                var tag = new OpenApiTag { Name = "ScriptedSchedule" };
+                var tagReference = new OpenApiTagReference("ScriptedSchedule");
+                options.AddOperationTransformer((operation, _, _) =>
+                {
+                    operation.Tags.Clear();
+                    operation.Tags.Add(tagReference);
+                    return Task.CompletedTask;
+                });
+                options.AddDocumentTransformer((document, _, _) =>
+                {
+                    document.Tags.Clear();
+                    document.Tags.Add(tag);
+                    return Task.CompletedTask;
+                });
+            });
+
+        services.ConfigureHttpJsonOptions(o => o.SerializerOptions.NumberHandling = JsonNumberHandling.Strict);
 
         OidcHelper.Init(Configuration);
         JwtHelper.Init(Configuration);
@@ -309,6 +346,8 @@ public class Startup
 
         services.AddMudServices();
 
+        services.AddSortable();
+
         var coreAssembly = Assembly.GetAssembly(typeof(LibraryScanProgress));
         if (coreAssembly != null)
         {
@@ -317,10 +356,10 @@ public class Startup
 
         Console.OutputEncoding = Encoding.UTF8;
 
-        Log.Logger.Information(
-            "ErsatzTV version {Version}",
-            Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-                ?.InformationalVersion ?? "unknown");
+        string etvVersion = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "unknown";
+
+        Log.Logger.Information("ErsatzTV version {Version}", etvVersion);
 
         Log.Logger.Warning(
             "Give feedback at {GitHub} or {Discord}",
@@ -342,10 +381,14 @@ public class Startup
             FileSystemLayout.GraphicsElementsTemplatesFolder,
             FileSystemLayout.GraphicsElementsTextTemplatesFolder,
             FileSystemLayout.GraphicsElementsImageTemplatesFolder,
+            FileSystemLayout.GraphicsElementsScriptTemplatesFolder,
             FileSystemLayout.GraphicsElementsSubtitleTemplatesFolder,
+            FileSystemLayout.GraphicsElementsMotionTemplatesFolder,
             FileSystemLayout.ScriptsFolder,
             FileSystemLayout.MultiEpisodeShuffleTemplatesFolder,
-            FileSystemLayout.AudioStreamSelectorScriptsFolder
+            FileSystemLayout.AudioStreamSelectorScriptsFolder,
+            FileSystemLayout.MpegTsScriptsFolder,
+            FileSystemLayout.DefaultMpegTsScriptFolder
         ];
 
         foreach (string directory in directoriesToCreate)
@@ -452,8 +495,22 @@ public class Startup
         services.AddRefitClient<IPlexTvApi>()
             .ConfigureHttpClient(c => c.BaseAddress = new Uri("https://plex.tv/api/v2"));
 
-        services.AddRefitClient<ITraktApi>()
-            .ConfigureHttpClient(c => c.BaseAddress = new Uri("https://api.trakt.tv"));
+        services.AddRefitClient<ITraktApi>(
+                new RefitSettings
+                {
+                    ContentSerializer = new NewtonsoftJsonContentSerializer(
+                        new JsonSerializerSettings
+                        {
+                            ContractResolver = new SnakeCasePropertyNamesContractResolver()
+                        })
+                })
+            .ConfigureHttpClient(c =>
+            {
+                c.BaseAddress = new Uri("https://api.trakt.tv");
+                c.DefaultRequestHeaders.Add("User-Agent", $"ErsatzTV/{etvVersion}");
+            });
+
+        services.AddHttpClient("RefitCustomClient").AddHttpMessageHandler<SlowApiHandler>();
 
         services.Configure<TraktConfiguration>(Configuration.GetSection("Trakt"));
 
@@ -470,6 +527,18 @@ public class Startup
             try
             {
                 app.UsePathBase(baseUrl);
+
+                // for testing - make path base required
+                // app.Use(async (context, next) =>
+                // {
+                //     if (context.Request.PathBase != baseUrl)
+                //     {
+                //         context.Response.StatusCode = 404;
+                //         return;
+                //     }
+                //
+                //     await next(context);
+                // });
             }
             catch (Exception ex)
             {
@@ -503,6 +572,16 @@ public class Startup
 
                 if (httpContext.Request.Path.ToUriComponent().StartsWith(
                         "/iptv",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return LogEventLevel.Debug;
+                }
+
+                if (httpContext.Request.Path.ToUriComponent().StartsWith(
+                        "/api",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !httpContext.Request.Path.ToUriComponent().StartsWith(
+                        "/api/scan",
                         StringComparison.OrdinalIgnoreCase))
                 {
                     return LogEventLevel.Debug;
@@ -592,6 +671,23 @@ public class Startup
                     endpoints.MapControllers();
                     endpoints.MapBlazorHub();
                     endpoints.MapFallbackToPage("/_Host");
+
+                    if (CurrentEnvironment.IsDevelopment())
+                    {
+                        endpoints.MapOpenApi();
+                    }
+
+                    endpoints.MapScalarApiReference("/docs", options =>
+                    {
+                        options.AddDocument(
+                            "scripted-schedule",
+                            "Scripted Schedule",
+                            "openapi/scripted-schedule-tagged.json");
+                        options.AddDocument("v1", "General", "openapi/v1.json");
+                        options.HideClientButton = true;
+                        options.DocumentDownloadType = DocumentDownloadType.None;
+                        options.Title = "ErsatzTV API Reference";
+                    });
                 });
             });
 
@@ -616,6 +712,11 @@ public class Startup
 
     private static void CustomServices(IServiceCollection services)
     {
+        services.AddSingleton<IEnvironmentValidator, EnvironmentValidator>();
+
+        services.AddSingleton<IFileSystem, RealFileSystem>();
+
+        services.AddSingleton<IDatabaseMigrations, DatabaseMigrations>();
         services.AddSingleton<IPlexSecretStore, PlexSecretStore>();
         services.AddSingleton<IPlexTvApiClient, PlexTvApiClient>(); // TODO: does this need to be singleton?
         services.AddSingleton<ITraktApiClient, TraktApiClient>();
@@ -626,6 +727,7 @@ public class Startup
         services.AddSingleton<ITroubleshootingNotifier, TroubleshootingNotifier>();
         services.AddSingleton<CustomFontMapper>();
         services.AddSingleton<GraphicsEngineFonts>();
+        services.AddSingleton(Program.InMemoryLogService);
 
         if (SearchHelper.IsElasticSearchEnabled)
         {
@@ -641,12 +743,14 @@ public class Startup
 
             services.AddSingleton<ISearchIndex, LuceneSearchIndex>();
         }
-
+        services.AddSingleton<IScannerProxyService, ScannerProxyService>();
+        services.AddSingleton<IScriptedPlayoutBuilderService, ScriptedPlayoutBuilderService>();
         services.AddSingleton<IFFmpegSegmenterService, FFmpegSegmenterService>();
         services.AddSingleton<ITempFilePool, TempFilePool>();
         services.AddSingleton<IHlsPlaylistFilter, HlsPlaylistFilter>();
         services.AddSingleton<RecyclableMemoryStreamManager>();
         services.AddSingleton<SystemStartup>();
+        services.AddSingleton<ILanguageCodeCache, LanguageCodeCache>();
         AddChannel<IBackgroundServiceRequest>(services);
         AddChannel<IPlexBackgroundServiceRequest>(services);
         AddChannel<IJellyfinBackgroundServiceRequest>(services);
@@ -667,6 +771,7 @@ public class Startup
         services.AddScoped<IVaapiDriverHealthCheck, VaapiDriverHealthCheck>();
         services.AddScoped<IErrorReportsHealthCheck, ErrorReportsHealthCheck>();
         services.AddScoped<IUnifiedDockerHealthCheck, UnifiedDockerHealthCheck>();
+        services.AddScoped<IDowngradeHealthCheck, DowngradeHealthCheck>();
         services.AddScoped<IHealthCheckService, HealthCheckService>();
 
         services.AddScoped<IChannelRepository, ChannelRepository>();
@@ -677,7 +782,6 @@ public class Startup
         services.AddScoped<IConfigElementRepository, ConfigElementRepository>();
         services.AddScoped<ITelevisionRepository, TelevisionRepository>();
         services.AddScoped<ISearchRepository, SearchRepository>();
-        services.AddScoped<ICachingSearchRepository, CachingSearchRepository>();
         services.AddScoped<IMovieRepository, MovieRepository>();
         services.AddScoped<IArtistRepository, ArtistRepository>();
         services.AddScoped<IMusicVideoRepository, MusicVideoRepository>();
@@ -709,6 +813,7 @@ public class Startup
         services.AddScoped<IPlexMovieRepository, PlexMovieRepository>();
         services.AddScoped<IPlexTelevisionRepository, PlexTelevisionRepository>();
         services.AddScoped<IPlexCollectionRepository, PlexCollectionRepository>();
+        services.AddScoped<IPlexMetadataRepository, PlexMetadataRepository>();
         services.AddScoped<IJellyfinApiClient, JellyfinApiClient>();
         services.AddScoped<IJellyfinPathReplacementService, JellyfinPathReplacementService>();
         services.AddScoped<IJellyfinTelevisionRepository, JellyfinTelevisionRepository>();
@@ -727,12 +832,19 @@ public class Startup
         services.AddScoped<IHardwareCapabilitiesFactory, HardwareCapabilitiesFactory>();
         services.AddScoped<IMultiEpisodeShuffleCollectionEnumeratorFactory,
             MultiEpisodeShuffleCollectionEnumeratorFactory>();
+        services.AddScoped<IRerunHelper, RerunHelper>();
         services.AddScoped<IChannelLogoGenerator, ChannelLogoGenerator>();
         services.AddScoped<IGraphicsEngine, GraphicsEngine>();
         services.AddScoped<IGraphicsElementRepository, GraphicsElementRepository>();
         services.AddScoped<ITemplateDataRepository, TemplateDataRepository>();
+        services.AddScoped<IGraphicsElementLoader, GraphicsElementLoader>();
         services.AddScoped<TemplateFunctions>();
+        services.AddScoped<IDecoSelector, DecoSelector>();
         services.AddScoped<IWatermarkSelector, WatermarkSelector>();
+        services.AddScoped<IGraphicsElementSelector, GraphicsElementSelector>();
+        services.AddScoped<IHlsInitSegmentCache, HlsInitSegmentCache>();
+        services.AddScoped<IMpegTsScriptService, MpegTsScriptService>();
+        services.AddScoped<ILanguageCodeService, LanguageCodeService>();
 
         services.AddScoped<IFFmpegProcessService, FFmpegLibraryProcessService>();
         services.AddScoped<IPipelineBuilderFactory, PipelineBuilderFactory>();
@@ -755,6 +867,9 @@ public class Startup
         services.AddScoped<PlexEtag>();
 
         // services.AddTransient(typeof(IRequestHandler<,>), typeof(GetRecentLogEntriesHandler<>));
+
+        services.AddTransient<SlowApiHandler>();
+        services.AddTransient<SlowQueryInterceptor>();
 
         // run-once/blocking startup services
         services.AddHostedService<EndpointValidatorService>();

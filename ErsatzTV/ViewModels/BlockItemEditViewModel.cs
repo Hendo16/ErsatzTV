@@ -1,19 +1,21 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.MediaItems;
+using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.ViewModels;
 
 public class BlockItemEditViewModel : INotifyPropertyChanged
 {
-    private ProgramScheduleItemCollectionType _collectionType;
+    private CollectionType _collectionType;
 
     public int Id { get; set; }
     public int Index { get; set; }
 
-    public ProgramScheduleItemCollectionType CollectionType
+    public CollectionType CollectionType
     {
         get => _collectionType;
         set
@@ -26,14 +28,18 @@ public class BlockItemEditViewModel : INotifyPropertyChanged
                 MultiCollection = null;
                 MediaItem = null;
                 SmartCollection = null;
+                SearchTitle = null;
+                SearchQuery = null;
 
                 OnPropertyChanged(nameof(Collection));
                 OnPropertyChanged(nameof(MultiCollection));
                 OnPropertyChanged(nameof(MediaItem));
                 OnPropertyChanged(nameof(SmartCollection));
+                OnPropertyChanged(nameof(SearchTitle));
+                OnPropertyChanged(nameof(SearchQuery));
             }
 
-            if (_collectionType == ProgramScheduleItemCollectionType.MultiCollection)
+            if (_collectionType == CollectionType.MultiCollection)
             {
                 PlaybackOrder = PlaybackOrder.Shuffle;
             }
@@ -44,15 +50,18 @@ public class BlockItemEditViewModel : INotifyPropertyChanged
     public MultiCollectionViewModel MultiCollection { get; set; }
     public SmartCollectionViewModel SmartCollection { get; set; }
     public NamedMediaItemViewModel MediaItem { get; set; }
+    public string SearchTitle { get; set; }
+    public string SearchQuery { get; set; }
 
     public string CollectionName => CollectionType switch
     {
-        ProgramScheduleItemCollectionType.Collection => Collection?.Name,
-        ProgramScheduleItemCollectionType.TelevisionShow => MediaItem?.Name,
-        ProgramScheduleItemCollectionType.TelevisionSeason => MediaItem?.Name,
-        ProgramScheduleItemCollectionType.Artist => MediaItem?.Name,
-        ProgramScheduleItemCollectionType.MultiCollection => MultiCollection?.Name,
-        ProgramScheduleItemCollectionType.SmartCollection => SmartCollection?.Name,
+        CollectionType.Collection => Collection?.Name,
+        CollectionType.TelevisionShow => MediaItem?.Name,
+        CollectionType.TelevisionSeason => MediaItem?.Name,
+        CollectionType.Artist => MediaItem?.Name,
+        CollectionType.MultiCollection => MultiCollection?.Name,
+        CollectionType.SmartCollection => SmartCollection?.Name,
+        CollectionType.SearchQuery => string.IsNullOrWhiteSpace(SearchTitle) ? SearchQuery : SearchTitle,
         _ => string.Empty
     };
 
@@ -61,6 +70,10 @@ public class BlockItemEditViewModel : INotifyPropertyChanged
     public bool IncludeInProgramGuide { get; set; }
 
     public bool DisableWatermarks { get; set; }
+
+    public IEnumerable<WatermarkViewModel> Watermarks { get; set; }
+
+    public IEnumerable<GraphicsElementViewModel> GraphicsElements { get; set; }
 
     public event PropertyChangedEventHandler PropertyChanged;
 

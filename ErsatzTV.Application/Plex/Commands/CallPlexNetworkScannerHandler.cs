@@ -1,33 +1,39 @@
 using System.Globalization;
-using System.Threading.Channels;
 using ErsatzTV.Application.Libraries;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Errors;
+using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Core.Metadata;
 using ErsatzTV.FFmpeg.Runtime;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Application.Plex;
 
 public class CallPlexNetworkScannerHandler : CallLibraryScannerHandler<SynchronizePlexNetworks>,
     IRequestHandler<SynchronizePlexNetworks, Either<BaseError, Unit>>
 {
+    private readonly IScannerProxyService _scannerProxyService;
+
     public CallPlexNetworkScannerHandler(
         IDbContextFactory<TvContext> dbContextFactory,
         IConfigElementRepository configElementRepository,
-        ChannelWriter<ISearchIndexBackgroundServiceRequest> channel,
-        IMediator mediator,
-        IRuntimeInfo runtimeInfo) : base(dbContextFactory, configElementRepository, channel, mediator, runtimeInfo)
+        IScannerProxyService scannerProxyService,
+        IRuntimeInfo runtimeInfo,
+        ILogger<CallPlexNetworkScannerHandler> logger)
+        : base(dbContextFactory, configElementRepository, runtimeInfo, logger)
     {
+        _scannerProxyService = scannerProxyService;
     }
 
     public async Task<Either<BaseError, Unit>>
         Handle(SynchronizePlexNetworks request, CancellationToken cancellationToken)
     {
-        Validation<BaseError, string> validation = await Validate(request, cancellationToken);
+        Validation<BaseError, ScanParameters> validation = await Validate(request, cancellationToken);
         return await validation.Match(
             scanner => PerformScan(scanner, request, cancellationToken),
             error =>
@@ -41,7 +47,7 @@ public class CallPlexNetworkScannerHandler : CallLibraryScannerHandler<Synchroni
             });
     }
 
-    protected override async Task<DateTimeOffset> GetLastScan(
+    protected override async Task<Tuple<string, DateTimeOffset>> GetLastScan(
         TvContext dbContext,
         SynchronizePlexNetworks request,
         CancellationToken cancellationToken)
@@ -51,7 +57,7 @@ public class CallPlexNetworkScannerHandler : CallLibraryScannerHandler<Synchroni
             .SelectOneAsync(l => l.Id, l => l.Id == request.PlexLibraryId, cancellationToken)
             .Match(l => l.LastNetworksScan ?? SystemTime.MinValueUtc, () => SystemTime.MaxValueUtc);
 
-        return new DateTimeOffset(minDateTime, TimeSpan.Zero);
+        return new Tuple<string, DateTimeOffset>(string.Empty, new DateTimeOffset(minDateTime, TimeSpan.Zero));
     }
 
     protected override bool ScanIsRequired(
@@ -69,20 +75,35 @@ public class CallPlexNetworkScannerHandler : CallLibraryScannerHandler<Synchroni
     }
 
     private async Task<Either<BaseError, Unit>> PerformScan(
-        string scanner,
+        ScanParameters parameters,
         SynchronizePlexNetworks request,
         CancellationToken cancellationToken)
     {
-        var arguments = new List<string>
+        Option<Guid> maybeScanId = _scannerProxyService.StartScan(FakeLibraryId.PlexNetworks);
+        foreach (var scanId in maybeScanId)
         {
-            "scan-plex-networks", request.PlexLibraryId.ToString(CultureInfo.InvariantCulture)
-        };
+            try
+            {
+                var arguments = new List<string>
+                {
+                    "scan-plex-networks",
+                    request.PlexLibraryId.ToString(CultureInfo.InvariantCulture),
+                    GetBaseUrl(scanId)
+                };
 
-        if (request.ForceScan)
-        {
-            arguments.Add("--force");
+                if (request.ForceScan)
+                {
+                    arguments.Add("--force");
+                }
+
+                return await base.PerformScan(parameters, arguments, cancellationToken).MapT(_ => Unit.Default);
+            }
+            finally
+            {
+                _scannerProxyService.EndScan(scanId);
+            }
         }
 
-        return await base.PerformScan(scanner, arguments, cancellationToken).MapT(_ => Unit.Default);
+        return BaseError.New("Plex networks are already scanning");
     }
 }

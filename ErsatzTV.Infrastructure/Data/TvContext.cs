@@ -10,10 +10,17 @@ namespace ErsatzTV.Infrastructure.Data;
 public class TvContext : DbContext
 {
     private readonly ILoggerFactory _loggerFactory;
+    private readonly SlowQueryInterceptor _slowQueryInterceptor;
 
-    public TvContext(DbContextOptions<TvContext> options, ILoggerFactory loggerFactory)
-        : base(options) =>
+    public TvContext(
+        DbContextOptions<TvContext> options,
+        ILoggerFactory loggerFactory,
+        SlowQueryInterceptor slowQueryInterceptor)
+        : base(options)
+    {
         _loggerFactory = loggerFactory;
+        _slowQueryInterceptor = slowQueryInterceptor;
+    }
 
     public static string LastInsertedRowId { get; set; } = "last_insert_rowid()";
     public static string CaseInsensitiveCollation { get; set; } = "NOCASE";
@@ -43,10 +50,12 @@ public class TvContext : DbContext
     public DbSet<MediaVersion> MediaVersions { get; set; }
     public DbSet<MediaFile> MediaFiles { get; set; }
     public DbSet<MediaStream> MediaStreams { get; set; }
+    public DbSet<MediaChapter> MediaChapters { get; set; }
     public DbSet<Movie> Movies { get; set; }
     public DbSet<MovieMetadata> MovieMetadata { get; set; }
     public DbSet<Artwork> Artwork { get; set; }
     public DbSet<Artist> Artists { get; set; }
+    public DbSet<Actor> Actors { get; set; }
     public DbSet<ArtistMetadata> ArtistMetadata { get; set; }
     public DbSet<MusicVideo> MusicVideos { get; set; }
     public DbSet<MusicVideoMetadata> MusicVideoMetadata { get; set; }
@@ -87,14 +96,18 @@ public class TvContext : DbContext
     public DbSet<CollectionItem> CollectionItems { get; set; }
     public DbSet<MultiCollection> MultiCollections { get; set; }
     public DbSet<SmartCollection> SmartCollections { get; set; }
+    public DbSet<RerunCollection> RerunCollections { get; set; }
+    public DbSet<RerunHistory> RerunHistory { get; set; }
     public DbSet<ProgramSchedule> ProgramSchedules { get; set; }
     public DbSet<ProgramScheduleItem> ProgramScheduleItems { get; set; }
     public DbSet<Playout> Playouts { get; set; }
     public DbSet<PlayoutHistory> PlayoutHistory { get; set; }
     public DbSet<ProgramScheduleAlternate> ProgramScheduleAlternates { get; set; }
     public DbSet<PlayoutItem> PlayoutItems { get; set; }
+    public DbSet<PlayoutGap> PlayoutGaps { get; set; }
     public DbSet<PlayoutProgramScheduleAnchor> PlayoutProgramScheduleItemAnchors { get; set; }
     public DbSet<PlayoutTemplate> PlayoutTemplates { get; set; }
+    public DbSet<PlayoutBuildStatus> PlayoutBuildStatus { get; set; }
     public DbSet<BlockGroup> BlockGroups { get; set; }
     public DbSet<Block> Blocks { get; set; }
     public DbSet<BlockItem> BlockItems { get; set; }
@@ -117,17 +130,56 @@ public class TvContext : DbContext
     public DbSet<Subtitle> Subtitles { get; set; }
     public DbSet<GraphicsElement> GraphicsElements { get; set; }
 
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
         optionsBuilder.UseLoggerFactory(_loggerFactory);
+        optionsBuilder.AddInterceptors(_slowQueryInterceptor);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
+        string collation = null;
+
         // mysql-specific configuration
         if ((Database.ProviderName ?? string.Empty).Contains("MySql", StringComparison.InvariantCultureIgnoreCase))
         {
             modelBuilder.Entity<MediaFile>().Property(mf => mf.Path).HasColumnType("longtext");
+            collation = "utf8mb4_general_ci";
+        }
+
+        // sqlite-specific configuration
+        if ((Database.ProviderName ?? string.Empty).Contains("Sqlite", StringComparison.InvariantCultureIgnoreCase))
+        {
+            collation = "NOCASE";
+        }
+
+        // case-insensitive columns
+        if (!string.IsNullOrEmpty(collation))
+        {
+            modelBuilder.Entity<ArtistMetadata>().Property(b => b.Title).UseCollation(collation);
+            modelBuilder.Entity<Block>().Property(b => b.Name).UseCollation(collation);
+            modelBuilder.Entity<BlockGroup>().Property(b => b.Name).UseCollation(collation);
+            modelBuilder.Entity<Channel>().Property(c => c.Name).UseCollation(collation);
+            modelBuilder.Entity<ChannelWatermark>().Property(c => c.Name).UseCollation(collation);
+            modelBuilder.Entity<Collection>().Property(c => c.Name).UseCollation(collation);
+            modelBuilder.Entity<Deco>().Property(d => d.Name).UseCollation(collation);
+            modelBuilder.Entity<DecoGroup>().Property(d => d.Name).UseCollation(collation);
+            modelBuilder.Entity<DecoTemplate>().Property(d => d.Name).UseCollation(collation);
+            modelBuilder.Entity<DecoTemplateGroup>().Property(d => d.Name).UseCollation(collation);
+            modelBuilder.Entity<FillerPreset>().Property(fp => fp.Name).UseCollation(collation);
+            modelBuilder.Entity<MetadataGuid>().Property(mg => mg.Guid).UseCollation(collation);
+            modelBuilder.Entity<MovieMetadata>().Property(mm => mm.Title).UseCollation(collation);
+            modelBuilder.Entity<MultiCollection>().Property(mc => mc.Name).UseCollation(collation);
+            modelBuilder.Entity<Playlist>().Property(p => p.Name).UseCollation(collation);
+            modelBuilder.Entity<ProgramSchedule>().Property(ps => ps.Name).UseCollation(collation);
+            modelBuilder.Entity<RerunCollection>().Property(rc => rc.Name).UseCollation(collation);
+            modelBuilder.Entity<ShowMetadata>().Property(sm => sm.Title).UseCollation(collation);
+            modelBuilder.Entity<SmartCollection>().Property(sc => sc.Name).UseCollation(collation);
+            modelBuilder.Entity<Template>().Property(t => t.Name).UseCollation(collation);
+            modelBuilder.Entity<TemplateGroup>().Property(t => t.Name).UseCollation(collation);
+            modelBuilder.Entity<TraktList>().Property(t => t.Name).UseCollation(collation);
         }
 
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(TvContext).Assembly);

@@ -97,7 +97,7 @@ public class HardwareAccelerationHealthCheck : BaseHealthCheck, IHardwareAcceler
             var channels = string.Join(", ", badChannels.Map(c => $"{c.Number} - {c.Name}"));
             return WarningResult(
                 $"The following channels use ffmpeg profiles that are not configured for hardware acceleration ({accel}): {channels}",
-                $"{channels.Length} channels are not configured for hardware acceleration");
+                $"{badChannels.Count} channels are not configured for hardware acceleration");
         }
 
         return None;
@@ -129,22 +129,29 @@ public class HardwareAccelerationHealthCheck : BaseHealthCheck, IHardwareAcceler
                 case "videotoolbox":
                     result.Add(HardwareAccelerationKind.VideoToolbox);
                     break;
+                case "rkmpp":
+                    result.Add(HardwareAccelerationKind.Rkmpp);
+                    break;
             }
         }
 
-        if (_runtimeInfo.IsOSPlatform(OSPlatform.Windows))
+        // not real ffmpeg hwaccels, but have hw encoders that we can use
+        string output2 = await GetProcessOutput(
+            ffmpegPath,
+            FFmpegEncodersArguments,
+            cancellationToken);
+        foreach (string encoder in output2.Split("\n").Map(s => s.Trim()))
         {
-            string output2 = await GetProcessOutput(
-                ffmpegPath,
-                FFmpegEncodersArguments,
-                cancellationToken);
-            foreach (string method in output2.Split("\n").Map(s => s.Trim()))
+            if (_runtimeInfo.IsOSPlatform(OSPlatform.Windows) && encoder.Contains("_amf "))
             {
-                if (method.Contains("_amf "))
-                {
-                    result.Add(HardwareAccelerationKind.Amf);
-                }
+                result.Add(HardwareAccelerationKind.Amf);
             }
+
+            // TODO: fix and enable V4L2 M2M
+            // else if (_runtimeInfo.IsOSPlatform(OSPlatform.Linux) && encoder.Contains("_v4l2m2m "))
+            // {
+            //     result.Add(HardwareAccelerationKind.V4l2m2m);
+            // }
         }
 
         return result.ToList();

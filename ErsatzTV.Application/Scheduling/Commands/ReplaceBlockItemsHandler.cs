@@ -8,9 +8,9 @@ using Microsoft.EntityFrameworkCore;
 namespace ErsatzTV.Application.Scheduling;
 
 public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFactory)
-    : IRequestHandler<ReplaceBlockItems, Either<BaseError, List<BlockItemViewModel>>>
+    : IRequestHandler<ReplaceBlockItems, Either<BaseError, Unit>>
 {
-    public async Task<Either<BaseError, List<BlockItemViewModel>>> Handle(
+    public async Task<Either<BaseError, Unit>> Handle(
         ReplaceBlockItems request,
         CancellationToken cancellationToken)
     {
@@ -19,7 +19,7 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         return await validation.Apply(ps => Persist(dbContext, request, ps, cancellationToken));
     }
 
-    private static async Task<List<BlockItemViewModel>> Persist(
+    private static async Task<Unit> Persist(
         TvContext dbContext,
         ReplaceBlockItems request,
         Block block,
@@ -41,11 +41,12 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         //     await _channel.WriteAsync(new BuildPlayout(playout.Id, PlayoutBuildMode.Refresh));
         // }
 
-        return block.Items.Map(Mapper.ProjectToViewModel).ToList();
+        return Unit.Default;
     }
 
-    private static BlockItem BuildItem(Block block, int index, ReplaceBlockItem item) =>
-        new()
+    private static BlockItem BuildItem(Block block, int index, ReplaceBlockItem item)
+    {
+        var result = new BlockItem
         {
             BlockId = block.Id,
             Index = index,
@@ -54,10 +55,39 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
             MultiCollectionId = item.MultiCollectionId,
             SmartCollectionId = item.SmartCollectionId,
             MediaItemId = item.MediaItemId,
+            SearchTitle = item.SearchTitle,
+            SearchQuery = item.SearchQuery,
             PlaybackOrder = item.PlaybackOrder,
             IncludeInProgramGuide = item.IncludeInProgramGuide,
-            DisableWatermarks = item.DisableWatermarks
+            DisableWatermarks = item.DisableWatermarks,
+            BlockItemWatermarks = [],
+            BlockItemGraphicsElements = []
         };
+
+        foreach (int watermarkId in item.WatermarkIds)
+        {
+            result.BlockItemWatermarks ??= [];
+            result.BlockItemWatermarks.Add(
+                new BlockItemWatermark
+                {
+                    BlockItem = result,
+                    WatermarkId = watermarkId
+                });
+        }
+
+        foreach (int graphicsElementId in item.GraphicsElementIds)
+        {
+            result.BlockItemGraphicsElements ??= [];
+            result.BlockItemGraphicsElements.Add(
+                new BlockItemGraphicsElement
+                {
+                    BlockItem = result,
+                    GraphicsElementId = graphicsElementId
+                });
+        }
+
+        return result;
+    }
 
     private static Task<Validation<BaseError, Block>> Validate(
         TvContext dbContext,
@@ -74,6 +104,11 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         CancellationToken cancellationToken) =>
         dbContext.Blocks
             .Include(b => b.Items)
+            .ThenInclude(i => i.BlockItemWatermarks)
+            .ThenInclude(wm => wm.Watermark)
+            .Include(b => b.Items)
+            .ThenInclude(i => i.BlockItemGraphicsElements)
+            .ThenInclude(ge => ge.GraphicsElement)
             .SelectOneAsync(b => b.Id, b => b.Id == blockId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("[BlockId] does not exist."));
 
@@ -89,49 +124,56 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
     {
         switch (item.CollectionType)
         {
-            case ProgramScheduleItemCollectionType.Collection:
+            case CollectionType.Collection:
                 if (item.CollectionId is null)
                 {
                     return BaseError.New("[Collection] is required for collection type 'Collection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.TelevisionShow:
+            case CollectionType.TelevisionShow:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'TelevisionShow'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.TelevisionSeason:
+            case CollectionType.TelevisionSeason:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'TelevisionSeason'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.Artist:
+            case CollectionType.Artist:
                 if (item.MediaItemId is null)
                 {
                     return BaseError.New("[MediaItem] is required for collection type 'Artist'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.MultiCollection:
+            case CollectionType.MultiCollection:
                 if (item.MultiCollectionId is null)
                 {
                     return BaseError.New("[MultiCollection] is required for collection type 'MultiCollection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.SmartCollection:
+            case CollectionType.SmartCollection:
                 if (item.SmartCollectionId is null)
                 {
                     return BaseError.New("[SmartCollection] is required for collection type 'SmartCollection'");
                 }
 
                 break;
-            case ProgramScheduleItemCollectionType.FakeCollection:
+            case CollectionType.SearchQuery:
+                if (string.IsNullOrWhiteSpace(item.SearchQuery))
+                {
+                    return BaseError.New("[SearchQuery] is required for collection type 'SearchQuery'");
+                }
+
+                break;
+            case CollectionType.FakeCollection:
             default:
                 return BaseError.New("[CollectionType] is invalid");
         }

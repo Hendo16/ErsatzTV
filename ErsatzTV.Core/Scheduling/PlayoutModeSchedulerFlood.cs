@@ -1,19 +1,15 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using LanguageExt.UnsafeValueAccess;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Core.Scheduling;
 
-public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramScheduleItemFlood>
+public class PlayoutModeSchedulerFlood(ILogger logger) : PlayoutModeSchedulerBase<ProgramScheduleItemFlood>(logger)
 {
-    public PlayoutModeSchedulerFlood(ILogger logger)
-        : base(logger)
-    {
-    }
-
-    public override Tuple<PlayoutBuilderState, List<PlayoutItem>> Schedule(
+    public override PlayoutSchedulerResult Schedule(
         PlayoutBuilderState playoutBuilderState,
         Dictionary<CollectionKey, IMediaCollectionEnumerator> collectionEnumerators,
         ProgramScheduleItemFlood scheduleItem,
@@ -21,6 +17,7 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
         DateTimeOffset hardStop,
         CancellationToken cancellationToken)
     {
+        var warnings = new PlayoutBuildWarnings();
         var playoutItems = new List<PlayoutItem>();
 
         PlayoutBuilderState nextState = playoutBuilderState;
@@ -46,12 +43,12 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                 break;
             }
 
-            TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+            TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
 
             // never block scheduling when there is only one schedule item (with fixed start and flood)
             DateTimeOffset peekScheduleItemStart =
                 scheduleItem.Id != peekScheduleItem.Id && peekScheduleItem.StartType == StartType.Fixed
-                    ? GetStartTimeAfter(nextState with { InFlood = false }, peekScheduleItem, Option<ILogger>.None)
+                    ? GetStartTimeAfter(nextState with { InFlood = true }, peekScheduleItem, Option<ILogger>.None, true)
                     : DateTimeOffset.MaxValue;
 
             if (itemDuration == TimeSpan.Zero && mediaItem is RemoteStream)
@@ -81,7 +78,8 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                 PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
                 SubtitleMode = scheduleItem.SubtitleMode,
-                PlayoutItemWatermarks = []
+                PlayoutItemWatermarks = [],
+                PlayoutItemGraphicsElements = []
             };
 
             foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
@@ -92,6 +90,17 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                     {
                         PlayoutItem = playoutItem,
                         WatermarkId = programScheduleItemWatermark.WatermarkId
+                    });
+            }
+
+            foreach (ProgramScheduleItemGraphicsElement programScheduleItemGraphicsElement in scheduleItem
+                         .ProgramScheduleItemGraphicsElements ?? [])
+            {
+                playoutItem.PlayoutItemGraphicsElements.Add(
+                    new PlayoutItemGraphicsElement
+                    {
+                        PlayoutItem = playoutItem,
+                        GraphicsElementId = programScheduleItemGraphicsElement.GraphicsElementId
                     });
             }
 
@@ -107,7 +116,7 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                 scheduleItem,
                 playoutItem,
                 itemChapters,
-                false,
+                warnings,
                 cancellationToken);
 
             DateTimeOffset itemEndTimeWithFiller = maybePlayoutItems.Max(pi => pi.FinishOffset);
@@ -133,7 +142,7 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                         : nextState.NextGuideGroup
                 };
 
-                contentEnumerator.MoveNext();
+                contentEnumerator.MoveNext(itemStartTime);
             }
             else
             {
@@ -176,6 +185,7 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
                 scheduleItem,
                 playoutItems,
                 peekItemStart,
+                warnings,
                 cancellationToken);
         }
 
@@ -192,6 +202,6 @@ public class PlayoutModeSchedulerFlood : PlayoutModeSchedulerBase<ProgramSchedul
 
         nextState = nextState with { NextGuideGroup = nextState.IncrementGuideGroup };
 
-        return Tuple(nextState, playoutItems);
+        return new PlayoutSchedulerResult(nextState, playoutItems, warnings);
     }
 }

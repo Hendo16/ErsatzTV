@@ -2,8 +2,8 @@ using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Plex;
+using ErsatzTV.Scanner.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Scanner.Core.Plex;
@@ -11,17 +11,17 @@ namespace ErsatzTV.Scanner.Core.Plex;
 public class PlexCollectionScanner : IPlexCollectionScanner
 {
     private readonly ILogger<PlexCollectionScanner> _logger;
-    private readonly IMediator _mediator;
+    private readonly IScannerProxy _scannerProxy;
     private readonly IPlexCollectionRepository _plexCollectionRepository;
     private readonly IPlexServerApiClient _plexServerApiClient;
 
     public PlexCollectionScanner(
-        IMediator mediator,
+        IScannerProxy scannerProxy,
         IPlexCollectionRepository plexCollectionRepository,
         IPlexServerApiClient plexServerApiClient,
         ILogger<PlexCollectionScanner> logger)
     {
-        _mediator = mediator;
+        _scannerProxy = scannerProxy;
         _plexCollectionRepository = plexCollectionRepository;
         _plexServerApiClient = plexServerApiClient;
         _logger = logger;
@@ -30,6 +30,7 @@ public class PlexCollectionScanner : IPlexCollectionScanner
     public async Task<Either<BaseError, Unit>> ScanCollections(
         PlexConnection connection,
         PlexServerAuthToken token,
+        bool deepScan,
         CancellationToken cancellationToken)
     {
         try
@@ -49,7 +50,7 @@ public class PlexCollectionScanner : IPlexCollectionScanner
                 Option<PlexCollection> maybeExisting = existingCollections.Find(c => c.Key == collection.Key);
 
                 // skip if unchanged (etag)
-                if (await maybeExisting.Map(e => e.Etag ?? string.Empty).IfNoneAsync(string.Empty) ==
+                if (!deepScan && await maybeExisting.Map(e => e.Etag ?? string.Empty).IfNoneAsync(string.Empty) ==
                     collection.Etag)
                 {
                     _logger.LogDebug("Plex collection {Name} is unchanged", collection.Name);
@@ -63,10 +64,11 @@ public class PlexCollectionScanner : IPlexCollectionScanner
                     await _plexCollectionRepository.AddCollection(collection);
                 }
 
-                await SyncCollectionItems(connection, token, collection, cancellationToken);
-
-                // save collection etag
-                await _plexCollectionRepository.SetEtag(collection);
+                if (await SyncCollectionItems(connection, token, collection, cancellationToken))
+                {
+                    // save collection etag
+                    await _plexCollectionRepository.SetEtag(collection);
+                }
             }
 
             // remove missing collections (and remove any lingering tags from those collections)
@@ -84,7 +86,7 @@ public class PlexCollectionScanner : IPlexCollectionScanner
         return Unit.Default;
     }
 
-    private async Task SyncCollectionItems(
+    private async Task<bool> SyncCollectionItems(
         PlexConnection connection,
         PlexServerAuthToken token,
         PlexCollection collection,
@@ -112,14 +114,18 @@ public class PlexCollectionScanner : IPlexCollectionScanner
             _logger.LogDebug("Plex collection {Name} contains {Count} items", collection.Name, addedIds.Count);
 
             int[] changedIds = removedIds.Concat(addedIds).Distinct().ToArray();
+            if (!await _scannerProxy.ReindexMediaItems(changedIds, CancellationToken.None))
+            {
+                _logger.LogWarning("Failed to reindex media items from scanner process");
+                return false;
+            }
 
-            await _mediator.Publish(
-                new ScannerProgressUpdate(0, null, null, changedIds.ToArray(), Array.Empty<int>()),
-                CancellationToken.None);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to synchronize Plex collection {Name}", collection.Name);
+            return false;
         }
     }
 }

@@ -1,9 +1,12 @@
 ﻿using System.Collections.Immutable;
+using System.Text;
 using CliWrap;
+using CliWrap.Buffered;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
-using ErsatzTV.Core.Graphics;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.FFmpeg;
@@ -13,8 +16,8 @@ using ErsatzTV.FFmpeg.OutputFormat;
 using ErsatzTV.FFmpeg.Pipeline;
 using ErsatzTV.FFmpeg.Preset;
 using ErsatzTV.FFmpeg.State;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 using MediaStream = ErsatzTV.Core.Domain.MediaStream;
 
 namespace ErsatzTV.Core.FFmpeg;
@@ -22,6 +25,12 @@ namespace ErsatzTV.Core.FFmpeg;
 public class FFmpegLibraryProcessService : IFFmpegProcessService
 {
     private readonly IConfigElementRepository _configElementRepository;
+    private readonly IGraphicsElementLoader _graphicsElementLoader;
+    private readonly IMemoryCache _memoryCache;
+    private readonly IMpegTsScriptService _mpegTsScriptService;
+    private readonly ILocalStatisticsProvider _localStatisticsProvider;
+    private readonly IMediaItemRepository _mediaItemRepository;
+    private readonly ILocalFileSystem _localFileSystem;
     private readonly ICustomStreamSelector _customStreamSelector;
     private readonly FFmpegProcessService _ffmpegProcessService;
     private readonly IFFmpegStreamSelector _ffmpegStreamSelector;
@@ -36,6 +45,12 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         ITempFilePool tempFilePool,
         IPipelineBuilderFactory pipelineBuilderFactory,
         IConfigElementRepository configElementRepository,
+        IGraphicsElementLoader graphicsElementLoader,
+        IMemoryCache memoryCache,
+        IMpegTsScriptService mpegTsScriptService,
+        ILocalStatisticsProvider localStatisticsProvider,
+        IMediaItemRepository mediaItemRepository,
+        ILocalFileSystem localFileSystem,
         ILogger<FFmpegLibraryProcessService> logger)
     {
         _ffmpegProcessService = ffmpegProcessService;
@@ -44,6 +59,12 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         _tempFilePool = tempFilePool;
         _pipelineBuilderFactory = pipelineBuilderFactory;
         _configElementRepository = configElementRepository;
+        _graphicsElementLoader = graphicsElementLoader;
+        _memoryCache = memoryCache;
+        _mpegTsScriptService = mpegTsScriptService;
+        _localStatisticsProvider = localStatisticsProvider;
+        _mediaItemRepository = mediaItemRepository;
+        _localFileSystem = localFileSystem;
         _logger = logger;
     }
 
@@ -52,7 +73,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         string ffprobePath,
         bool saveReports,
         Channel channel,
-        MediaVersion videoVersion,
+        MediaItemVideoVersion videoVersion,
         MediaItemAudioVersion audioVersion,
         string videoPath,
         string audioPath,
@@ -64,6 +85,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         DateTimeOffset start,
         DateTimeOffset finish,
         DateTimeOffset now,
+        TimeSpan originalContentDuration,
         List<WatermarkOptions> watermarks,
         List<PlayoutItemGraphicsElement> graphicsElements,
         string vaapiDisplay,
@@ -74,15 +96,15 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         StreamInputKind streamInputKind,
         FillerKind fillerKind,
         TimeSpan inPoint,
-        TimeSpan outPoint,
         DateTimeOffset channelStartTime,
-        long ptsOffset,
-        Option<int> targetFramerate,
+        TimeSpan ptsOffset,
+        Option<FrameRate> targetFramerate,
         Option<string> customReportsFolder,
         Action<FFmpegPipeline> pipelineAction,
+        bool canProxy,
         CancellationToken cancellationToken)
     {
-        MediaStream videoStream = await _ffmpegStreamSelector.SelectVideoStream(videoVersion);
+        MediaStream videoStream = await _ffmpegStreamSelector.SelectVideoStream(videoVersion.MediaVersion);
 
         // we cannot burst live input
         hlsRealtime = hlsRealtime || streamInputKind is StreamInputKind.Live;
@@ -90,12 +112,11 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         FFmpegPlaybackSettings playbackSettings = FFmpegPlaybackSettingsCalculator.CalculateSettings(
             channel.StreamingMode,
             channel.FFmpegProfile,
-            videoVersion,
+            videoVersion.MediaVersion,
             videoStream,
             start,
             now,
             inPoint,
-            outPoint,
             hlsRealtime,
             streamInputKind,
             targetFramerate);
@@ -148,17 +169,20 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             maybeSubtitle = allSubtitles.HeadOrNone();
         }
 
-        foreach (Subtitle subtitle in maybeSubtitle)
+        if (canProxy)
         {
-            if (subtitle.SubtitleKind == SubtitleKind.Sidecar || subtitle is
-                    { SubtitleKind: SubtitleKind.Embedded, IsImage: false, IsExtracted: true })
+            foreach (Subtitle subtitle in maybeSubtitle)
             {
-                // proxy to avoid dealing with escaping
-                subtitle.Path = $"http://localhost:{Settings.StreamingPort}/media/subtitle/{subtitle.Id}";
-
-                foreach (TimeSpan seek in playbackSettings.StreamSeek)
+                if (subtitle.SubtitleKind == SubtitleKind.Sidecar || subtitle is
+                        { SubtitleKind: SubtitleKind.Embedded, IsImage: false, IsExtracted: true })
                 {
-                    subtitle.Path += $"?seekToMs={(int)seek.TotalMilliseconds}";
+                    // proxy to avoid dealing with escaping
+                    subtitle.Path = $"http://localhost:{Settings.StreamingPort}/media/subtitle/{subtitle.Id}";
+
+                    foreach (TimeSpan seek in playbackSettings.StreamSeek)
+                    {
+                        subtitle.Path += $"?seekToMs={(int)seek.TotalMilliseconds}";
+                    }
                 }
             }
         }
@@ -166,6 +190,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         string audioFormat = playbackSettings.AudioFormat switch
         {
             FFmpegProfileAudioFormat.Aac => AudioFormat.Aac,
+            FFmpegProfileAudioFormat.AacLatm => AudioFormat.AacLatm,
             FFmpegProfileAudioFormat.Ac3 => AudioFormat.Ac3,
             FFmpegProfileAudioFormat.Copy => AudioFormat.Copy,
             _ => throw new ArgumentOutOfRangeException($"unexpected audio format {playbackSettings.VideoFormat}")
@@ -177,12 +202,13 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             playbackSettings.AudioBitrate,
             playbackSettings.AudioBufferSize,
             playbackSettings.AudioSampleRate,
-            videoPath == audioPath ? playbackSettings.AudioDuration : Option<TimeSpan>.None,
+            audioFormat != AudioFormat.Copy && videoPath == audioPath,
             playbackSettings.NormalizeLoudnessMode switch
             {
                 NormalizeLoudnessMode.LoudNorm => AudioFilter.LoudNorm,
                 _ => AudioFilter.None
-            });
+            },
+            playbackSettings.TargetLoudness);
 
         // don't log generated images, or hls direct, which are expected to have unknown format
         bool isUnknownPixelFormatExpected =
@@ -201,6 +227,12 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
                 };
             });
 
+        ScanKind scanKind = ScanKind.Progressive;
+        if (playbackSettings.Deinterlace)
+        {
+            scanKind = await ProbeScanKind(ffmpegPath, videoVersion.MediaItem, cancellationToken);
+        }
+
         var ffmpegVideoStream = new VideoStream(
             videoStream.Index,
             videoStream.Codec,
@@ -211,12 +243,12 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
                 videoStream.ColorSpace,
                 videoStream.ColorTransfer,
                 videoStream.ColorPrimaries),
-            new FrameSize(videoVersion.Width, videoVersion.Height),
-            videoVersion.SampleAspectRatio,
-            videoVersion.DisplayAspectRatio,
-            videoVersion.RFrameRate,
+            new FrameSize(videoVersion.MediaVersion.Width, videoVersion.MediaVersion.Height),
+            videoVersion.MediaVersion.SampleAspectRatio,
+            videoVersion.MediaVersion.DisplayAspectRatio,
+            new FrameRate(videoVersion.MediaVersion.RFrameRate),
             videoPath != audioPath, // still image when paths are different
-            videoVersion.VideoScanKind == VideoScanKind.Progressive ? ScanKind.Progressive : ScanKind.Interlaced);
+            scanKind);
 
         var videoInputFile = new VideoInputFile(
             videoPath,
@@ -232,7 +264,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         // when no audio streams are available, use null audio source
         if (!audioVersion.MediaVersion.Streams.Any(s => s.MediaStreamKind is MediaStreamKind.Audio))
         {
-            audioInputFile = new NullAudioInputFile(audioState with { AudioDuration = playbackSettings.AudioDuration });
+            audioInputFile = new NullAudioInputFile(audioState with { PadAudio = playbackSettings.PadAudio });
         }
 
         OutputFormatKind outputFormat = OutputFormatKind.MpegTs;
@@ -240,9 +272,6 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         {
             case StreamingMode.HttpLiveStreamingSegmenter:
                 outputFormat = OutputFormatKind.Hls;
-                break;
-            case StreamingMode.HttpLiveStreamingSegmenterV2:
-                outputFormat = OutputFormatKind.Nut;
                 break;
             case StreamingMode.HttpLiveStreamingDirect:
             {
@@ -266,7 +295,8 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
 
         Option<SubtitleInputFile> subtitleInputFile = maybeSubtitle.Map<Option<SubtitleInputFile>>(subtitle =>
         {
-            if (!subtitle.IsImage && subtitle.SubtitleKind == SubtitleKind.Embedded &&
+            if (channel.StreamingMode != StreamingMode.HttpLiveStreamingDirect && !subtitle.IsImage &&
+                subtitle.SubtitleKind == SubtitleKind.Embedded &&
                 (!subtitle.IsExtracted || string.IsNullOrWhiteSpace(subtitle.Path)))
             {
                 _logger.LogWarning("Subtitles are not yet available for this item");
@@ -278,7 +308,13 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
                 subtitle.Codec,
                 StreamKind.Video);
 
-            string path = subtitle.IsImage ? videoPath : subtitle.Path;
+            string subtitlePath = subtitle.Path;
+            if (!canProxy && !subtitle.IsImage && subtitle.IsExtracted)
+            {
+                subtitlePath = Path.Combine(FileSystemLayout.SubtitleCacheFolder, subtitlePath);
+            }
+
+            string path = subtitle.IsImage ? videoPath : subtitlePath;
 
             SubtitleMethod method = SubtitleMethod.Burn;
             if (channel.StreamingMode == StreamingMode.HttpLiveStreamingDirect)
@@ -330,22 +366,97 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         Option<GraphicsEngineContext> graphicsEngineContext = Option<GraphicsEngineContext>.None;
         List<GraphicsElementContext> graphicsElementContexts = [];
 
-        // use graphics engine for all watermarks
-        graphicsElementContexts.AddRange(watermarks.Map(wm => new WatermarkElementContext(wm)));
+        // use ffmpeg for single permanent watermark, graphics engine for all others
+        if (graphicsElements.Count == 0 && watermarks.Count == 1 && watermarks.All(wm => wm.Watermark.Mode is ChannelWatermarkMode.Permanent))
+        {
+            foreach (var wm in watermarks)
+            {
+                List<VideoStream> videoStreams =
+                [
+                    new(
+                        await wm.ImageStreamIndex.IfNoneAsync(0),
+                        "unknown",
+                        string.Empty,
+                        new PixelFormatUnknown(),
+                        ColorParams.Default,
+                        new FrameSize(1, 1),
+                        string.Empty,
+                        string.Empty,
+                        Option<FrameRate>.None,
+                        !await IsWatermarkAnimated(ffprobePath, wm.ImagePath),
+                        ScanKind.Progressive)
+                ];
 
-        HardwareAccelerationMode hwAccel = GetHardwareAccelerationMode(playbackSettings, fillerKind);
+                var state = new WatermarkState(
+                    None,
+                    wm.Watermark.Location,
+                    wm.Watermark.Size,
+                    wm.Watermark.WidthPercent,
+                    wm.Watermark.HorizontalMarginPercent,
+                    wm.Watermark.VerticalMarginPercent,
+                    wm.Watermark.Opacity,
+                    wm.Watermark.PlaceWithinSourceContent);
+
+                watermarkInputFile = new WatermarkInputFile(wm.ImagePath, videoStreams, state);
+            }
+        }
+        else
+        {
+            graphicsElementContexts.AddRange(watermarks.Map(wm => new WatermarkElementContext(wm)));
+        }
+
+        HardwareAccelerationMode hwAccel = GetHardwareAccelerationMode(playbackSettings);
 
         string videoFormat = GetVideoFormat(playbackSettings);
         Option<string> maybeVideoProfile = GetVideoProfile(videoFormat, channel.FFmpegProfile.VideoProfile);
-        Option<string> maybeVideoPreset = GetVideoPreset(hwAccel, videoFormat, channel.FFmpegProfile.VideoPreset);
+        Option<string> maybeVideoPreset = GetVideoPreset(
+            hwAccel,
+            videoFormat,
+            channel.FFmpegProfile.VideoPreset,
+            FFmpegLibraryHelper.MapBitDepth(channel.FFmpegProfile.BitDepth));
 
-        Option<string> hlsPlaylistPath = outputFormat == OutputFormatKind.Hls
+        Option<string> hlsPlaylistPath = outputFormat is OutputFormatKind.Hls or OutputFormatKind.HlsMp4
             ? Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live.m3u8")
             : Option<string>.None;
 
-        Option<string> hlsSegmentTemplate = outputFormat == OutputFormatKind.Hls
-            ? Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.ts")
-            : Option<string>.None;
+        long nowSeconds = now.ToUnixTimeSeconds();
+
+        Option<string> hlsSegmentTemplate = outputFormat switch
+        {
+            OutputFormatKind.Hls => Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.ts"),
+            OutputFormatKind.HlsMp4 => Path.Combine(
+                FileSystemLayout.TranscodeFolder,
+                channel.Number,
+                $"live_{nowSeconds}_%06d.m4s"),
+            _ => Option<string>.None
+        };
+
+        Option<string> hlsInitTemplate = outputFormat switch
+        {
+            OutputFormatKind.HlsMp4 => $"{nowSeconds}_init.mp4",
+            _ =>  Option<string>.None
+        };
+
+        Option<string> hlsSegmentOptions = Option<string>.None;
+        if (outputFormat is OutputFormatKind.Hls)
+        {
+            string options = string.Empty;
+
+            if (ptsOffset == TimeSpan.Zero)
+            {
+                options += "+initial_discontinuity";
+            }
+
+            if (audioFormat == AudioFormat.AacLatm)
+            {
+                options += "+latm";
+            }
+
+            if (!string.IsNullOrWhiteSpace(options))
+            {
+                hlsSegmentOptions = $"mpegts_flags={options}";
+            }
+        }
 
         FrameSize scaledSize = ffmpegVideoStream.SquarePixelFrameSize(
             new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height));
@@ -363,8 +474,8 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
 
         if (channel.FFmpegProfile.ScalingBehavior is ScalingBehavior.Crop)
         {
-            bool isTooSmallToCrop = videoVersion.Height < channel.FFmpegProfile.Resolution.Height ||
-                                    videoVersion.Width < channel.FFmpegProfile.Resolution.Width;
+            bool isTooSmallToCrop = videoVersion.MediaVersion.Height < channel.FFmpegProfile.Resolution.Height ||
+                                    videoVersion.MediaVersion.Width < channel.FFmpegProfile.Resolution.Width;
 
             // if any dimension is smaller than the crop, scale beyond the crop (beyond the target resolution)
             if (isTooSmallToCrop)
@@ -389,7 +500,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
 
         var desiredState = new FrameState(
             playbackSettings.RealtimeOutput,
-            fillerKind == FillerKind.Fallback,
+            InfiniteLoop: false,
             videoFormat,
             maybeVideoProfile,
             maybeVideoPreset,
@@ -398,109 +509,45 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             scaledSize,
             paddedSize,
             cropSize,
-            false,
+            channel.FFmpegProfile.PadMode is FilterMode.HardwareIfPossible
+                ? FFmpegFilterMode.HardwareIfPossible
+                : FFmpegFilterMode.Software,
+            IsAnamorphic: false,
             playbackSettings.FrameRate,
             playbackSettings.VideoBitrate,
             playbackSettings.VideoBufferSize,
             playbackSettings.VideoTrackTimeScale,
             playbackSettings.Deinterlace);
 
-        foreach (PlayoutItemGraphicsElement playoutItemGraphicsElement in graphicsElements)
-        {
-            switch (playoutItemGraphicsElement.GraphicsElement.Kind)
-            {
-                case GraphicsElementKind.Text:
-                {
-                    Option<TextGraphicsElement> maybeElement =
-                        await TextGraphicsElement.FromFile(playoutItemGraphicsElement.GraphicsElement.Path);
-                    if (maybeElement.IsNone)
-                    {
-                        _logger.LogWarning(
-                            "Failed to load text graphics element from file {Path}; ignoring",
-                            playoutItemGraphicsElement.GraphicsElement.Path);
-                    }
-
-                    foreach (TextGraphicsElement element in maybeElement)
-                    {
-                        var variables = new Dictionary<string, string>();
-                        if (!string.IsNullOrWhiteSpace(playoutItemGraphicsElement.Variables))
-                        {
-                            variables = JsonConvert.DeserializeObject<Dictionary<string, string>>(
-                                playoutItemGraphicsElement.Variables);
-                        }
-
-                        graphicsElementContexts.Add(new TextElementDataContext(element, variables));
-                    }
-
-                    break;
-                }
-                case GraphicsElementKind.Image:
-                {
-                    Option<ImageGraphicsElement> maybeElement =
-                        await ImageGraphicsElement.FromFile(playoutItemGraphicsElement.GraphicsElement.Path);
-                    if (maybeElement.IsNone)
-                    {
-                        _logger.LogWarning(
-                            "Failed to load image graphics element from file {Path}; ignoring",
-                            playoutItemGraphicsElement.GraphicsElement.Path);
-                    }
-
-                    foreach (ImageGraphicsElement element in maybeElement)
-                    {
-                        graphicsElementContexts.Add(new ImageElementContext(element));
-                    }
-
-                    break;
-                }
-                case GraphicsElementKind.Subtitle:
-                {
-                    Option<SubtitlesGraphicsElement> maybeElement =
-                        await SubtitlesGraphicsElement.FromFile(playoutItemGraphicsElement.GraphicsElement.Path);
-                    if (maybeElement.IsNone)
-                    {
-                        _logger.LogWarning(
-                            "Failed to load subtitle graphics element from file {Path}; ignoring",
-                            playoutItemGraphicsElement.GraphicsElement.Path);
-                    }
-
-                    foreach (SubtitlesGraphicsElement element in maybeElement)
-                    {
-                        var variables = new Dictionary<string, string>();
-                        if (!string.IsNullOrWhiteSpace(playoutItemGraphicsElement.Variables))
-                        {
-                            variables = JsonConvert.DeserializeObject<Dictionary<string, string>>(
-                                playoutItemGraphicsElement.Variables);
-                        }
-
-                        graphicsElementContexts.Add(new SubtitleElementDataContext(element, variables));
-                    }
-
-                    break;
-                }
-                default:
-                    _logger.LogInformation(
-                        "Ignoring unsupported graphics element kind {Kind}",
-                        nameof(playoutItemGraphicsElement.GraphicsElement.Kind));
-                    break;
-            }
-        }
-
         // only use graphics engine when we have elements
-        if (graphicsElementContexts.Count > 0)
+        if (graphicsElementContexts.Count > 0 || graphicsElements.Count > 0)
         {
-            graphicsEngineInput = new GraphicsEngineInput();
+            FrameSize targetSize = await desiredState.CroppedSize.IfNoneAsync(desiredState.ScaledSize);
 
-            graphicsEngineContext = new GraphicsEngineContext(
+            FrameRate frameRate = await playbackSettings.FrameRate
+                .IfNoneAsync(new FrameRate(videoVersion.MediaVersion.RFrameRate));
+
+            var context = new GraphicsEngineContext(
                 channel.Number,
                 audioVersion.MediaItem,
                 graphicsElementContexts,
-                new Resolution { Width = desiredState.ScaledSize.Width, Height = desiredState.ScaledSize.Height },
+                TemplateVariables: [],
+                new Resolution { Width = targetSize.Width, Height = targetSize.Height },
                 channel.FFmpegProfile.Resolution,
-                await playbackSettings.FrameRate.IfNoneAsync(24),
+                frameRate,
                 channelStartTime,
                 start,
                 await playbackSettings.StreamSeek.IfNoneAsync(TimeSpan.Zero),
-                finish - now);
+                finish - now,
+                originalContentDuration);
+
+            context = await _graphicsElementLoader.LoadAll(context, graphicsElements, cancellationToken);
+
+            if (context?.Elements?.Count > 0)
+            {
+                graphicsEngineInput = new GraphicsEngineInput();
+                graphicsEngineContext = context;
+            }
         }
 
         var ffmpegState = new FFmpegState(
@@ -520,13 +567,15 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             outputFormat,
             hlsPlaylistPath,
             hlsSegmentTemplate,
+            hlsInitTemplate,
+            hlsSegmentOptions,
             ptsOffset,
             playbackSettings.ThreadCount,
             qsvExtraHardwareFrames,
-            videoVersion is BackgroundImageMediaVersion { IsSongWithProgress: true },
+            videoVersion.MediaVersion is BackgroundImageMediaVersion { IsSongWithProgress: true },
             false,
             GetTonemapAlgorithm(playbackSettings),
-            channel.UniqueId == Guid.Empty);
+            channel.Number == ".troubleshooting");
 
         _logger.LogDebug("FFmpeg desired state {FrameState}", desiredState);
 
@@ -558,16 +607,58 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             graphicsEngineInput,
             pipeline);
 
-        return new PlayoutItemResult(command, graphicsEngineContext);
+        return new PlayoutItemResult(command, graphicsEngineContext, videoVersion.MediaItem.Id);
+    }
+
+    private async Task<ScanKind> ProbeScanKind(
+        string ffmpegPath,
+        MediaItem mediaItem,
+        CancellationToken cancellationToken)
+    {
+        var headVersion = mediaItem.GetHeadVersion();
+        if (headVersion.VideoScanKind is VideoScanKind.Interlaced)
+        {
+            _logger.LogDebug("Container is marked {ScanKind}", headVersion.VideoScanKind);
+            return ScanKind.Interlaced;
+        }
+
+        // skip probe if disabled
+        if (!await _configElementRepository.GetValue<bool>(
+                ConfigElementKey.FFmpegProbeForInterlacedFrames,
+                cancellationToken).IfNoneAsync(false))
+        {
+            _logger.LogDebug("Probe for interlaced frames is disabled");
+            return ScanKind.Progressive;
+        }
+
+        if (headVersion.InterlacedRatio is null)
+        {
+            _logger.LogDebug("Will probe for interlaced frames");
+
+            Option<double> maybeInterlacedRatio =
+                await _localStatisticsProvider.GetInterlacedRatio(ffmpegPath, mediaItem, cancellationToken);
+            foreach (double ratio in maybeInterlacedRatio)
+            {
+                await _mediaItemRepository.SetInterlacedRatio(mediaItem, ratio);
+            }
+        }
+
+        var result = headVersion.InterlacedRatio > 0.05 ? ScanKind.Interlaced : ScanKind.Progressive;
+        _logger.LogDebug(
+            "Content has interlaced ratio of {Ratio} - will consider as {ScanKind}",
+            headVersion.InterlacedRatio,
+            result);
+        return result;
     }
 
     public async Task<Command> ForError(
         string ffmpegPath,
         Channel channel,
+        DateTimeOffset now,
         Option<TimeSpan> duration,
         string errorMessage,
         bool hlsRealtime,
-        long ptsOffset,
+        TimeSpan ptsOffset,
         string vaapiDisplay,
         VaapiDriver vaapiDriver,
         string vaapiDevice,
@@ -596,6 +687,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         string audioFormat = playbackSettings.AudioFormat switch
         {
             FFmpegProfileAudioFormat.Ac3 => AudioFormat.Ac3,
+            FFmpegProfileAudioFormat.AacLatm => AudioFormat.AacLatm,
             _ => AudioFormat.Aac
         };
 
@@ -605,14 +697,15 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             playbackSettings.AudioBitrate,
             playbackSettings.AudioBufferSize,
             playbackSettings.AudioSampleRate,
-            Option<TimeSpan>.None,
-            AudioFilter.None);
+            false,
+            AudioFilter.None,
+            playbackSettings.TargetLoudness);
 
         string videoFormat = GetVideoFormat(playbackSettings);
 
         var desiredState = new FrameState(
             playbackSettings.RealtimeOutput,
-            false,
+            InfiniteLoop: false,
             videoFormat,
             GetVideoProfile(videoFormat, channel.FFmpegProfile.VideoProfile),
             VideoPreset.Unset,
@@ -621,7 +714,10 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             new FrameSize(desiredResolution.Width, desiredResolution.Height),
             new FrameSize(desiredResolution.Width, desiredResolution.Height),
             Option<FrameSize>.None,
-            false,
+            channel.FFmpegProfile.PadMode is FilterMode.HardwareIfPossible
+                ? FFmpegFilterMode.HardwareIfPossible
+                : FFmpegFilterMode.Software,
+            IsAnamorphic: false,
             playbackSettings.FrameRate,
             playbackSettings.VideoBitrate,
             playbackSettings.VideoBufferSize,
@@ -634,20 +730,54 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             case StreamingMode.HttpLiveStreamingSegmenter:
                 outputFormat = OutputFormatKind.Hls;
                 break;
-            case StreamingMode.HttpLiveStreamingSegmenterV2:
-                outputFormat = OutputFormatKind.Nut;
-                break;
         }
 
-        Option<string> hlsPlaylistPath = outputFormat == OutputFormatKind.Hls
+        Option<string> hlsPlaylistPath = outputFormat is OutputFormatKind.Hls or OutputFormatKind.HlsMp4
             ? Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live.m3u8")
             : Option<string>.None;
 
-        Option<string> hlsSegmentTemplate = outputFormat == OutputFormatKind.Hls
-            ? Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.ts")
-            : Option<string>.None;
+        long nowSeconds = now.ToUnixTimeSeconds();
 
-        string videoPath = Path.Combine(FileSystemLayout.ResourcesCacheFolder, "background.png");
+        Option<string> hlsSegmentTemplate = outputFormat switch
+        {
+            OutputFormatKind.Hls => Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.ts"),
+            OutputFormatKind.HlsMp4 => Path.Combine(
+                FileSystemLayout.TranscodeFolder,
+                channel.Number,
+                $"live_{nowSeconds}_%06d.m4s"),
+            _ => Option<string>.None
+        };
+
+        Option<string> hlsInitTemplate = outputFormat switch
+        {
+            OutputFormatKind.HlsMp4 => $"{nowSeconds}_init.mp4",
+            _ =>  Option<string>.None
+        };
+
+        Option<string> hlsSegmentOptions = Option<string>.None;
+        if (outputFormat is OutputFormatKind.Hls)
+        {
+            string options = string.Empty;
+
+            if (ptsOffset == TimeSpan.Zero)
+            {
+                options += "+initial_discontinuity";
+            }
+
+            if (audioFormat == AudioFormat.AacLatm)
+            {
+                options += "+latm";
+            }
+
+            if (!string.IsNullOrWhiteSpace(options))
+            {
+                hlsSegmentOptions = $"mpegts_flags={options}";
+            }
+        }
+
+        string videoPath = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ResourcesCacheFolder,
+            "background.png");
 
         var videoVersion = BackgroundImageMediaVersion.ForPath(videoPath, desiredResolution);
 
@@ -667,11 +797,11 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         var videoInputFile = new VideoInputFile(videoPath, new List<VideoStream> { ffmpegVideoStream });
 
         // TODO: ignore accel if this already failed once
-        HardwareAccelerationMode hwAccel = GetHardwareAccelerationMode(playbackSettings, FillerKind.None);
+        HardwareAccelerationMode hwAccel = GetHardwareAccelerationMode(playbackSettings);
         _logger.LogDebug("HW accel mode: {HwAccel}", hwAccel);
 
         var ffmpegState = new FFmpegState(
-            false,
+            channel.Number == ".troubleshooting",
             HardwareAccelerationMode.None, // no hw accel decode since errors loop
             hwAccel,
             VaapiDriverName(hwAccel, vaapiDriver),
@@ -687,13 +817,15 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             outputFormat,
             hlsPlaylistPath,
             hlsSegmentTemplate,
+            hlsInitTemplate,
+            hlsSegmentOptions,
             ptsOffset,
             Option<int>.None,
             qsvExtraHardwareFrames,
             false,
             false,
             GetTonemapAlgorithm(playbackSettings),
-            channel.UniqueId == Guid.Empty);
+            channel.Number == ".troubleshooting");
 
         var ffmpegSubtitleStream = new ErsatzTV.FFmpeg.MediaStream(0, "ass", StreamKind.Video);
 
@@ -717,7 +849,9 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             VaapiDisplayName(hwAccel, vaapiDisplay),
             VaapiDriverName(hwAccel, vaapiDriver),
             VaapiDeviceName(hwAccel, vaapiDevice),
-            FileSystemLayout.FFmpegReportsFolder,
+            channel.Number == ".troubleshooting"
+                ? FileSystemLayout.TranscodeTroubleshootingFolder
+                : FileSystemLayout.FFmpegReportsFolder,
             FileSystemLayout.FontsCacheFolder,
             ffmpegPath);
 
@@ -761,172 +895,14 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         return GetCommand(ffmpegPath, None, None, None, concatInputFile, None, pipeline);
     }
 
-    public async Task<Command> ConcatSegmenterChannel(
-        string ffmpegPath,
-        bool saveReports,
-        Channel channel,
-        string scheme,
-        string host)
-    {
-        var resolution = new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height);
-        var concatInputFile = new ConcatInputFile(
-            $"http://localhost:{Settings.StreamingPort}/ffmpeg/concat/{channel.Number}?mode=segmenter-v2",
-            resolution);
-
-        FFmpegPlaybackSettings playbackSettings = FFmpegPlaybackSettingsCalculator.CalculateConcatSegmenterSettings(
-            channel.FFmpegProfile,
-            Option<int>.None);
-
-        playbackSettings.AudioDuration = Option<TimeSpan>.None;
-
-        string audioFormat = playbackSettings.AudioFormat switch
-        {
-            FFmpegProfileAudioFormat.Aac => AudioFormat.Aac,
-            FFmpegProfileAudioFormat.Ac3 => AudioFormat.Ac3,
-            FFmpegProfileAudioFormat.Copy => AudioFormat.Copy,
-            _ => throw new ArgumentOutOfRangeException($"unexpected audio format {playbackSettings.VideoFormat}")
-        };
-
-        var audioState = new AudioState(
-            audioFormat,
-            playbackSettings.AudioChannels,
-            playbackSettings.AudioBitrate,
-            playbackSettings.AudioBufferSize,
-            playbackSettings.AudioSampleRate,
-            Option<TimeSpan>.None,
-            playbackSettings.NormalizeLoudnessMode switch
-            {
-                // TODO: NormalizeLoudnessMode.LoudNorm => AudioFilter.LoudNorm,
-                _ => AudioFilter.None
-            });
-
-        IPixelFormat pixelFormat = channel.FFmpegProfile.BitDepth switch
-        {
-            FFmpegProfileBitDepth.TenBit => new PixelFormatYuv420P10Le(),
-            _ => new PixelFormatYuv420P()
-        };
-
-        var ffmpegVideoStream = new VideoStream(
-            0,
-            VideoFormat.Raw,
-            string.Empty,
-            Some(pixelFormat),
-            ColorParams.Default,
-            resolution,
-            "1:1",
-            string.Empty,
-            Option<string>.None,
-            false,
-            ScanKind.Progressive);
-
-        var videoInputFile = new VideoInputFile(concatInputFile.Url, new List<VideoStream> { ffmpegVideoStream });
-
-        var ffmpegAudioStream = new AudioStream(1, string.Empty, channel.FFmpegProfile.AudioChannels);
-        Option<AudioInputFile> audioInputFile = new AudioInputFile(
-            concatInputFile.Url,
-            new List<AudioStream> { ffmpegAudioStream },
-            audioState);
-
-        Option<SubtitleInputFile> subtitleInputFile = Option<SubtitleInputFile>.None;
-        Option<WatermarkInputFile> watermarkInputFile = Option<WatermarkInputFile>.None;
-        Option<GraphicsEngineInput> graphicsEngineInput = Option<GraphicsEngineInput>.None;
-
-        HardwareAccelerationMode hwAccel = GetHardwareAccelerationMode(playbackSettings, FillerKind.None);
-
-        string videoFormat = GetVideoFormat(playbackSettings);
-        Option<string> maybeVideoProfile = GetVideoProfile(videoFormat, channel.FFmpegProfile.VideoProfile);
-        Option<string> maybeVideoPreset = GetVideoPreset(hwAccel, videoFormat, channel.FFmpegProfile.VideoPreset);
-
-        Option<string> hlsPlaylistPath = Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live.m3u8");
-
-        Option<string> hlsSegmentTemplate = videoFormat switch
-        {
-            // hls/hevc needs mp4
-            VideoFormat.Hevc => Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.m4s"),
-
-            // hls is otherwise fine with ts
-            _ => Path.Combine(FileSystemLayout.TranscodeFolder, channel.Number, "live%06d.ts")
-        };
-
-        var desiredState = new FrameState(
-            playbackSettings.RealtimeOutput,
-            true,
-            videoFormat,
-            maybeVideoProfile,
-            maybeVideoPreset,
-            channel.FFmpegProfile.AllowBFrames,
-            Optional(playbackSettings.PixelFormat),
-            resolution,
-            resolution,
-            Option<FrameSize>.None,
-            false,
-            playbackSettings.FrameRate,
-            playbackSettings.VideoBitrate,
-            playbackSettings.VideoBufferSize,
-            playbackSettings.VideoTrackTimeScale,
-            playbackSettings.Deinterlace);
-
-        Option<string> vaapiDisplay = VaapiDisplayName(hwAccel, channel.FFmpegProfile.VaapiDisplay);
-        Option<string> vaapiDriver = VaapiDriverName(hwAccel, channel.FFmpegProfile.VaapiDriver);
-        Option<string> vaapiDevice = VaapiDeviceName(hwAccel, channel.FFmpegProfile.VaapiDevice);
-
-        var ffmpegState = new FFmpegState(
-            saveReports,
-            HardwareAccelerationMode.None,
-            hwAccel,
-            vaapiDriver,
-            vaapiDevice,
-            playbackSettings.StreamSeek,
-            Option<TimeSpan>.None,
-            channel.StreamingMode != StreamingMode.HttpLiveStreamingDirect,
-            "ErsatzTV",
-            channel.Name,
-            Option<string>.None,
-            Option<string>.None,
-            Option<string>.None,
-            OutputFormatKind.Hls,
-            hlsPlaylistPath,
-            hlsSegmentTemplate,
-            0,
-            playbackSettings.ThreadCount,
-            Optional(channel.FFmpegProfile.QsvExtraHardwareFrames),
-            false,
-            false,
-            GetTonemapAlgorithm(playbackSettings),
-            channel.UniqueId == Guid.Empty);
-
-        _logger.LogDebug("FFmpeg desired state {FrameState}", desiredState);
-
-        IPipelineBuilder pipelineBuilder = await _pipelineBuilderFactory.GetBuilder(
-            hwAccel,
-            videoInputFile,
-            audioInputFile,
-            watermarkInputFile,
-            subtitleInputFile,
-            concatInputFile,
-            graphicsEngineInput,
-            vaapiDisplay,
-            vaapiDriver,
-            vaapiDevice,
-            FileSystemLayout.FFmpegReportsFolder,
-            FileSystemLayout.FontsCacheFolder,
-            ffmpegPath);
-
-        FFmpegPipeline pipeline = pipelineBuilder.Build(ffmpegState, desiredState);
-
-        // copy video input options to concat input
-        concatInputFile.InputOptions.AddRange(videoInputFile.InputOptions);
-
-        return GetCommand(ffmpegPath, None, None, None, concatInputFile, None, pipeline);
-    }
-
     public async Task<Command> WrapSegmenter(
         string ffmpegPath,
         bool saveReports,
         Channel channel,
         string scheme,
         string host,
-        string accessToken)
+        string accessToken,
+        CancellationToken cancellationToken)
     {
         var resolution = new FrameSize(channel.FFmpegProfile.Resolution.Width, channel.FFmpegProfile.Resolution.Height);
 
@@ -937,6 +913,35 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
         var concatInputFile = new ConcatInputFile(
             $"http://localhost:{Settings.StreamingPort}/iptv/channel/{channel.Number}.m3u8?mode=segmenter{accessTokenQuery}",
             resolution);
+
+        if (channel.FFmpegProfile.AudioFormat is FFmpegProfileAudioFormat.AacLatm)
+        {
+            concatInputFile.AudioFormat = AudioFormat.AacLatm;
+        }
+
+        // TODO: save reports?
+        string defaultScript = await _configElementRepository
+            .GetValue<string>(ConfigElementKey.FFmpegDefaultMpegTsScript, cancellationToken)
+            .IfNoneAsync("Default");
+        List<MpegTsScript> allScripts = _mpegTsScriptService.GetScripts();
+        Option<MpegTsScript> maybeScript = Optional(allScripts.Find(s => s.Id == defaultScript));
+        foreach (var script in maybeScript)
+        {
+            Option<Command> maybeCommand = await _mpegTsScriptService.Execute(
+                script,
+                channel,
+                concatInputFile.Url,
+                ffmpegPath);
+            foreach (var command in maybeCommand)
+            {
+                return command;
+            }
+        }
+
+        if (maybeScript.IsNone)
+        {
+            _logger.LogWarning("Unable to locate MPEG-TS Script in folder {Id}", defaultScript);
+        }
 
         IPipelineBuilder pipelineBuilder = await _pipelineBuilderFactory.GetBuilder(
             HardwareAccelerationMode.None,
@@ -1029,7 +1034,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             watermarkWidthPercent,
             cancellationToken);
 
-    public async Task<Command> SeekTextSubtitle(string ffmpegPath, string inputFile, TimeSpan seek)
+    public async Task<Command> SeekTextSubtitle(string ffmpegPath, string inputFile, string codec, TimeSpan seek)
     {
         var videoInputFile = new VideoInputFile(
             inputFile,
@@ -1037,7 +1042,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             {
                 new(
                     0,
-                    string.Empty,
+                    codec,
                     string.Empty,
                     None,
                     ColorParams.Default,
@@ -1064,7 +1069,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             FileSystemLayout.FontsCacheFolder,
             ffmpegPath);
 
-        FFmpegPipeline pipeline = pipelineBuilder.Seek(inputFile, seek);
+        FFmpegPipeline pipeline = pipelineBuilder.Seek(inputFile, codec, seek);
 
         return GetCommand(ffmpegPath, videoInputFile, None, None, None, None, pipeline, false);
     }
@@ -1150,6 +1155,7 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
     private static string GetVideoFormat(FFmpegPlaybackSettings playbackSettings) =>
         playbackSettings.VideoFormat switch
         {
+            FFmpegProfileVideoFormat.Av1 => VideoFormat.Av1,
             FFmpegProfileVideoFormat.Hevc => VideoFormat.Hevc,
             FFmpegProfileVideoFormat.H264 => VideoFormat.H264,
             FFmpegProfileVideoFormat.Mpeg2Video => VideoFormat.Mpeg2Video,
@@ -1176,28 +1182,80 @@ public class FFmpegLibraryProcessService : IFFmpegProcessService
             (VideoFormat.H264, VideoProfile.Main) => VideoProfile.Main,
             (VideoFormat.H264, VideoProfile.High) => VideoProfile.High,
             (VideoFormat.H264, VideoProfile.High10) => VideoProfile.High10,
+            (VideoFormat.H264, VideoProfile.High444p) => VideoProfile.High444p,
             _ => Option<string>.None
         };
 
     private static Option<string> GetVideoPreset(
         HardwareAccelerationMode hardwareAccelerationMode,
         string videoFormat,
-        string videoPreset) =>
+        string videoPreset,
+        int bitDepth) =>
         AvailablePresets
-            .ForAccelAndFormat(hardwareAccelerationMode, videoFormat)
+            .ForAccelAndFormat(hardwareAccelerationMode, videoFormat, bitDepth)
             .Find(p => string.Equals(p, videoPreset, StringComparison.OrdinalIgnoreCase));
 
-    private static HardwareAccelerationMode GetHardwareAccelerationMode(
-        FFmpegPlaybackSettings playbackSettings,
-        FillerKind fillerKind) =>
+    private static HardwareAccelerationMode GetHardwareAccelerationMode(FFmpegPlaybackSettings playbackSettings) =>
         playbackSettings.HardwareAcceleration switch
         {
-            _ when fillerKind == FillerKind.Fallback => HardwareAccelerationMode.None,
+            //_ when fillerKind == FillerKind.Fallback => HardwareAccelerationMode.None,
             HardwareAccelerationKind.Nvenc => HardwareAccelerationMode.Nvenc,
             HardwareAccelerationKind.Qsv => HardwareAccelerationMode.Qsv,
             HardwareAccelerationKind.Vaapi => HardwareAccelerationMode.Vaapi,
             HardwareAccelerationKind.VideoToolbox => HardwareAccelerationMode.VideoToolbox,
             HardwareAccelerationKind.Amf => HardwareAccelerationMode.Amf,
+            HardwareAccelerationKind.V4l2m2m => HardwareAccelerationMode.V4l2m2m,
+            HardwareAccelerationKind.Rkmpp => HardwareAccelerationMode.Rkmpp,
             _ => HardwareAccelerationMode.None
         };
+
+    private async Task<bool> IsWatermarkAnimated(string ffprobePath, string path)
+    {
+        try
+        {
+            var cacheKey = $"image.animated.{Path.GetFileName(path)}";
+            if (_memoryCache.TryGetValue(cacheKey, out bool animated))
+            {
+                return animated;
+            }
+
+            BufferedCommandResult result = await Cli.Wrap(ffprobePath)
+                .WithArguments(
+                [
+                    "-loglevel", "error",
+                    "-select_streams", "v:0",
+                    "-count_frames",
+                    "-show_entries", "stream=nb_read_frames",
+                    "-print_format", "csv",
+                    path
+                ])
+                .WithValidation(CommandResultValidation.None)
+                .ExecuteBufferedAsync(Encoding.UTF8);
+
+            if (result.ExitCode == 0)
+            {
+                string output = result.StandardOutput;
+                output = output.Replace("stream,", string.Empty);
+                if (int.TryParse(output, out int frameCount))
+                {
+                    bool isAnimated = frameCount > 1;
+                    _memoryCache.Set(cacheKey, isAnimated, TimeSpan.FromDays(1));
+                    return isAnimated;
+                }
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Error checking frame count for file {File} exit code {ExitCode}",
+                    path,
+                    result.ExitCode);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error checking frame count for file {File}", path);
+        }
+
+        return false;
+    }
 }

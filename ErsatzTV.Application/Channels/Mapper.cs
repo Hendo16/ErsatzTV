@@ -6,7 +6,7 @@ namespace ErsatzTV.Application.Channels;
 
 internal static class Mapper
 {
-    internal static ChannelViewModel ProjectToViewModel(Channel channel) =>
+    internal static ChannelViewModel ProjectToViewModel(Channel channel, int playoutCount) =>
         new(
             channel.Id,
             channel.Number,
@@ -19,11 +19,14 @@ internal static class Mapper
             channel.StreamSelector,
             channel.PreferredAudioLanguageCode,
             channel.PreferredAudioTitle,
+            channel.PlayoutSource,
             channel.PlayoutMode,
+            channel.MirrorSourceChannelId,
+            channel.PlayoutOffset,
             channel.StreamingMode,
             channel.WatermarkId,
             channel.FallbackFillerId,
-            channel.Playouts?.Count ?? 0,
+            playoutCount,
             channel.PreferredSubtitleLanguageCode,
             channel.SubtitleMode,
             channel.MusicVideoCreditsMode,
@@ -46,8 +49,14 @@ internal static class Mapper
     internal static ResolutionViewModel ProjectToViewModel(Resolution resolution) =>
         new(resolution.Height, resolution.Width);
 
-    internal static ResolutionAndBitrateViewModel ProjectToViewModel(Resolution resolution, int bitrate) =>
-        new(resolution.Height, resolution.Width, bitrate);
+    internal static ChannelStreamingSpecsViewModel ProjectToSpecsViewModel(Channel channel) =>
+        new(
+            channel.FFmpegProfile.Resolution.Height,
+            channel.FFmpegProfile.Resolution.Width,
+            (int)((channel.FFmpegProfile.VideoBitrate * 1000 + channel.FFmpegProfile.AudioBitrate * 1000) * 1.2),
+            channel.FFmpegProfile.VideoFormat,
+            channel.FFmpegProfile.VideoProfile,
+            channel.FFmpegProfile.AudioFormat);
 
     private static ArtworkContentTypeModel GetLogo(Channel channel)
     {
@@ -72,7 +81,6 @@ internal static class Mapper
             StreamingMode.TransportStreamHybrid => "MPEG-TS",
             StreamingMode.HttpLiveStreamingDirect => "HLS Direct",
             StreamingMode.HttpLiveStreamingSegmenter => "HLS Segmenter",
-            StreamingMode.HttpLiveStreamingSegmenterV2 => "HLS Segmenter V2",
             _ => throw new ArgumentOutOfRangeException(nameof(channel))
         };
 }

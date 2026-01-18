@@ -1,5 +1,5 @@
-using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Graphics;
+using ErsatzTV.Core.Interfaces.Streaming;
 using Microsoft.Extensions.Logging;
 using NCalc;
 using SkiaSharp;
@@ -11,11 +11,11 @@ public class ImageElement(ImageGraphicsElement imageGraphicsElement, ILogger log
     private Option<Expression> _maybeOpacityExpression;
     private float _opacity;
 
-    public override async Task InitializeAsync(
-        Resolution squarePixelFrameSize,
-        Resolution frameSize,
-        int frameRate,
-        CancellationToken cancellationToken)
+    public override int ZIndex { get; } = imageGraphicsElement.ZIndex ?? 0;
+
+    public override string DebugKey { get; } = $"Image {imageGraphicsElement.DebugName()}";
+
+    public override async Task InitializeAsync(GraphicsEngineContext context, CancellationToken cancellationToken)
     {
         try
         {
@@ -30,28 +30,26 @@ public class ImageElement(ImageGraphicsElement imageGraphicsElement, ILogger log
                 _opacity = (imageGraphicsElement.OpacityPercent ?? 100) / 100.0f;
             }
 
-            ZIndex = imageGraphicsElement.ZIndex ?? 0;
-
             foreach (Expression expression in _maybeOpacityExpression)
             {
                 expression.EvaluateFunction += OpacityExpressionHelper.EvaluateFunction;
             }
 
             await LoadImage(
-                squarePixelFrameSize,
-                frameSize,
+                context.SquarePixelFrameSize,
+                context.FrameSize,
                 imageGraphicsElement.Image,
                 imageGraphicsElement.Location,
                 imageGraphicsElement.Scale,
                 imageGraphicsElement.ScaleWidthPercent,
                 imageGraphicsElement.HorizontalMarginPercent,
                 imageGraphicsElement.VerticalMarginPercent,
-                false,
+                imageGraphicsElement.PlaceWithinSourceContent,
                 cancellationToken);
         }
         catch (Exception ex)
         {
-            IsFailed = true;
+            IsFinished = true;
             logger.LogWarning(ex, "Failed to initialize image element; will disable for this content");
         }
     }
@@ -80,6 +78,7 @@ public class ImageElement(ImageGraphicsElement imageGraphicsElement, ILogger log
         }
 
         SKBitmap frameForTimestamp = GetFrameForTimestamp(contentTime);
-        return ValueTask.FromResult(Optional(new PreparedElementImage(frameForTimestamp, Location, opacity, false)));
+        return ValueTask.FromResult(
+            Optional(new PreparedElementImage(frameForTimestamp, Location, opacity, ZIndex, false)));
     }
 }

@@ -1,10 +1,12 @@
 @page "/settings/ffmpeg"
+@using ErsatzTV.Application.Configuration
 @using ErsatzTV.Application.FFmpegProfiles
 @using ErsatzTV.Application.Filler
 @using ErsatzTV.Application.MediaItems
 @using ErsatzTV.Application.Resolutions
 @using ErsatzTV.Application.Watermarks
 @using ErsatzTV.Core.Domain.Filler
+@using ErsatzTV.Core.FFmpeg
 @using ErsatzTV.FFmpeg.OutputFormat
 @implements IDisposable
 @inject IMediator Mediator
@@ -68,6 +70,12 @@
             </MudStack>
             <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
                 <div class="d-flex">
+                    <MudText>Probe For Interlaced Frames</MudText>
+                </div>
+                <MudCheckBox @bind-Value="_ffmpegSettings.ProbeForInterlacedFrames" Dense="true"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
                     <MudText>Save Troubleshooting Reports To Disk</MudText>
                 </div>
                 <MudCheckBox @bind-Value="_ffmpegSettings.SaveReports" Dense="true"/>
@@ -124,6 +132,17 @@
                     <MudSelectItem T="OutputFormatKind" Value="@OutputFormatKind.Mkv">MKV</MudSelectItem>
                 </MudSelect>
             </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Default MPEG-TS Script</MudText>
+                </div>
+                <MudSelect @bind-Value="_ffmpegSettings.DefaultMpegTsScript" HelperText="The MPEG-TS script to use when streaming">
+                    @foreach (MpegTsScript script in _mpegTsScripts)
+                    {
+                        <MudSelectItem Value="@script.Id">@script.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
             <MudText Typo="Typo.h5" Class="mb-2 mt-10">Custom Resolutions</MudText>
             <MudDivider Class="mb-6"/>
             <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => AddCustomResolution())" StartIcon="@Icons.Material.Filled.Add">
@@ -162,6 +181,7 @@
     private List<WatermarkViewModel> _watermarks = [];
     private List<FillerPresetViewModel> _fillerPresets = [];
     private List<ResolutionViewModel> _customResolutions = [];
+    private readonly List<MpegTsScript> _mpegTsScripts = [];
 
     public void Dispose()
     {
@@ -186,6 +206,9 @@
             _watermarks = await Mediator.Send(new GetAllWatermarks(), token);
             _fillerPresets = await Mediator.Send(new GetAllFillerPresets(), token)
                 .Map(list => list.Filter(fp => fp.FillerKind == FillerKind.Fallback).ToList());
+
+            _mpegTsScripts.Clear();
+            _mpegTsScripts.AddRange(await Mediator.Send(new GetMpegTsScripts(), token));
 
             await RefreshCustomResolutions(token);
         }

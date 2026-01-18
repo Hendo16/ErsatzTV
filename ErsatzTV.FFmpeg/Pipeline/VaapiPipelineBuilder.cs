@@ -68,7 +68,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             videoStream.Codec,
             videoStream.Profile,
             videoStream.PixelFormat,
-            videoStream.ColorParams.IsHdr);
+            videoStream.ColorParams);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
@@ -80,6 +80,27 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             encodeCapability = FFmpegCapability.Software;
         }
 
+        if (desiredState.VideoFormat is VideoFormat.Av1 && ffmpegState.OutputFormat is not OutputFormatKind.HlsMp4)
+        {
+            throw new NotSupportedException("AV1 output is only supported with HLS Segmenter (fmp4)");
+        }
+
+        // use software decoding with an extensive pipeline
+        if (context is { HasSubtitleOverlay: true, HasWatermark: true })
+        {
+            decodeCapability = FFmpegCapability.Software;
+        }
+
+        // use software decode with irregular dimensions and AMD Polaris
+        if (videoStream.FrameSize.Width % 32 != 0 &&
+            _hardwareCapabilities is VaapiHardwareCapabilities vaapiCapabilities)
+        {
+            if (vaapiCapabilities.Generation.Contains("polaris", StringComparison.OrdinalIgnoreCase))
+            {
+                decodeCapability = FFmpegCapability.Software;
+            }
+        }
+
         foreach (string vaapiDevice in ffmpegState.VaapiDevice)
         {
             pipelineSteps.Add(new VaapiHardwareAccelerationOption(vaapiDevice, decodeCapability));
@@ -88,12 +109,6 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             {
                 pipelineSteps.Add(new LibvaDriverNameVariable(driverName));
             }
-        }
-
-        // use software decoding with an extensive pipeline
-        if (context is { HasSubtitleOverlay: true, HasWatermark: true })
-        {
-            decodeCapability = FFmpegCapability.Software;
         }
 
         // disable auto scaling when using hw encoding
@@ -184,7 +199,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         bool isHdrTonemap = videoStream.ColorParams.IsHdr;
         currentState = SetTonemap(videoInputFile, videoStream, ffmpegState, desiredState, currentState);
 
-        currentState = SetPad(videoInputFile, ffmpegState, desiredState, currentState, isHdrTonemap);
+        currentState = SetPad(videoInputFile, desiredState, currentState, isHdrTonemap);
         // _logger.LogDebug("After pad: {PixelFormat}", currentState.PixelFormat);
 
         currentState = SetCrop(videoInputFile, desiredState, currentState);
@@ -235,6 +250,14 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         // after everything else is done, apply the encoder
         if (pipelineSteps.OfType<IEncoder>().All(e => e.Kind != StreamKind.Video))
         {
+            bool packedHeaderMisc = false;
+            if (_hardwareCapabilities is VaapiHardwareCapabilities vaapiHardwareCapabilities)
+            {
+                packedHeaderMisc = vaapiHardwareCapabilities.GetPackedHeaderMisc(
+                    desiredState.VideoFormat,
+                    desiredState.PixelFormat);
+            }
+
             RateControlMode rateControlMode =
                 _hardwareCapabilities.GetRateControlMode(desiredState.VideoFormat, desiredState.PixelFormat)
                     .IfNone(RateControlMode.VBR);
@@ -242,10 +265,12 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             Option<IEncoder> maybeEncoder =
                 (ffmpegState.EncoderHardwareAccelerationMode, desiredState.VideoFormat) switch
                 {
+                    (HardwareAccelerationMode.Vaapi, VideoFormat.Av1) =>
+                        new EncoderAv1Vaapi(rateControlMode),
                     (HardwareAccelerationMode.Vaapi, VideoFormat.Hevc) =>
-                        new EncoderHevcVaapi(rateControlMode),
+                        new EncoderHevcVaapi(rateControlMode, packedHeaderMisc),
                     (HardwareAccelerationMode.Vaapi, VideoFormat.H264) =>
-                        new EncoderH264Vaapi(desiredState.VideoProfile, rateControlMode),
+                        new EncoderH264Vaapi(desiredState.VideoProfile, rateControlMode, packedHeaderMisc),
                     (HardwareAccelerationMode.Vaapi, VideoFormat.Mpeg2Video) =>
                         new EncoderMpeg2Vaapi(rateControlMode),
 
@@ -265,6 +290,15 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             ffmpegState,
             currentState,
             pipelineSteps);
+
+        if (ffmpegState.VaapiDriver == "radeonsi" &&
+            ffmpegState.EncoderHardwareAccelerationMode is HardwareAccelerationMode.Vaapi)
+        {
+            pipelineSteps.Add(
+                new AmdCropMetadataWorkaroundFilter(
+                    desiredState.VideoFormat,
+                    desiredState.CroppedSize.IfNone(desiredState.PaddedSize)));
+        }
 
         return new FilterChain(
             videoInputFile.FilterSteps,
@@ -348,7 +382,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
 
                 if (currentState.FrameDataLocation == FrameDataLocation.Hardware)
                 {
-                    result.Add(new VaapiFormatFilter(format));
+                        result.Add(new VaapiFormatFilter(format));
                 }
                 else
                 {
@@ -503,21 +537,37 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
                             subtitle.FilterSteps.Add(scaleFilter);
                         }
 
+                        foreach (FrameSize croppedSize in currentState.CroppedSize)
+                        {
+                            var cropStep = new CropFilter(
+                                currentState with { FrameDataLocation = FrameDataLocation.Software },
+                                croppedSize);
+                            subtitle.FilterSteps.Add(cropStep);
+                        }
+
                         var subtitlesFilter = new OverlaySubtitleFilter(pf);
                         subtitleOverlayFilterSteps.Add(subtitlesFilter);
                     }
                 }
                 else
                 {
-                    var subtitleHardwareUpload = new HardwareUploadVaapiFilter(false);
-                    subtitle.FilterSteps.Add(subtitleHardwareUpload);
-
                     // only scale if scaling or padding was used for main video stream
                     if (videoInputFile.FilterSteps.Any(s => s is ScaleFilter or ScaleVaapiFilter or PadFilter))
                     {
-                        var scaleFilter = new SubtitleScaleVaapiFilter(desiredState.PaddedSize);
+                        var scaleFilter = new ScaleSubtitleImageFilter(desiredState.PaddedSize);
                         subtitle.FilterSteps.Add(scaleFilter);
                     }
+
+                    foreach (FrameSize croppedSize in currentState.CroppedSize)
+                    {
+                        var cropStep = new CropFilter(
+                            currentState with { FrameDataLocation = FrameDataLocation.Software },
+                            croppedSize);
+                        subtitle.FilterSteps.Add(cropStep);
+                    }
+
+                    var subtitleHardwareUpload = new HardwareUploadVaapiFilter(false);
+                    subtitle.FilterSteps.Add(subtitleHardwareUpload);
 
                     var subtitlesFilter = new OverlaySubtitleVaapiFilter();
                     subtitleOverlayFilterSteps.Add(subtitlesFilter);
@@ -567,21 +617,13 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
 
     private static FrameState SetPad(
         VideoInputFile videoInputFile,
-        FFmpegState ffmpegState,
         FrameState desiredState,
         FrameState currentState,
         bool isHdrTonemap)
     {
         if (desiredState.CroppedSize.IsNone && currentState.PaddedSize != desiredState.PaddedSize)
         {
-            // pad_vaapi seems to pad with green when input is HDR
-            // also green with i965 driver
-            // so use software pad in these cases
-            bool is965 = ffmpegState.VaapiDriver
-                .IfNone(string.Empty)
-                .Contains("i965", StringComparison.OrdinalIgnoreCase);
-
-            if (isHdrTonemap || is965)
+            if (desiredState.PadMode is FFmpegFilterMode.Software || isHdrTonemap)
             {
                 var padStep = new PadFilter(currentState, desiredState.PaddedSize);
                 currentState = padStep.NextState(currentState);

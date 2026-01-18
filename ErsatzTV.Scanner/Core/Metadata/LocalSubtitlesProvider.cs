@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.IO.Abstractions;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
@@ -11,11 +12,12 @@ namespace ErsatzTV.Scanner.Core.Metadata;
 
 public class LocalSubtitlesProvider : ILocalSubtitlesProvider
 {
-    private readonly List<CultureInfo> _languageCodes = new();
+    private readonly List<CultureInfo> _languageCodes = [];
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<LocalSubtitlesProvider> _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
     private readonly IMetadataRepository _metadataRepository;
+    private readonly IFileSystem _fileSystem;
 
     private readonly SemaphoreSlim _slim = new(1, 1);
     private bool _disposedValue;
@@ -23,11 +25,13 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
     public LocalSubtitlesProvider(
         IMediaItemRepository mediaItemRepository,
         IMetadataRepository metadataRepository,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ILogger<LocalSubtitlesProvider> logger)
     {
         _mediaItemRepository = mediaItemRepository;
         _metadataRepository = metadataRepository;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _logger = logger;
     }
@@ -110,19 +114,19 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
     {
         var result = new List<Subtitle>();
 
-        string? folder = Path.GetDirectoryName(mediaItemPath);
-        string withoutExtension = Path.GetFileNameWithoutExtension(mediaItemPath);
+        string? folder = _fileSystem.Path.GetDirectoryName(mediaItemPath);
+        string withoutExtension = _fileSystem.Path.GetFileNameWithoutExtension(mediaItemPath);
         foreach (string file in _localFileSystem.ListFiles(folder, $"{withoutExtension}*"))
         {
             string lowerFile = file.ToLowerInvariant();
 
-            string fileName = Path.GetFileName(file);
+            string fileName = _fileSystem.Path.GetFileName(file);
             if (!fileName.StartsWith(withoutExtension, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            string extension = Path.GetExtension(lowerFile);
+            string extension = _fileSystem.Path.GetExtension(lowerFile);
             string codec = extension switch
             {
                 ".ssa" or ".ass" => "ass",
@@ -136,7 +140,7 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
                 continue;
             }
 
-            string language = Path.GetFileName(lowerFile);
+            string language = _fileSystem.Path.GetFileName(lowerFile);
             var forced = false;
             var sdh = false;
 
@@ -183,7 +187,7 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
                         Forced = forced,
                         SDH = sdh,
                         Language = language,
-                        Path = saveFullPath ? file : Path.GetFileName(file),
+                        Path = saveFullPath ? file : _fileSystem.Path.GetFileName(file),
                         DateAdded = DateTime.UtcNow,
                         DateUpdated = _localFileSystem.GetLastWriteTime(file)
                     });
@@ -202,7 +206,7 @@ public class LocalSubtitlesProvider : ILocalSubtitlesProvider
                         Forced = forced,
                         SDH = sdh,
                         Language = culture.ThreeLetterISOLanguageName,
-                        Path = saveFullPath ? file : Path.GetFileName(file),
+                        Path = saveFullPath ? file : _fileSystem.Path.GetFileName(file),
                         DateAdded = DateTime.UtcNow,
                         DateUpdated = _localFileSystem.GetLastWriteTime(file)
                     });

@@ -9,25 +9,16 @@ using static ErsatzTV.Application.ProgramSchedules.Mapper;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
-public class ReplaceProgramScheduleItemsHandler : ProgramScheduleItemCommandBase,
+public class ReplaceProgramScheduleItemsHandler(
+    IDbContextFactory<TvContext> dbContextFactory,
+    ChannelWriter<IBackgroundServiceRequest> channel) : ProgramScheduleItemCommandBase,
     IRequestHandler<ReplaceProgramScheduleItems, Either<BaseError, IEnumerable<ProgramScheduleItemViewModel>>>
 {
-    private readonly ChannelWriter<IBackgroundServiceRequest> _channel;
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-
-    public ReplaceProgramScheduleItemsHandler(
-        IDbContextFactory<TvContext> dbContextFactory,
-        ChannelWriter<IBackgroundServiceRequest> channel)
-    {
-        _dbContextFactory = dbContextFactory;
-        _channel = channel;
-    }
-
     public async Task<Either<BaseError, IEnumerable<ProgramScheduleItemViewModel>>> Handle(
         ReplaceProgramScheduleItems request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         Validation<BaseError, ProgramSchedule> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(ps => PersistItems(dbContext, request, ps, cancellationToken));
     }
@@ -53,7 +44,7 @@ public class ReplaceProgramScheduleItemsHandler : ProgramScheduleItemCommandBase
         // refresh any playouts that use this schedule
         foreach (Playout playout in programSchedule.Playouts)
         {
-            await _channel.WriteAsync(new BuildPlayout(playout.Id, PlayoutBuildMode.Refresh), cancellationToken);
+            await channel.WriteAsync(new BuildPlayout(playout.Id, PlayoutBuildMode.Refresh), cancellationToken);
         }
 
         return programSchedule.Items.Map(ProjectToViewModel);
@@ -120,7 +111,9 @@ public class ReplaceProgramScheduleItemsHandler : ProgramScheduleItemCommandBase
                 item.MediaItemId,
                 item.MultiCollectionId,
                 item.SmartCollectionId,
-                item.PlaylistId);
+                item.RerunCollectionId,
+                item.PlaylistId,
+                item.SearchQuery);
 
             if (keyOrders.TryGetValue(key, out System.Collections.Generic.HashSet<PlaybackOrder> playbackOrders))
             {
@@ -140,10 +133,12 @@ public class ReplaceProgramScheduleItemsHandler : ProgramScheduleItemCommandBase
     }
 
     private sealed record CollectionKey(
-        ProgramScheduleItemCollectionType CollectionType,
+        CollectionType CollectionType,
         int? CollectionId,
         int? MediaItemId,
         int? MultiCollectionId,
         int? SmartCollectionId,
-        int? PlaylistId);
+        int? RerunCollectionId,
+        int? PlaylistId,
+        string SearchQuery);
 }

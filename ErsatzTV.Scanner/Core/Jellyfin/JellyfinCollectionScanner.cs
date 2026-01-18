@@ -2,7 +2,7 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Jellyfin;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
+using ErsatzTV.Scanner.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Scanner.Core.Jellyfin;
@@ -10,23 +10,27 @@ namespace ErsatzTV.Scanner.Core.Jellyfin;
 public class JellyfinCollectionScanner : IJellyfinCollectionScanner
 {
     private readonly IJellyfinApiClient _jellyfinApiClient;
+    private readonly IScannerProxy _scannerProxy;
     private readonly IJellyfinCollectionRepository _jellyfinCollectionRepository;
     private readonly ILogger<JellyfinCollectionScanner> _logger;
-    private readonly IMediator _mediator;
 
     public JellyfinCollectionScanner(
-        IMediator mediator,
+        IScannerProxy scannerProxy,
         IJellyfinCollectionRepository jellyfinCollectionRepository,
         IJellyfinApiClient jellyfinApiClient,
         ILogger<JellyfinCollectionScanner> logger)
     {
-        _mediator = mediator;
+        _scannerProxy = scannerProxy;
         _jellyfinCollectionRepository = jellyfinCollectionRepository;
         _jellyfinApiClient = jellyfinApiClient;
         _logger = logger;
     }
 
-    public async Task<Either<BaseError, Unit>> ScanCollections(string address, string apiKey, int mediaSourceId)
+    public async Task<Either<BaseError, Unit>> ScanCollections(
+        string address,
+        string apiKey,
+        int mediaSourceId,
+        bool deepScan)
     {
         try
         {
@@ -48,12 +52,13 @@ public class JellyfinCollectionScanner : IJellyfinCollectionScanner
 
                 Option<JellyfinCollection> maybeExisting = existingCollections.Find(c => c.ItemId == collection.ItemId);
 
-                // // skip if unchanged (etag)
-                // if (await maybeExisting.Map(e => e.Etag ?? string.Empty).IfNoneAsync(string.Empty) == collection.Etag)
-                // {
-                //     _logger.LogDebug("Jellyfin collection {Name} is unchanged", collection.Name);
-                //     continue;
-                // }
+                // skip if unchanged (etag)
+                if (!deepScan && await maybeExisting.Map(e => e.Etag ?? string.Empty).IfNoneAsync(string.Empty) ==
+                    collection.Etag)
+                {
+                    _logger.LogDebug("Jellyfin collection {Name} is unchanged", collection.Name);
+                    continue;
+                }
 
                 // add if new
                 if (maybeExisting.IsNone)
@@ -62,10 +67,11 @@ public class JellyfinCollectionScanner : IJellyfinCollectionScanner
                     await _jellyfinCollectionRepository.AddCollection(collection);
                 }
 
-                await SyncCollectionItems(address, apiKey, mediaSourceId, collection);
-
-                // save collection etag
-                await _jellyfinCollectionRepository.SetEtag(collection);
+                if (await SyncCollectionItems(address, apiKey, mediaSourceId, collection))
+                {
+                    // save collection etag
+                    await _jellyfinCollectionRepository.SetEtag(collection);
+                }
             }
 
             // remove missing collections (and remove any lingering tags from those collections)
@@ -84,7 +90,7 @@ public class JellyfinCollectionScanner : IJellyfinCollectionScanner
         return Unit.Default;
     }
 
-    private async Task SyncCollectionItems(
+    private async Task<bool> SyncCollectionItems(
         string address,
         string apiKey,
         int mediaSourceId,
@@ -111,14 +117,18 @@ public class JellyfinCollectionScanner : IJellyfinCollectionScanner
             _logger.LogDebug("Jellyfin collection {Name} contains {Count} items", collection.Name, addedIds.Count);
 
             int[] changedIds = removedIds.Concat(addedIds).Distinct().ToArray();
+            if (!await _scannerProxy.ReindexMediaItems(changedIds, CancellationToken.None))
+            {
+                _logger.LogWarning("Failed to reindex media items from scanner process");
+                return false;
+            }
 
-            await _mediator.Publish(
-                new ScannerProgressUpdate(0, null, null, changedIds.ToArray(), Array.Empty<int>()),
-                CancellationToken.None);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to synchronize Jellyfin collection {Name}", collection.Name);
+            return false;
         }
     }
 }

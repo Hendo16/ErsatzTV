@@ -1,18 +1,11 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Security.Cryptography;
-using System.Text;
+﻿using System.IO.Abstractions;
 using System.Threading.Channels;
-using CliWrap;
-using CliWrap.Buffered;
-using CliWrap.Builders;
-using Dapper;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Locking;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
@@ -21,26 +14,25 @@ using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Application.Subtitles;
 
-[SuppressMessage("Security", "CA5351:Do Not Use Broken Cryptographic Algorithms")]
-public class ExtractEmbeddedSubtitlesHandler : IRequestHandler<ExtractEmbeddedSubtitles, Option<BaseError>>
+public class ExtractEmbeddedSubtitlesHandler : ExtractEmbeddedSubtitlesHandlerBase,
+    IRequestHandler<ExtractEmbeddedSubtitles, Option<BaseError>>
 {
     private readonly IConfigElementRepository _configElementRepository;
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IEntityLocker _entityLocker;
-    private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<ExtractEmbeddedSubtitlesHandler> _logger;
     private readonly ChannelWriter<IBackgroundServiceRequest> _workerChannel;
 
     public ExtractEmbeddedSubtitlesHandler(
         IDbContextFactory<TvContext> dbContextFactory,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         IEntityLocker entityLocker,
         IConfigElementRepository configElementRepository,
         ChannelWriter<IBackgroundServiceRequest> workerChannel,
         ILogger<ExtractEmbeddedSubtitlesHandler> logger)
+        : base(fileSystem, logger)
     {
         _dbContextFactory = dbContextFactory;
-        _localFileSystem = localFileSystem;
         _entityLocker = entityLocker;
         _configElementRepository = configElementRepository;
         _workerChannel = workerChannel;

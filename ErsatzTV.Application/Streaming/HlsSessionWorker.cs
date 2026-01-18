@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO.Abstractions;
 using System.IO.Pipelines;
 using System.Text;
 using System.Timers;
@@ -15,6 +16,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
+using ErsatzTV.FFmpeg;
+using ErsatzTV.FFmpeg.OutputFormat;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Timer = System.Timers.Timer;
@@ -25,7 +28,11 @@ public class HlsSessionWorker : IHlsSessionWorker
 {
     private static int _workAheadCount;
     private readonly IClient _client;
+    private readonly OutputFormatKind _outputFormatKind;
+    private readonly IHlsInitSegmentCache _hlsInitSegmentCache;
+    private readonly Dictionary<long, int> _discontinuityMap = [];
     private readonly IConfigElementRepository _configElementRepository;
+    private readonly IFileSystem _fileSystem;
     private readonly IGraphicsEngine _graphicsEngine;
     private readonly IHlsPlaylistFilter _hlsPlaylistFilter;
     private readonly ILocalFileSystem _localFileSystem;
@@ -33,10 +40,11 @@ public class HlsSessionWorker : IHlsSessionWorker
     private readonly IMediator _mediator;
     private readonly SemaphoreSlim _slim = new(1, 1);
     private readonly Lock _sync = new();
-    private readonly Option<int> _targetFramerate;
+    private readonly Option<FrameRate> _targetFramerate;
     private CancellationTokenSource _cancellationTokenSource;
     private string _channelNumber;
     private DateTimeOffset _channelStart;
+    private int _discontinuitySequence;
     private bool _disposedValue;
     private bool _hasWrittenSegments;
     private DateTimeOffset _lastAccess;
@@ -45,23 +53,30 @@ public class HlsSessionWorker : IHlsSessionWorker
     private HlsSessionState _state;
     private Timer _timer;
     private DateTimeOffset _transcodedUntil;
+    private string _workingDirectory;
 
     public HlsSessionWorker(
         IServiceScopeFactory serviceScopeFactory,
         IGraphicsEngine graphicsEngine,
         IClient client,
+        OutputFormatKind outputFormatKind,
         IHlsPlaylistFilter hlsPlaylistFilter,
+        IHlsInitSegmentCache hlsInitSegmentCache,
         IConfigElementRepository configElementRepository,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ILogger<HlsSessionWorker> logger,
-        Option<int> targetFramerate)
+        Option<FrameRate> targetFramerate)
     {
         _serviceScope = serviceScopeFactory.CreateScope();
         _mediator = _serviceScope.ServiceProvider.GetRequiredService<IMediator>();
         _graphicsEngine = graphicsEngine;
         _client = client;
+        _outputFormatKind = outputFormatKind;
+        _hlsInitSegmentCache = hlsInitSegmentCache;
         _hlsPlaylistFilter = hlsPlaylistFilter;
         _configElementRepository = configElementRepository;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _logger = logger;
         _targetFramerate = targetFramerate;
@@ -84,7 +99,7 @@ public class HlsSessionWorker : IHlsSessionWorker
         }
     }
 
-    public void Touch()
+    public void Touch(Option<string> fileName)
     {
         lock (_sync)
         {
@@ -110,7 +125,16 @@ public class HlsSessionWorker : IHlsSessionWorker
                 Option<string[]> maybeLines = await ReadPlaylistLines(cancellationToken);
                 foreach (string[] input in maybeLines)
                 {
-                    TrimPlaylistResult trimResult = _hlsPlaylistFilter.TrimPlaylist(PlaylistStart, filterBefore, input);
+                    await RefreshInits();
+
+                    TrimPlaylistResult trimResult = _hlsPlaylistFilter.TrimPlaylist(
+                        _discontinuityMap,
+                        _outputFormatKind,
+                        PlaylistStart,
+                        filterBefore,
+                        _hlsInitSegmentCache,
+                        input,
+                        maybeMaxSegments: 10);
                     if (DateTimeOffset.Now > _lastDelete.AddSeconds(30))
                     {
                         DeleteOldSegments(trimResult);
@@ -162,6 +186,7 @@ public class HlsSessionWorker : IHlsSessionWorker
         try
         {
             _channelNumber = channelNumber;
+            _workingDirectory = Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber);
 
             foreach (TimeSpan timeout in idleTimeout)
             {
@@ -176,12 +201,12 @@ public class HlsSessionWorker : IHlsSessionWorker
 
             _logger.LogInformation("Starting HLS session for channel {Channel}", channelNumber);
 
-            if (_localFileSystem.ListFiles(Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber)).Any())
+            if (_localFileSystem.ListFiles(_workingDirectory).Any())
             {
                 _logger.LogError("Transcode folder is NOT empty!");
             }
 
-            Touch();
+            Touch(Option<string>.None);
             _transcodedUntil = DateTimeOffset.Now;
             PlaylistStart = _transcodedUntil;
             _channelStart = _transcodedUntil;
@@ -249,7 +274,7 @@ public class HlsSessionWorker : IHlsSessionWorker
 
             try
             {
-                _localFileSystem.EmptyFolder(Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber));
+                _localFileSystem.EmptyFolder(_workingDirectory);
             }
             catch
             {
@@ -285,10 +310,10 @@ public class HlsSessionWorker : IHlsSessionWorker
             DateTimeOffset start = DateTimeOffset.Now;
             DateTimeOffset finish = start.AddSeconds(8);
 
-            string playlistFileName = Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber, "live.m3u8");
+            string playlistFileName = Path.Combine(_workingDirectory, "live.m3u8");
 
             _logger.LogDebug("Waiting for playlist to exist");
-            while (!_localFileSystem.FileExists(playlistFileName))
+            while (!_fileSystem.File.Exists(playlistFileName))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
             }
@@ -354,14 +379,14 @@ public class HlsSessionWorker : IHlsSessionWorker
             // playout updates should have the channel start over, transcode method will throttle if needed
             HlsSessionState.PlayoutUpdated => HlsSessionState.SeekAndWorkAhead,
 
-            // after seeking and NOT completing the item, seek again, transcode method will throttle if needed
-            HlsSessionState.SeekAndWorkAhead when !isComplete => HlsSessionState.SeekAndWorkAhead,
+            // after seeking and NOT completing the item, seek again, transcode method will accelerate if needed
+            HlsSessionState.SeekAndWorkAhead when !isComplete => HlsSessionState.SeekAndRealtime,
 
             // after seeking and completing the item, start at zero
             HlsSessionState.SeekAndWorkAhead => HlsSessionState.ZeroAndWorkAhead,
 
-            // after starting and zero and NOT completing the item, seek, transcode method will throttle if needed
-            HlsSessionState.ZeroAndWorkAhead when !isComplete => HlsSessionState.SeekAndWorkAhead,
+            // after starting and zero and NOT completing the item, seek, transcode method will accelerate if needed
+            HlsSessionState.ZeroAndWorkAhead when !isComplete => HlsSessionState.SeekAndRealtime,
 
             // after starting at zero and completing the item, start at zero again, transcode method will throttle if needed
             HlsSessionState.ZeroAndWorkAhead => HlsSessionState.ZeroAndWorkAhead,
@@ -381,12 +406,12 @@ public class HlsSessionWorker : IHlsSessionWorker
         return result;
     }
 
-    private async Task<bool> Transcode(
-        bool realtime,
-        CancellationToken cancellationToken)
+    private async Task<bool> Transcode(bool realtime, CancellationToken cancellationToken)
     {
         try
         {
+            bool wasSeekAndWorkAhead = _state is HlsSessionState.SeekAndWorkAhead;
+
             if (!realtime)
             {
                 Interlocked.Increment(ref _workAheadCount);
@@ -426,23 +451,24 @@ public class HlsSessionWorker : IHlsSessionWorker
                 }
             }
 
-            long ptsOffset = await GetPtsOffset(_channelNumber, cancellationToken);
-            // _logger.LogInformation("PTS offset: {PtsOffset}", ptsOffset);
+            TimeSpan ptsOffset = await GetPtsOffset(_channelNumber, cancellationToken);
 
             _logger.LogDebug("HLS session state: {State}", _state);
 
-            DateTimeOffset now = _state is HlsSessionState.SeekAndWorkAhead ? DateTimeOffset.Now : _transcodedUntil;
+            DateTimeOffset now = wasSeekAndWorkAhead ? DateTimeOffset.Now : _transcodedUntil;
             bool startAtZero = _state is HlsSessionState.ZeroAndWorkAhead or HlsSessionState.ZeroAndRealtime;
 
             var request = new GetPlayoutItemProcessByChannelNumber(
                 _channelNumber,
-                "segmenter",
+                StreamingMode.HttpLiveStreamingSegmenter,
                 now,
                 startAtZero,
                 realtime,
                 _channelStart,
                 ptsOffset,
-                _targetFramerate);
+                _targetFramerate,
+                IsTroubleshooting: false,
+                Option<int>.None);
 
             // _logger.LogInformation("Request {@Request}", request);
 
@@ -462,7 +488,20 @@ public class HlsSessionWorker : IHlsSessionWorker
 
             foreach (PlayoutItemProcessModel processModel in result.RightAsEnumerable())
             {
+                if (!realtime && !processModel.IsWorkingAhead)
+                {
+                    _logger.LogDebug("HLS session throttling (NOT working ahead) based on playout item");
+                }
+
                 await TrimAndDelete(cancellationToken);
+
+                // increment discontinuity sequence and store with segment key (generated at)
+                foreach (long segmentKey in processModel.SegmentKey)
+                {
+                    _discontinuitySequence++;
+                    _discontinuityMap.TryAdd(segmentKey, _discontinuitySequence);
+                    //_logger.LogDebug("DISCONTINUITY MAP {Map}", _discontinuityMap);
+                }
 
                 Option<Pipe> maybePipe = Option<Pipe>.None;
                 var stdErrBuffer = new StringBuilder();
@@ -490,6 +529,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                     }
 
                     CommandResult commandResult = await processWithPipe
+                        .WithWorkingDirectory(_workingDirectory)
                         .WithStandardErrorPipe(PipeTarget.ToStringBuilder(stdErrBuffer))
                         .WithValidation(CommandResultValidation.None)
                         .ExecuteAsync(linkedCts.Token);
@@ -497,7 +537,10 @@ public class HlsSessionWorker : IHlsSessionWorker
                     if (commandResult.ExitCode == 0)
                     {
                         _logger.LogDebug("HLS process has completed for channel {Channel}", _channelNumber);
-                        _logger.LogDebug("Transcoded until: {Until}", processModel.Until);
+                        _logger.LogDebug(
+                            "Transcoded until: {Until} - Buffer: {Buffer} seconds",
+                            processModel.Until,
+                            processModel.Until.Subtract(DateTimeOffset.Now).TotalSeconds);
                         _transcodedUntil = processModel.Until;
                         _state = NextState(_state, processModel);
                         _hasWrittenSegments = true;
@@ -523,7 +566,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                         Either<BaseError, PlayoutItemProcessModel> maybeOfflineProcess = await _mediator.Send(
                             new GetErrorProcess(
                                 _channelNumber,
-                                "segmenter",
+                                StreamingMode.HttpLiveStreamingSegmenter,
                                 realtime,
                                 ptsOffset,
                                 processModel.MaybeDuration,
@@ -575,7 +618,7 @@ public class HlsSessionWorker : IHlsSessionWorker
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error transcoding channel {Channel}", _channelNumber);
+            _logger.LogError(ex, "Error transcoding channel {Channel} - {Message}", _channelNumber, ex.Message);
 
             try
             {
@@ -618,10 +661,15 @@ public class HlsSessionWorker : IHlsSessionWorker
             Option<string[]> maybeLines = await ReadPlaylistLines(cancellationToken);
             foreach (string[] lines in maybeLines)
             {
+                await RefreshInits();
+
                 // trim playlist and insert discontinuity before appending with new ffmpeg process
                 TrimPlaylistResult trimResult = _hlsPlaylistFilter.TrimPlaylistWithDiscontinuity(
+                    _discontinuityMap,
+                    _outputFormatKind,
                     PlaylistStart,
                     DateTimeOffset.Now.AddMinutes(-1),
+                    _hlsInitSegmentCache,
                     lines);
                 await WritePlaylist(trimResult.Playlist, cancellationToken);
 
@@ -638,21 +686,34 @@ public class HlsSessionWorker : IHlsSessionWorker
 
     private void DeleteOldSegments(TrimPlaylistResult trimResult)
     {
+        var generatedAtHash = new System.Collections.Generic.HashSet<long>();
+
         // delete old segments
-        var allSegments = Directory.GetFiles(
-                Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber),
-                "live*.ts").Append(
-                Directory.GetFiles(
-                    Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber),
-                    "live*.mp4"))
+        var allSegments = _fileSystem.Directory.GetFiles(_workingDirectory, "live*.ts")
+            .Append(_fileSystem.Directory.GetFiles(_workingDirectory, "live*.mp4"))
+            .Append(_fileSystem.Directory.GetFiles(_workingDirectory, "live*.m4s"))
             .Map(file =>
             {
                 string fileName = Path.GetFileName(file);
-                var sequenceNumber = int.Parse(
-                    fileName.Replace("live", string.Empty).Split('.')[0],
+                var sequenceNumber = long.Parse(
+                    fileName.Contains('_')
+                        ? fileName.Split('_')[2].Split('.')[0]
+                        : fileName.Replace("live", string.Empty).Split('.')[0],
                     CultureInfo.InvariantCulture);
-                return new Segment(file, sequenceNumber);
+                if (!fileName.Contains('_') || !long.TryParse(fileName.Split('_')[1], out long generatedAt))
+                {
+                    generatedAt = 0;
+                }
+                generatedAtHash.Add(generatedAt);
+                return new Segment(file, sequenceNumber, generatedAt);
             })
+            .ToList();
+
+        var allInits = _fileSystem.Directory.GetFiles(_workingDirectory, "*init.mp4")
+            .Map(file => long.TryParse(Path.GetFileName(file).Split('_')[0], out long generatedAt) && !generatedAtHash.Contains(generatedAt)
+                ? new Segment(file, 0, generatedAt)
+                : Option<Segment>.None)
+            .Somes()
             .ToList();
 
         var toDelete = allSegments.Filter(s => s.SequenceNumber < trimResult.Sequence).ToList();
@@ -665,11 +726,30 @@ public class HlsSessionWorker : IHlsSessionWorker
             //     trimResult.Sequence);
         }
 
+        foreach (var init in allInits)
+        {
+            // only consider deleting inits that have no segments left on disk, no segments in ffmpeg playlist
+            if (generatedAtHash.Contains(init.GeneratedAt) || init.GeneratedAt >= trimResult.GeneratedAt)
+            {
+                continue;
+            }
+
+            string fileName = Path.GetFileName(init.File);
+            if (_hlsInitSegmentCache.IsEarliestByHash(fileName))
+            {
+                continue;
+            }
+
+            toDelete.Add(init);
+            _hlsInitSegmentCache.DeleteSegment(fileName);
+            _discontinuityMap.Remove(init.GeneratedAt);
+        }
+
         foreach (Segment segment in toDelete)
         {
             try
             {
-                File.Delete(segment.File);
+                _fileSystem.File.Delete(segment.File);
             }
             catch (IOException)
             {
@@ -680,12 +760,29 @@ public class HlsSessionWorker : IHlsSessionWorker
         }
     }
 
-    private async Task<long> GetPtsOffset(string channelNumber, CancellationToken cancellationToken)
+    private async Task RefreshInits()
+    {
+        var allSegments = _fileSystem.Directory.GetFiles(_workingDirectory, "live*.m4s")
+            .Map(Path.GetFileName)
+            .Map(s => s.Split("_")[1])
+            .ToHashSet();
+
+        foreach (string file in _fileSystem.Directory.GetFiles(_workingDirectory, "*init.mp4"))
+        {
+            string key = Path.GetFileName(file).Split("_")[0];
+            if (allSegments.Contains(key))
+            {
+                await _hlsInitSegmentCache.AddSegment(file);
+            }
+        }
+    }
+
+    private async Task<TimeSpan> GetPtsOffset(string channelNumber, CancellationToken cancellationToken)
     {
         await _slim.WaitAsync(cancellationToken);
         try
         {
-            long result = 0;
+            TimeSpan result = TimeSpan.Zero;
 
             // if we haven't yet written any segments, start at zero
             if (!_hasWrittenSegments)
@@ -693,8 +790,10 @@ public class HlsSessionWorker : IHlsSessionWorker
                 return result;
             }
 
+            await RefreshInits();
+
             Either<BaseError, PtsTime> queryResult = await _mediator.Send(
-                new GetLastPtsTime(channelNumber),
+                new GetLastPtsTime(_hlsInitSegmentCache, channelNumber),
                 cancellationToken);
 
             foreach (BaseError error in queryResult.LeftToSeq())
@@ -704,6 +803,7 @@ public class HlsSessionWorker : IHlsSessionWorker
 
             foreach (PtsTime pts in queryResult.RightToSeq())
             {
+                _logger.LogDebug("Last pts offset is {Pts}", pts.Value);
                 result = pts.Value;
             }
 
@@ -722,9 +822,9 @@ public class HlsSessionWorker : IHlsSessionWorker
     private async Task<Option<string[]>> ReadPlaylistLines(CancellationToken cancellationToken)
     {
         string fileName = PlaylistFileName();
-        if (File.Exists(fileName))
+        if (_fileSystem.File.Exists(fileName))
         {
-            return await File.ReadAllLinesAsync(fileName, cancellationToken);
+            return await _fileSystem.File.ReadAllLinesAsync(fileName, cancellationToken);
         }
 
         _logger.LogDebug("Playlist does not exist at expected location {File}", fileName);
@@ -734,13 +834,10 @@ public class HlsSessionWorker : IHlsSessionWorker
     private async Task WritePlaylist(string playlist, CancellationToken cancellationToken)
     {
         string fileName = PlaylistFileName();
-        await File.WriteAllTextAsync(fileName, playlist, cancellationToken);
+        await _fileSystem.File.WriteAllTextAsync(fileName, playlist, cancellationToken);
     }
 
-    private string PlaylistFileName() => Path.Combine(
-        FileSystemLayout.TranscodeFolder,
-        _channelNumber,
-        "live.m3u8");
+    private string PlaylistFileName() => Path.Combine(_workingDirectory, "live.m3u8");
 
-    private sealed record Segment(string File, int SequenceNumber);
+    private sealed record Segment(string File, long SequenceNumber, long GeneratedAt);
 }

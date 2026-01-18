@@ -75,9 +75,11 @@ public class ColorspaceFilter : BaseFilter
             }
 
             string inputOverrides = string.Empty;
-            if (cp.IsMixed || _forceInputOverrides)
+            if (!cp.IsBt2020Ten && (cp.IsMixed || _forceInputOverrides))
             {
-                string range = string.IsNullOrWhiteSpace(cp.ColorRange) ? "tv" : cp.ColorRange;
+                string range = string.IsNullOrWhiteSpace(cp.ColorRange)
+                    ? string.Empty
+                    : $"irange={cp.ColorRange}:";
 
                 string transfer = string.IsNullOrWhiteSpace(cp.ColorTransfer) || string.Equals(
                     cp.ColorTransfer,
@@ -101,7 +103,7 @@ public class ColorspaceFilter : BaseFilter
                     : cp.ColorSpace;
 
                 inputOverrides =
-                    $"irange={range}:ispace={space}:itrc={transfer}:iprimaries={primaries}:";
+                    $"{range}ispace={space}:itrc={transfer}:iprimaries={primaries}:";
             }
 
             string colorspace = _desiredPixelFormat.BitDepth switch
@@ -110,9 +112,9 @@ public class ColorspaceFilter : BaseFilter
                     $"{hwdownload}setparams=range=tv:colorspace=bt709:color_trc=bt709:color_primaries=bt709",
                 _ when cp.IsUnknown => "setparams=range=tv:colorspace=bt709:color_trc=bt709:color_primaries=bt709",
                 10 when !cp.IsUnknown =>
-                    $"{hwdownload}colorspace={inputOverrides}all=bt709:format=yuv420p10",
+                    $"{hwdownload}colorspace={inputOverrides}all=bt709:format=yuv420p10:range=tv",
                 8 when !cp.IsUnknown =>
-                    $"{hwdownload}colorspace={inputOverrides}all=bt709:format=yuv420p",
+                    $"{hwdownload}colorspace={inputOverrides}all=bt709:format=yuv420p:range=tv",
                 _ => string.Empty
             };
 

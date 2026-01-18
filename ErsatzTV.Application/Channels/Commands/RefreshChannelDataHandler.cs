@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO.Abstractions;
 using System.Xml;
 using ErsatzTV.Application.Configuration;
 using ErsatzTV.Core;
@@ -11,6 +12,7 @@ using ErsatzTV.Core.Iptv;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Streaming;
 using ErsatzTV.Infrastructure.Data;
+using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.IO;
@@ -25,6 +27,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 {
     private readonly IConfigElementRepository _configElementRepository;
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<RefreshChannelDataHandler> _logger;
     private readonly RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
@@ -32,12 +35,14 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
     public RefreshChannelDataHandler(
         RecyclableMemoryStreamManager recyclableMemoryStreamManager,
         IDbContextFactory<TvContext> dbContextFactory,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         IConfigElementRepository configElementRepository,
         ILogger<RefreshChannelDataHandler> logger)
     {
         _recyclableMemoryStreamManager = recyclableMemoryStreamManager;
         _dbContextFactory = dbContextFactory;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _configElementRepository = configElementRepository;
         _logger = logger;
@@ -45,209 +50,259 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
     public async Task Handle(RefreshChannelData request, CancellationToken cancellationToken)
     {
-        _logger.LogDebug("Refreshing channel data (XMLTV) for channel {Channel}", request.ChannelNumber);
-
-        _localFileSystem.EnsureFolderExists(FileSystemLayout.ChannelGuideCacheFolder);
-
-        string targetFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{request.ChannelNumber}.xml");
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        int hiddenCount = await dbContext.Channels
-            .Where(c => c.Number == request.ChannelNumber && c.ShowInEpg == false)
-            .CountAsync(cancellationToken);
-        if (hiddenCount > 0)
+        try
         {
-            File.Delete(targetFile);
-            return;
-        }
+            _logger.LogDebug("Refreshing channel data (XMLTV) for channel {Channel}", request.ChannelNumber);
 
-        string movieTemplateFileName = GetMovieTemplateFileName();
-        string episodeTemplateFileName = GetEpisodeTemplateFileName();
-        string musicVideoTemplateFileName = GetMusicVideoTemplateFileName();
-        string songTemplateFileName = GetSongTemplateFileName();
-        string otherVideoTemplateFileName = GetOtherVideoTemplateFileName();
-        string fillerTemplateFileName = GetFillerMediaItemTemplateFileName();
-        if (movieTemplateFileName is null || episodeTemplateFileName is null || musicVideoTemplateFileName is null ||
-            songTemplateFileName is null || otherVideoTemplateFileName is null || fillerTemplateFileName is null)
-        {
-            return;
-        }
+            _localFileSystem.EnsureFolderExists(FileSystemLayout.ChannelGuideCacheFolder);
 
-        var minifier = new XmlMinifier(
-            new XmlMinificationSettings
+            string targetFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{request.ChannelNumber}.xml");
+            await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+            int hiddenCount = await dbContext.Channels
+                .Where(c => c.Number == request.ChannelNumber && c.ShowInEpg == false)
+                .CountAsync(cancellationToken);
+            if (hiddenCount > 0)
             {
-                MinifyWhitespace = true,
-                RemoveXmlComments = true,
-                CollapseTagsWithoutContent = true
-            });
+                File.Delete(targetFile);
+                return;
+            }
 
-        var templateContext = new XmlTemplateContext();
-
-        string movieText = await File.ReadAllTextAsync(movieTemplateFileName, cancellationToken);
-        var movieTemplate = Template.Parse(movieText, movieTemplateFileName);
-
-        string episodeText = await File.ReadAllTextAsync(episodeTemplateFileName, cancellationToken);
-        var episodeTemplate = Template.Parse(episodeText, episodeTemplateFileName);
-
-        string musicVideoText = await File.ReadAllTextAsync(musicVideoTemplateFileName, cancellationToken);
-        var musicVideoTemplate = Template.Parse(musicVideoText, musicVideoTemplateFileName);
-
-        string songText = await File.ReadAllTextAsync(songTemplateFileName, cancellationToken);
-        var songTemplate = Template.Parse(songText, songTemplateFileName);
-
-        string otherVideoText = await File.ReadAllTextAsync(otherVideoTemplateFileName, cancellationToken);
-        var otherVideoTemplate = Template.Parse(otherVideoText, otherVideoTemplateFileName);
-
-        string fillerText = await File.ReadAllTextAsync(fillerTemplateFileName, cancellationToken);
-        var fillerTemplate = Template.Parse(fillerText, fillerTemplateFileName);
-
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-        List<Playout> playouts = await dbContext.Playouts
-            .AsNoTracking()
-            .Filter(pi => pi.Channel.Number == request.ChannelNumber)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Episode).EpisodeMetadata)
-            .ThenInclude(em => em.Guids)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Episode).Season)
-            .ThenInclude(s => s.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .ThenInclude(sm => sm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Episode).Season)
-            .ThenInclude(s => s.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .ThenInclude(sm => sm.Genres)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Episode).Season)
-            .ThenInclude(s => s.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .ThenInclude(sm => sm.Guids)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Movie).MovieMetadata)
-            .ThenInclude(mm => mm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Movie).MovieMetadata)
-            .ThenInclude(mm => mm.Genres)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Movie).MovieMetadata)
-            .ThenInclude(mm => mm.Guids)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mm => mm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Genres)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Studios)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Directors)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
-            .ThenInclude(mvm => mvm.Artists)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as MusicVideo).Artist)
-            .ThenInclude(a => a.ArtistMetadata)
-            .ThenInclude(am => am.Genres)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as OtherVideo).OtherVideoMetadata)
-            .ThenInclude(vm => vm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as FillerMediaItem).FillerMetadata)
-            .ThenInclude(vm => vm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Song).SongMetadata)
-            .ThenInclude(vm => vm.Artwork)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Song).SongMetadata)
-            .ThenInclude(sm => sm.Genres)
-            .Include(p => p.Items)
-            .ThenInclude(i => i.MediaItem)
-            .ThenInclude(i => (i as Song).SongMetadata)
-            .ThenInclude(sm => sm.Studios)
-            .ToListAsync(cancellationToken);
-
-        await using RecyclableMemoryStream ms = _recyclableMemoryStreamManager.GetStream();
-        await using var xml = XmlWriter.Create(
-            ms,
-            new XmlWriterSettings { Async = true, ConformanceLevel = ConformanceLevel.Fragment });
-
-        int daysToBuild = await _configElementRepository
-            .GetValue<int>(ConfigElementKey.XmltvDaysToBuild, cancellationToken)
-            .IfNoneAsync(2);
-
-        DateTimeOffset finish = DateTimeOffset.UtcNow.AddDays(daysToBuild);
-
-        foreach (Playout playout in playouts)
-        {
-            switch (playout.ScheduleKind)
+            string movieTemplateFileName = GetMovieTemplateFileName();
+            string episodeTemplateFileName = GetEpisodeTemplateFileName();
+            string musicVideoTemplateFileName = GetMusicVideoTemplateFileName();
+            string songTemplateFileName = GetSongTemplateFileName();
+            string otherVideoTemplateFileName = GetOtherVideoTemplateFileName();
+            string remoteStreamTemplateFileName = GetRemoteStreamTemplateFileName();
+            string fillerTemplateFileName = GetFillerMediaItemTemplateFileName();
+            if (movieTemplateFileName is null || episodeTemplateFileName is null ||
+                musicVideoTemplateFileName is null ||
+                songTemplateFileName is null || otherVideoTemplateFileName is null ||
+                remoteStreamTemplateFileName is null || fillerTemplateFileName is null)
             {
-                case PlayoutScheduleKind.Classic:
-                case PlayoutScheduleKind.Sequential:
-                case PlayoutScheduleKind.Scripted:
-                    var floodSorted = playouts
-                        .Collect(p => p.Items)
-                        .OrderBy(pi => pi.Start)
-                        .Filter(pi => pi.StartOffset <= finish)
-                        .ToList();
-                    await WritePlayoutXml(
-                        request,
-                        floodSorted,
-                        templateContext,
-                        movieTemplate,
-                        episodeTemplate,
-                        musicVideoTemplate,
-                        songTemplate,
-                        otherVideoTemplate,
-                        fillerTemplate,
-                        minifier,
-                        xml,
-                        cancellationToken);
-                    break;
-                case PlayoutScheduleKind.Block:
-                    var blockSorted = playouts
-                        .Collect(p => p.Items)
-                        .OrderBy(pi => pi.Start)
-                        .Filter(pi => pi.StartOffset <= finish)
-                        .ToList();
-                    await WriteBlockPlayoutXml(
-                        request,
-                        blockSorted,
-                        templateContext,
-                        movieTemplate,
-                        episodeTemplate,
-                        musicVideoTemplate,
-                        songTemplate,
-                        otherVideoTemplate,
-                        fillerTemplate,
-                        minifier,
-                        xml,
-                        cancellationToken);
-                    break;
-                case PlayoutScheduleKind.ExternalJson:
-                    var externalJsonSorted = (await CollectExternalJsonItems(playout.ScheduleFile))
-                        .Filter(pi => pi.StartOffset <= finish)
-                        .ToList();
+                return;
+            }
+
+            var minifier = new XmlMinifier(
+                new XmlMinificationSettings
+                {
+                    MinifyWhitespace = true,
+                    RemoveXmlComments = true,
+                    CollapseTagsWithoutContent = true
+                });
+
+            var templateContext = new XmlTemplateContext();
+
+            string movieText = await File.ReadAllTextAsync(movieTemplateFileName, cancellationToken);
+            var movieTemplate = Template.Parse(movieText, movieTemplateFileName);
+
+            string episodeText = await File.ReadAllTextAsync(episodeTemplateFileName, cancellationToken);
+            var episodeTemplate = Template.Parse(episodeText, episodeTemplateFileName);
+
+            string musicVideoText = await File.ReadAllTextAsync(musicVideoTemplateFileName, cancellationToken);
+            var musicVideoTemplate = Template.Parse(musicVideoText, musicVideoTemplateFileName);
+
+            string songText = await File.ReadAllTextAsync(songTemplateFileName, cancellationToken);
+            var songTemplate = Template.Parse(songText, songTemplateFileName);
+
+            string otherVideoText = await File.ReadAllTextAsync(otherVideoTemplateFileName, cancellationToken);
+            var otherVideoTemplate = Template.Parse(otherVideoText, otherVideoTemplateFileName);
+
+            string fillerText = await File.ReadAllTextAsync(fillerTemplateFileName, cancellationToken);
+            var fillerTemplate = Template.Parse(fillerText, fillerTemplateFileName);
+
+            string remoteStreamText = await File.ReadAllTextAsync(remoteStreamTemplateFileName, cancellationToken);
+            var remoteStreamTemplate = Template.Parse(remoteStreamText, remoteStreamTemplateFileName);
+
+            TimeSpan playoutOffset = TimeSpan.Zero;
+            string mirrorChannelNumber = null;
+            Option<Channel> maybeChannel = await dbContext.Channels
+                .AsNoTracking()
+                .Include(c => c.MirrorSourceChannel)
+                .Filter(c => c.PlayoutSource == ChannelPlayoutSource.Mirror && c.MirrorSourceChannelId != null)
+                .SelectOneAsync(
+                    c => c.Number == request.ChannelNumber,
+                    c => c.Number == request.ChannelNumber,
+                    cancellationToken);
+            foreach (Channel channel in maybeChannel)
+            {
+                mirrorChannelNumber = channel.MirrorSourceChannel.Number;
+                playoutOffset = channel.PlayoutOffset ?? TimeSpan.Zero;
+            }
+
+            List<Playout> playouts = await dbContext.Playouts
+                .AsNoTracking()
+                .Filter(pi => pi.Channel.Number == (mirrorChannelNumber ?? request.ChannelNumber))
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Episode).EpisodeMetadata)
+                .ThenInclude(em => em.Guids)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Episode).EpisodeMetadata)
+                .ThenInclude(em => em.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Episode).Season)
+                .ThenInclude(s => s.Show)
+                .ThenInclude(s => s.ShowMetadata)
+                .ThenInclude(sm => sm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Episode).Season)
+                .ThenInclude(s => s.Show)
+                .ThenInclude(s => s.ShowMetadata)
+                .ThenInclude(sm => sm.Genres)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Episode).Season)
+                .ThenInclude(s => s.Show)
+                .ThenInclude(s => s.ShowMetadata)
+                .ThenInclude(sm => sm.Guids)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Movie).MovieMetadata)
+                .ThenInclude(mm => mm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Movie).MovieMetadata)
+                .ThenInclude(mm => mm.Genres)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Movie).MovieMetadata)
+                .ThenInclude(mm => mm.Guids)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mm => mm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mvm => mvm.Genres)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mvm => mvm.Studios)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mvm => mvm.Directors)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mvm => mvm.Artists)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as MusicVideo).Artist)
+                .ThenInclude(a => a.ArtistMetadata)
+                .ThenInclude(am => am.Genres)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as OtherVideo).OtherVideoMetadata)
+                .ThenInclude(vm => vm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as FillerMediaItem).FillerMetadata)
+                .ThenInclude(vm => vm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as RemoteStream).RemoteStreamMetadata)
+                .ThenInclude(vm => vm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Song).SongMetadata)
+                .ThenInclude(vm => vm.Artwork)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Song).SongMetadata)
+                .ThenInclude(sm => sm.Genres)
+                .Include(p => p.Items)
+                .ThenInclude(i => i.MediaItem)
+                .ThenInclude(i => (i as Song).SongMetadata)
+                .ThenInclude(sm => sm.Studios)
+                .AsSplitQuery()
+                .ToListAsync(cancellationToken);
+
+            await using RecyclableMemoryStream ms = _recyclableMemoryStreamManager.GetStream();
+            await using var xml = XmlWriter.Create(
+                ms,
+                new XmlWriterSettings { Async = true, ConformanceLevel = ConformanceLevel.Fragment });
+
+            int daysToBuild = await _configElementRepository
+                .GetValue<int>(ConfigElementKey.XmltvDaysToBuild, cancellationToken)
+                .IfNoneAsync(2);
+
+            DateTimeOffset finish = DateTimeOffset.UtcNow.AddDays(daysToBuild);
+
+            foreach (Playout playout in playouts)
+            {
+                switch (playout.ScheduleKind)
+                {
+                    case PlayoutScheduleKind.Classic:
+                    case PlayoutScheduleKind.Sequential:
+                    case PlayoutScheduleKind.Scripted:
+                        var floodSorted = playouts
+                            .Collect(p => p.Items)
+                            .OrderBy(pi => pi.Start)
+                            .Filter(pi => pi.StartOffset <= finish)
+                            .ToList();
+                        foreach (var item in floodSorted)
+                        {
+                            item.Start += playoutOffset;
+                            item.Finish += playoutOffset;
+                        }
+
+                        await WritePlayoutXml(
+                            request,
+                            floodSorted,
+                            templateContext,
+                            movieTemplate,
+                            episodeTemplate,
+                            musicVideoTemplate,
+                            songTemplate,
+                            otherVideoTemplate,
+                            fillerTemplate,
+                            remoteStreamTemplate,
+                            minifier,
+                            xml,
+                            cancellationToken);
+                        break;
+                    case PlayoutScheduleKind.Block:
+                        var blockSorted = playouts
+                            .Collect(p => p.Items)
+                            .OrderBy(pi => pi.Start)
+                            .Filter(pi => pi.StartOffset <= finish)
+                            .ToList();
+                        foreach (var item in blockSorted)
+                        {
+                            item.Start += playoutOffset;
+                            item.Finish += playoutOffset;
+                        }
+
+                        await WriteBlockPlayoutXml(
+                            request,
+                            blockSorted,
+                            templateContext,
+                            movieTemplate,
+                            episodeTemplate,
+                            musicVideoTemplate,
+                            songTemplate,
+                            otherVideoTemplate,
+                            fillerTemplate,
+                            remoteStreamTemplate,
+                            minifier,
+                            xml,
+                            cancellationToken);
+                        break;
+                    case PlayoutScheduleKind.ExternalJson:
+                        var externalJsonSorted = (await CollectExternalJsonItems(playout.ScheduleFile))
+                            .Filter(pi => pi.StartOffset <= finish)
+                            .ToList();
+                        foreach (var item in externalJsonSorted)
+                        {
+                            item.Start += playoutOffset;
+                            item.Finish += playoutOffset;
+                        }
 
                     await WritePlayoutXml(
                         request,
@@ -259,6 +314,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         songTemplate,
                         otherVideoTemplate,
                         fillerTemplate,
+                        remoteStreamTemplate,
                         minifier,
                         xml,
                         cancellationToken);
@@ -266,12 +322,17 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             }
         }
 
-        await xml.FlushAsync();
+            await xml.FlushAsync();
 
-        string tempFile = Path.GetTempFileName();
-        await File.WriteAllBytesAsync(tempFile, ms.ToArray(), cancellationToken);
+            string tempFile = Path.GetTempFileName();
+            await File.WriteAllBytesAsync(tempFile, ms.ToArray(), cancellationToken);
 
-        File.Move(tempFile, targetFile, true);
+            File.Move(tempFile, targetFile, true);
+        }
+        catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
+        {
+            // do nothing
+        }
     }
 
     private async Task WritePlayoutXml(
@@ -284,6 +345,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template songTemplate,
         Template otherVideoTemplate,
         Template fillerTemplate,
+        Template remoteStreamTemplate,
         XmlMinifier minifier,
         XmlWriter xml,
         CancellationToken cancellationToken)
@@ -359,6 +421,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 songTemplate,
                 otherVideoTemplate,
                 fillerTemplate,
+                remoteStreamTemplate,
                 minifier,
                 xml);
 
@@ -376,6 +439,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template songTemplate,
         Template otherVideoTemplate,
         Template fillerTemplate,
+        Template remoteStreamTemplate,
         XmlMinifier minifier,
         XmlWriter xml,
         CancellationToken cancellationToken)
@@ -431,6 +495,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                             musicVideoTemplate,
                             songTemplate,
                             otherVideoTemplate,
+                            remoteStreamTemplate,
                             minifier,
                             xml);
                     }
@@ -471,6 +536,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                             songTemplate,
                             otherVideoTemplate,
                             fillerTemplate,
+                            remoteStreamTemplate,
                             minifier,
                             xml);
 
@@ -495,6 +561,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template songTemplate,
         Template otherVideoTemplate,
         Template fillerTemplate,
+        Template remoteStreamTemplate,
         XmlMinifier minifier,
         XmlWriter xml)
     {
@@ -556,6 +623,16 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 title,
                 templateContext,
                 otherVideoTemplate),
+            RemoteStream templateRemoteStream => await ProcessRemoteStreamTemplate(
+                request,
+                templateRemoteStream,
+                start,
+                stop,
+                hasCustomTitle,
+                displayItem,
+                title,
+                templateContext,
+                remoteStreamTemplate),
             FillerMediaItem templateFiller => await ProcessFillerMediaItemTemplate(
                 request,
                 templateFiller,
@@ -653,6 +730,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 showMetadata.Guids ??= [];
 
                 string artworkPath = GetPrioritizedArtworkPath(showMetadata);
+                string thumbnailPath = GetPrioritizedArtworkPath(metadata);
 
                 var data = new
                 {
@@ -673,6 +751,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                     ShowGenres = showMetadata.Genres.Map(g => g.Name).OrderBy(n => n),
                     EpisodeHasArtwork = !string.IsNullOrWhiteSpace(artworkPath),
                     EpisodeArtworkUrl = artworkPath,
+                    EpisodeHasThumbnail = !string.IsNullOrWhiteSpace(thumbnailPath),
+                    EpisodeThumbnailUrl = thumbnailPath,
                     SeasonNumber = templateEpisode.Season?.SeasonNumber ?? 0,
                     metadata.EpisodeNumber,
                     ShowHasContentRating = !string.IsNullOrWhiteSpace(showMetadata.ContentRating),
@@ -868,6 +948,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             metadata.Genres ??= [];
             metadata.Guids ??= [];
 
+            string artworkPath = GetPrioritizedArtworkPath(metadata);
+
             var data = new
             {
                 ProgrammeStart = start,
@@ -882,6 +964,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 OtherVideoPlot = metadata.Plot,
                 OtherVideoHasYear = metadata.Year.HasValue,
                 OtherVideoYear = metadata.Year,
+                OtherVideoHasArtwork = !string.IsNullOrWhiteSpace(artworkPath),
+                OtherVideoArtworkUrl = artworkPath,
                 OtherVideoGenres = metadata.Genres.Map(g => g.Name).OrderBy(n => n),
                 OtherVideoHasContentRating = !string.IsNullOrWhiteSpace(metadata.ContentRating),
                 OtherVideoContentRating = metadata.ContentRating
@@ -897,18 +981,63 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         return Option<string>.None;
     }
 
-    private string GetMovieTemplateFileName()
+    private static async Task<Option<string>> ProcessRemoteStreamTemplate(
+        RefreshChannelData request,
+        RemoteStream templateRemoteStream,
+        string start,
+        string stop,
+        bool hasCustomTitle,
+        PlayoutItem displayItem,
+        string title,
+        XmlTemplateContext templateContext,
+        Template remoteStreamTemplate)
     {
-        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "movie.sbntxt");
-
-        // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
+        foreach (RemoteStreamMetadata metadata in templateRemoteStream.RemoteStreamMetadata.HeadOrNone())
         {
-            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_movie.sbntxt");
+            metadata.Genres ??= [];
+            metadata.Guids ??= [];
+
+            string artworkPath = GetPrioritizedArtworkPath(metadata);
+
+            var data = new
+            {
+                ProgrammeStart = start,
+                ProgrammeStop = stop,
+                ChannelId = ChannelIdentifier.FromNumber(request.ChannelNumber),
+                ChannelIdLegacy = ChannelIdentifier.LegacyFromNumber(request.ChannelNumber),
+                request.ChannelNumber,
+                HasCustomTitle = hasCustomTitle,
+                displayItem.CustomTitle,
+                RemoteStreamTitle = title,
+                RemoteStreamHasPlot = !string.IsNullOrWhiteSpace(metadata.Plot),
+                RemoteStreamPlot = metadata.Plot,
+                RemoteStreamHasYear = metadata.Year.HasValue,
+                RemoteStreamYear = metadata.Year,
+                RemoteStreamHasArtwork = !string.IsNullOrWhiteSpace(artworkPath),
+                RemoteStreamArtworkUrl = artworkPath,
+                RemoteStreamGenres = metadata.Genres.Map(g => g.Name).OrderBy(n => n),
+                RemoteStreamHasContentRating = !string.IsNullOrWhiteSpace(metadata.ContentRating),
+                RemoteStreamContentRating = metadata.ContentRating
+            };
+
+            var scriptObject = new ScriptObject();
+            scriptObject.Import(data);
+            templateContext.PushGlobal(scriptObject);
+
+            return await remoteStreamTemplate.RenderAsync(templateContext);
         }
 
+        return Option<string>.None;
+    }
+
+    private string GetMovieTemplateFileName()
+    {
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "movie.sbntxt");
+
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate movie XMLTV fragment without template file {File}; please restart ErsatzTV",
@@ -922,16 +1051,12 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
     private string GetEpisodeTemplateFileName()
     {
-        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "episode.sbntxt");
-
-        // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
-        {
-            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_episode.sbntxt");
-        }
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "episode.sbntxt");
 
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate episode XMLTV fragment without template file {File}; please restart ErsatzTV",
@@ -945,16 +1070,12 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
     private string GetMusicVideoTemplateFileName()
     {
-        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "musicVideo.sbntxt");
-
-        // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
-        {
-            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_musicVideo.sbntxt");
-        }
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "musicVideo.sbntxt");
 
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate music video XMLTV fragment without template file {File}; please restart ErsatzTV",
@@ -968,16 +1089,12 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
     private string GetSongTemplateFileName()
     {
-        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "song.sbntxt");
-
-        // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
-        {
-            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_song.sbntxt");
-        }
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "song.sbntxt");
 
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate song XMLTV fragment without template file {File}; please restart ErsatzTV",
@@ -1014,19 +1131,34 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
     private string GetOtherVideoTemplateFileName()
     {
-        string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "otherVideo.sbntxt");
-
-        // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
-        {
-            templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_otherVideo.sbntxt");
-        }
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "otherVideo.sbntxt");
 
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate other video XMLTV fragment without template file {File}; please restart ErsatzTV",
+                templateFileName);
+
+            return null;
+        }
+
+        return templateFileName;
+    }
+
+    private string GetRemoteStreamTemplateFileName()
+    {
+        string templateFileName = _localFileSystem.GetCustomOrDefaultFile(
+            FileSystemLayout.ChannelGuideTemplatesFolder,
+            "remoteStream.sbntxt");
+
+        // fail if file doesn't exist
+        if (!_fileSystem.File.Exists(templateFileName))
+        {
+            _logger.LogError(
+                "Unable to generate remote stream XMLTV fragment without template file {File}; please restart ErsatzTV",
                 templateFileName);
 
             return null;
@@ -1090,6 +1222,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                 .IfNone("[unknown artist]"),
             OtherVideo ov => ov.OtherVideoMetadata.HeadOrNone().Map(vm => vm.Title ?? string.Empty)
                 .IfNone("[unknown video]"),
+            RemoteStream rs => rs.RemoteStreamMetadata.HeadOrNone().Map(vm => vm.Title ?? string.Empty)
+                .IfNone("[unknown remote stream]"),
             FillerMediaItem fv => fv.FillerMetadata.HeadOrNone().Map(fm => fm.Title ?? string.Empty)
                 .IfNone("[unknown filler]"),
             _ => "[unknown]"
@@ -1140,7 +1274,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
     {
         var result = new List<PlayoutItem>();
 
-        if (_localFileSystem.FileExists(path))
+        if (_fileSystem.File.Exists(path))
         {
             Option<ExternalJsonChannel> maybeChannel = JsonConvert.DeserializeObject<ExternalJsonChannel>(
                 await File.ReadAllTextAsync(path));

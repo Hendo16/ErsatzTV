@@ -1,12 +1,13 @@
-﻿using ErsatzTV.Core;
+﻿using System.IO.Abstractions;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.MediaServer;
 using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
-using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Infrastructure;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
 
@@ -22,22 +23,22 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
     where TEtag : MediaServerItemEtag
 {
     private readonly ILocalChaptersProvider _localChaptersProvider;
-    private readonly ILocalFileSystem _localFileSystem;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILogger _logger;
-    private readonly IMediator _mediator;
     private readonly IMetadataRepository _metadataRepository;
 
     protected MediaServerTelevisionLibraryScanner(
-        ILocalFileSystem localFileSystem,
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
-        IMediator mediator,
         ILogger logger)
     {
-        _localFileSystem = localFileSystem;
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localChaptersProvider = localChaptersProvider;
         _metadataRepository = metadataRepository;
-        _mediator = mediator;
         _logger = logger;
     }
 
@@ -95,78 +96,78 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
 
         await foreach ((TShow incoming, int totalShowCount) in showEntries.WithCancellation(cancellationToken))
         {
-            if (cancellationToken.IsCancellationRequested)
+            using (ScanProfiler.Measure("Scan Show"))
             {
-                return new ScanCanceled();
-            }
-
-            incomingItemIds.Add(MediaServerItemId(incoming));
-
-            decimal percentCompletion = Math.Clamp((decimal)incomingItemIds.Count / totalShowCount, 0, 1);
-            await _mediator.Publish(
-                new ScannerProgressUpdate(
-                    library.Id,
-                    library.Name,
-                    percentCompletion,
-                    Array.Empty<int>(),
-                    Array.Empty<int>()),
-                cancellationToken);
-
-            Either<BaseError, MediaItemScanResult<TShow>> maybeShow = await televisionRepository
-                .GetOrAdd(library, incoming, cancellationToken)
-                .BindT(existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan));
-
-            if (maybeShow.IsLeft)
-            {
-                foreach (BaseError error in maybeShow.LeftToSeq())
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Error processing show {Title}: {Error}",
-                        incoming.ShowMetadata.Head().Title,
-                        error.Value);
+                    return new ScanCanceled();
                 }
 
-                continue;
-            }
+                incomingItemIds.Add(MediaServerItemId(incoming));
 
-            foreach (MediaItemScanResult<TShow> result in maybeShow.RightToSeq())
-            {
-                Either<BaseError, Unit> scanResult = await ScanSeasons(
-                    televisionRepository,
-                    library,
-                    getLocalPath,
-                    result.Item,
-                    result.IsUpdated,
-                    connectionParameters,
-                    GetSeasonLibraryItems(library, connectionParameters, result.Item),
-                    deepScan,
-                    cancellationToken);
-
-                foreach (ScanCanceled error in scanResult.LeftToSeq().OfType<ScanCanceled>())
+                decimal percentCompletion = Math.Clamp((decimal)incomingItemIds.Count / totalShowCount, 0, 1);
+                if (!await _scannerProxy.UpdateProgress(percentCompletion, cancellationToken))
                 {
-                    return error;
+                    return new ScanCanceled();
                 }
 
-                await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
+                Either<BaseError, MediaItemScanResult<TShow>> maybeShow = await televisionRepository
+                    .GetOrAdd(library, incoming, cancellationToken)
+                    .BindT(existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan));
 
-                Option<int> flagResult = await televisionRepository.FlagNormal(library, result.Item, cancellationToken);
-                if (flagResult.IsSome)
+                if (maybeShow.IsLeft)
                 {
-                    result.IsUpdated = true;
+                    foreach (BaseError error in maybeShow.LeftToSeq())
+                    {
+                        _logger.LogWarning(
+                            "Error processing show {Title}: {Error}",
+                            incoming.ShowMetadata.Head().Title,
+                            error.Value);
+                    }
+
+                    continue;
                 }
 
-                if (result.IsAdded || result.IsUpdated)
+                foreach (MediaItemScanResult<TShow> result in maybeShow.RightToSeq())
                 {
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            library.Id,
-                            null,
-                            null,
-                            new[] { result.Item.Id },
-                            Array.Empty<int>()),
+                    Either<BaseError, Unit> scanResult = await ScanSeasons(
+                        televisionRepository,
+                        library,
+                        getLocalPath,
+                        result.Item,
+                        result.IsUpdated,
+                        connectionParameters,
+                        GetSeasonLibraryItems(library, connectionParameters, result.Item),
+                        deepScan,
                         cancellationToken);
+
+                    foreach (ScanCanceled error in scanResult.LeftToSeq().OfType<ScanCanceled>())
+                    {
+                        return error;
+                    }
+
+                    await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
+
+                    Option<int> flagResult = await televisionRepository.FlagNormal(
+                        library,
+                        result.Item,
+                        cancellationToken);
+                    if (flagResult.IsSome)
+                    {
+                        result.IsUpdated = true;
+                    }
+
+                    if (result.IsAdded || result.IsUpdated)
+                    {
+                        if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                        {
+                            _logger.LogWarning("Failed to reindex media items from scanner process");
+                        }
+                    }
                 }
             }
+
+            ScanProfiler.LogStatistics(s => _logger.LogInformation("{Profile}", s));
         }
 
         if (cleanupFileNotFoundItems)
@@ -174,19 +175,11 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
             // trash shows that are no longer present on the media server
             var fileNotFoundItemIds = existingShows.Map(s => s.MediaServerItemId).Except(incomingItemIds).ToList();
             List<int> ids = await televisionRepository.FlagFileNotFoundShows(library, fileNotFoundItemIds, cancellationToken);
-            await _mediator.Publish(
-                new ScannerProgressUpdate(library.Id, null, null, ids.ToArray(), Array.Empty<int>()),
-                cancellationToken);
+            if (!await _scannerProxy.ReindexMediaItems(ids.ToArray(), cancellationToken))
+            {
+                _logger.LogWarning("Failed to reindex media items from scanner process");
+            }
         }
-
-        await _mediator.Publish(
-            new ScannerProgressUpdate(
-                library.Id,
-                library.Name,
-                0,
-                Array.Empty<int>(),
-                Array.Empty<int>()),
-            cancellationToken);
 
         return Unit.Default;
     }
@@ -236,7 +229,8 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         TLibrary library,
         TConnectionParameters connectionParameters,
         TShow show,
-        TSeason season);
+        TSeason season,
+        bool isNewSeason);
 
     protected abstract Task<Option<ShowMetadata>> GetFullMetadata(
         TConnectionParameters connectionParameters,
@@ -300,72 +294,74 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
 
         await foreach ((TSeason incoming, int _) in seasonEntries.WithCancellation(cancellationToken))
         {
-            incoming.ShowId = show.Id;
-
-            if (cancellationToken.IsCancellationRequested)
+            using (ScanProfiler.Measure("Scan Season"))
             {
-                return new ScanCanceled();
-            }
+                incoming.ShowId = show.Id;
 
-            incomingItemIds.Add(MediaServerItemId(incoming));
-
-            Either<BaseError, MediaItemScanResult<TSeason>> maybeSeason = await televisionRepository
-                .GetOrAdd(library, incoming, cancellationToken)
-                .BindT(existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan));
-
-            if (maybeSeason.IsLeft)
-            {
-                foreach (BaseError error in maybeSeason.LeftToSeq())
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Error processing show {Title} season {SeasonNumber}: {Error}",
-                        show.ShowMetadata.Head().Title,
-                        incoming.SeasonNumber,
-                        error.Value);
+                    return new ScanCanceled();
                 }
 
-                continue;
-            }
+                incomingItemIds.Add(MediaServerItemId(incoming));
 
-            foreach (MediaItemScanResult<TSeason> result in maybeSeason.RightToSeq())
-            {
-                Either<BaseError, Unit> scanResult = await ScanEpisodes(
-                    televisionRepository,
-                    library,
-                    getLocalPath,
-                    show,
-                    showIsUpdated,
-                    result.Item,
-                    connectionParameters,
-                    GetEpisodeLibraryItems(library, connectionParameters, show, result.Item),
-                    deepScan,
-                    cancellationToken);
+                Either<BaseError, MediaItemScanResult<TSeason>> maybeSeason = await televisionRepository
+                    .GetOrAdd(library, incoming, cancellationToken)
+                    .BindT(existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan));
 
-                foreach (ScanCanceled error in scanResult.LeftToSeq().OfType<ScanCanceled>())
+                if (maybeSeason.IsLeft)
                 {
-                    return error;
+                    foreach (BaseError error in maybeSeason.LeftToSeq())
+                    {
+                        _logger.LogWarning(
+                            "Error processing show {Title} season {SeasonNumber}: {Error}",
+                            show.ShowMetadata.Head().Title,
+                            incoming.SeasonNumber,
+                            error.Value);
+                    }
+
+                    continue;
                 }
 
-                await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
-
-                Option<int> flagResult = await televisionRepository.FlagNormal(library, result.Item, cancellationToken);
-                if (flagResult.IsSome)
+                foreach (MediaItemScanResult<TSeason> result in maybeSeason.RightToSeq())
                 {
-                    result.IsUpdated = true;
-                }
-
-                result.Item.Show = show;
-
-                if (result.IsAdded || result.IsUpdated || showIsUpdated)
-                {
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            library.Id,
-                            null,
-                            null,
-                            new[] { result.Item.Id },
-                            Array.Empty<int>()),
+                    Either<BaseError, Unit> scanResult = await ScanEpisodes(
+                        televisionRepository,
+                        library,
+                        getLocalPath,
+                        show,
+                        showIsUpdated,
+                        result.Item,
+                        connectionParameters,
+                        GetEpisodeLibraryItems(library, connectionParameters, show, result.Item, result.IsAdded),
+                        deepScan,
                         cancellationToken);
+
+                    foreach (ScanCanceled error in scanResult.LeftToSeq().OfType<ScanCanceled>())
+                    {
+                        return error;
+                    }
+
+                    await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
+
+                    Option<int> flagResult = await televisionRepository.FlagNormal(
+                        library,
+                        result.Item,
+                        cancellationToken);
+                    if (flagResult.IsSome)
+                    {
+                        result.IsUpdated = true;
+                    }
+
+                    result.Item.Show = show;
+
+                    if (result.IsAdded || result.IsUpdated || showIsUpdated)
+                    {
+                        if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                        {
+                            _logger.LogWarning("Failed to reindex media items from scanner process");
+                        }
+                    }
                 }
             }
         }
@@ -373,9 +369,10 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         // trash seasons that are no longer present on the media server
         var fileNotFoundItemIds = existingSeasons.Map(s => s.MediaServerItemId).Except(incomingItemIds).ToList();
         List<int> ids = await televisionRepository.FlagFileNotFoundSeasons(library, fileNotFoundItemIds, cancellationToken);
-        await _mediator.Publish(
-            new ScannerProgressUpdate(library.Id, null, null, ids.ToArray(), Array.Empty<int>()),
-            cancellationToken);
+        if (!await _scannerProxy.ReindexMediaItems(ids.ToArray(), cancellationToken))
+        {
+            _logger.LogWarning("Failed to reindex media items from scanner process");
+        }
 
         return Unit.Default;
     }
@@ -397,132 +394,141 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
 
         await foreach ((TEpisode incoming, int _) in episodeEntries.WithCancellation(cancellationToken))
         {
-            if (cancellationToken.IsCancellationRequested)
+            using (ScanProfiler.Measure("Scan Episode"))
             {
-                return new ScanCanceled();
-            }
-
-            incomingItemIds.Add(MediaServerItemId(incoming));
-
-            string localPath = getLocalPath(incoming);
-            if (!await ShouldScanItem(
-                    televisionRepository,
-                    library,
-                    show,
-                    season,
-                    existingEpisodes,
-                    incoming,
-                    localPath,
-                    deepScan,
-                    cancellationToken))
-            {
-                continue;
-            }
-
-            incoming.SeasonId = season.Id;
-
-            Either<BaseError, MediaItemScanResult<TEpisode>> maybeEpisode;
-
-            if (ServerReturnsStatisticsWithMetadata)
-            {
-                maybeEpisode = await televisionRepository
-                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
-                    .MapT(result =>
-                    {
-                        result.LocalPath = localPath;
-                        return result;
-                    })
-                    .BindT(existing => UpdateMetadataAndStatistics(
-                        connectionParameters,
-                        library,
-                        existing,
-                        incoming,
-                        deepScan,
-                        cancellationToken))
-                    .BindT(existing => UpdateChapters(existing, cancellationToken));
-            }
-            else
-            {
-                maybeEpisode = await televisionRepository
-                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
-                    .MapT(result =>
-                    {
-                        result.LocalPath = localPath;
-                        return result;
-                    })
-                    .BindT(existing => UpdateMetadata(
-                        connectionParameters,
-                        library,
-                        existing,
-                        incoming,
-                        deepScan,
-                        None,
-                        cancellationToken))
-                    .BindT(existing => UpdateStatistics(
-                        connectionParameters,
-                        library,
-                        existing,
-                        incoming,
-                        deepScan,
-                        None))
-                    .BindT(existing => UpdateSubtitles(existing, cancellationToken))
-                    .BindT(existing => UpdateChapters(existing, cancellationToken));
-            }
-
-            if (maybeEpisode.IsLeft)
-            {
-                foreach (BaseError error in maybeEpisode.LeftToSeq())
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(
-                        "Error processing episode {Title} s{SeasonNumber:00}e{EpisodeNumber:00}: {Error}",
-                        show.ShowMetadata.Head().Title,
-                        season.SeasonNumber,
-                        incoming.EpisodeMetadata.Head().EpisodeNumber,
-                        error.Value);
+                    return new ScanCanceled();
                 }
 
-                continue;
-            }
+                incomingItemIds.Add(MediaServerItemId(incoming));
 
-            foreach (MediaItemScanResult<TEpisode> result in maybeEpisode.RightToSeq())
-            {
-                await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
-
-                if (_localFileSystem.FileExists(result.LocalPath))
+                string localPath = getLocalPath(incoming);
+                if (!await ShouldScanItem(
+                        televisionRepository,
+                        library,
+                        show,
+                        season,
+                        existingEpisodes,
+                        incoming,
+                        localPath,
+                        deepScan,
+                        cancellationToken))
                 {
-                    Option<int> flagResult = await televisionRepository.FlagNormal(library, result.Item, cancellationToken);
-                    if (flagResult.IsSome)
-                    {
-                        result.IsUpdated = true;
-                    }
+                    continue;
                 }
-                else if (ServerSupportsRemoteStreaming)
+
+                incoming.SeasonId = season.Id;
+
+                Either<BaseError, MediaItemScanResult<TEpisode>> maybeEpisode;
+
+                if (ServerReturnsStatisticsWithMetadata)
                 {
-                    Option<int> flagResult = await televisionRepository.FlagRemoteOnly(library, result.Item, cancellationToken);
-                    if (flagResult.IsSome)
-                    {
-                        result.IsUpdated = true;
-                    }
+                    maybeEpisode = await televisionRepository
+                        .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                        .MapT(result =>
+                        {
+                            result.LocalPath = localPath;
+                            return result;
+                        })
+                        .BindT(existing => UpdateMetadataAndStatistics(
+                            connectionParameters,
+                            library,
+                            existing,
+                            incoming,
+                            deepScan,
+                            cancellationToken))
+                        .BindT(existing => UpdateChapters(existing, cancellationToken));
                 }
                 else
                 {
-                    Option<int> flagResult = await televisionRepository.FlagUnavailable(library, result.Item, cancellationToken);
-                    if (flagResult.IsSome)
-                    {
-                        result.IsUpdated = true;
-                    }
+                    maybeEpisode = await televisionRepository
+                        .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                        .MapT(result =>
+                        {
+                            result.LocalPath = localPath;
+                            return result;
+                        })
+                        .BindT(existing => UpdateMetadata(
+                            connectionParameters,
+                            library,
+                            existing,
+                            incoming,
+                            deepScan,
+                            None,
+                            cancellationToken))
+                        .BindT(existing => UpdateStatistics(
+                            connectionParameters,
+                            library,
+                            existing,
+                            incoming,
+                            deepScan,
+                            None))
+                        .BindT(existing => UpdateSubtitles(existing, incoming, deepScan, cancellationToken))
+                        .BindT(existing => UpdateChapters(existing, cancellationToken));
                 }
 
-                if (result.IsAdded || result.IsUpdated || showIsUpdated)
+                if (maybeEpisode.IsLeft)
                 {
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            library.Id,
-                            null,
-                            null,
-                            new[] { result.Item.Id },
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    foreach (BaseError error in maybeEpisode.LeftToSeq())
+                    {
+                        _logger.LogWarning(
+                            "Error processing episode {Title} s{SeasonNumber:00}e{EpisodeNumber:00}: {Error}",
+                            show.ShowMetadata.Head().Title,
+                            season.SeasonNumber,
+                            incoming.EpisodeMetadata.Head().EpisodeNumber,
+                            error.Value);
+                    }
+
+                    continue;
+                }
+
+                foreach (MediaItemScanResult<TEpisode> result in maybeEpisode.RightToSeq())
+                {
+                    await televisionRepository.SetEtag(result.Item, MediaServerEtag(incoming), cancellationToken);
+
+                    if (_fileSystem.File.Exists(result.LocalPath))
+                    {
+                        Option<int> flagResult = await televisionRepository.FlagNormal(
+                            library,
+                            result.Item,
+                            cancellationToken);
+                        if (flagResult.IsSome)
+                        {
+                            result.IsUpdated = true;
+                        }
+                    }
+                    else if (ServerSupportsRemoteStreaming)
+                    {
+                        Option<int> flagResult = await televisionRepository.FlagRemoteOnly(
+                            library,
+                            result.Item,
+                            cancellationToken);
+                        if (flagResult.IsSome)
+                        {
+                            result.IsUpdated = true;
+                        }
+                    }
+                    else
+                    {
+                        Option<int> flagResult = await televisionRepository.FlagUnavailable(
+                            library,
+                            result.Item,
+                            cancellationToken);
+                        if (flagResult.IsSome)
+                        {
+                            result.IsUpdated = true;
+                        }
+                    }
+
+                    if (result.IsAdded || result.IsUpdated || showIsUpdated)
+                    {
+                        if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                        {
+                            _logger.LogWarning("Failed to reindex media items from scanner process");
+                        }
+
+                    }
                 }
             }
         }
@@ -530,9 +536,10 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         // trash episodes that are no longer present on the media server
         var fileNotFoundItemIds = existingEpisodes.Map(m => m.MediaServerItemId).Except(incomingItemIds).ToList();
         List<int> ids = await televisionRepository.FlagFileNotFoundEpisodes(library, fileNotFoundItemIds, cancellationToken);
-        await _mediator.Publish(
-            new ScannerProgressUpdate(library.Id, null, null, ids.ToArray(), Array.Empty<int>()),
-            cancellationToken);
+        if (!await _scannerProxy.ReindexMediaItems(ids.ToArray(), cancellationToken))
+        {
+            _logger.LogWarning("Failed to reindex media items from scanner process");
+        }
 
         return Unit.Default;
     }
@@ -562,7 +569,7 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
             existingEtag == MediaServerEtag(incoming))
         {
             // skip scanning unavailable/file not found items that are unchanged and still don't exist locally
-            if (!_localFileSystem.FileExists(localPath) && !ServerSupportsRemoteStreaming)
+            if (!_fileSystem.File.Exists(localPath) && !ServerSupportsRemoteStreaming)
             {
                 return false;
             }
@@ -571,7 +578,7 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         {
             // item is unchanged, but file does not exist
             // don't scan, but mark as unavailable
-            if (!_localFileSystem.FileExists(localPath))
+            if (!_fileSystem.File.Exists(localPath))
             {
                 if (ServerSupportsRemoteStreaming)
                 {
@@ -579,9 +586,10 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
                     {
                         foreach (int id in await televisionRepository.FlagRemoteOnly(library, incoming, cancellationToken))
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(library.Id, null, null, [id], []),
-                                CancellationToken.None);
+                            if (!await _scannerProxy.ReindexMediaItems([id], cancellationToken))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }
@@ -591,9 +599,10 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
                     {
                         foreach (int id in await televisionRepository.FlagUnavailable(library, incoming, cancellationToken))
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(library.Id, null, null, [id], []),
-                                CancellationToken.None);
+                            if (!await _scannerProxy.ReindexMediaItems([id], cancellationToken))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }
@@ -629,16 +638,19 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         TShow incoming,
         bool deepScan)
     {
-        foreach (ShowMetadata fullMetadata in await GetFullMetadata(
-                     connectionParameters,
-                     library,
-                     result,
-                     incoming,
-                     deepScan))
+        using (ScanProfiler.Measure("Update Show Metadata"))
         {
-            // TODO: move some of this code into this scanner
-            // will have to merge JF, Emby, Plex logic
-            return await UpdateMetadata(result, fullMetadata);
+            foreach (ShowMetadata fullMetadata in await GetFullMetadata(
+                         connectionParameters,
+                         library,
+                         result,
+                         incoming,
+                         deepScan))
+            {
+                // TODO: move some of this code into this scanner
+                // will have to merge JF, Emby, Plex logic
+                return await UpdateMetadata(result, fullMetadata);
+            }
         }
 
         return result;
@@ -651,16 +663,19 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         TSeason incoming,
         bool deepScan)
     {
-        foreach (SeasonMetadata fullMetadata in await GetFullMetadata(
-                     connectionParameters,
-                     library,
-                     result,
-                     incoming,
-                     deepScan))
+        using (ScanProfiler.Measure("Update Season Metadata"))
         {
-            // TODO: move some of this code into this scanner
-            // will have to merge JF, Emby, Plex logic
-            return await UpdateMetadata(result, fullMetadata);
+            foreach (SeasonMetadata fullMetadata in await GetFullMetadata(
+                         connectionParameters,
+                         library,
+                         result,
+                         incoming,
+                         deepScan))
+            {
+                // TODO: move some of this code into this scanner
+                // will have to merge JF, Emby, Plex logic
+                return await UpdateMetadata(result, fullMetadata);
+            }
         }
 
         return result;
@@ -732,19 +747,22 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         Option<EpisodeMetadata> maybeFullMetadata,
         CancellationToken cancellationToken)
     {
-        if (maybeFullMetadata.IsNone)
+        using (ScanProfiler.Measure("Update Episode Metadata"))
         {
-            maybeFullMetadata = await GetFullMetadata(connectionParameters, library, result, incoming, deepScan);
-        }
+            if (maybeFullMetadata.IsNone)
+            {
+                maybeFullMetadata = await GetFullMetadata(connectionParameters, library, result, incoming, deepScan);
+            }
 
-        foreach (EpisodeMetadata fullMetadata in maybeFullMetadata)
-        {
-            // TODO: move some of this code into this scanner
-            // will have to merge JF, Emby, Plex logic
-            return await UpdateMetadata(result, fullMetadata, cancellationToken);
-        }
+            foreach (EpisodeMetadata fullMetadata in maybeFullMetadata)
+            {
+                // TODO: move some of this code into this scanner
+                // will have to merge JF, Emby, Plex logic
+                return await UpdateMetadata(result, fullMetadata, cancellationToken);
+            }
 
-        return result;
+            return result;
+        }
     }
 
     private async Task<Either<BaseError, MediaItemScanResult<TEpisode>>> UpdateStatistics(
@@ -755,81 +773,95 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
         bool deepScan,
         Option<MediaVersion> maybeMediaVersion)
     {
-        TEpisode existing = result.Item;
-
-        if (deepScan || result.IsAdded || MediaServerEtag(existing) != MediaServerEtag(incoming) ||
-            existing.MediaVersions.Head().Streams.Count == 0)
+        using (ScanProfiler.Measure("Update Episode Stats"))
         {
-            // if (maybeMediaVersion.IsNone && _localFileSystem.FileExists(result.LocalPath))
-            // {
-            //     _logger.LogDebug("Refreshing {Attribute} for {Path}", "Statistics", result.LocalPath);
-            //     Either<BaseError, bool> refreshResult =
-            //         await _localStatisticsProvider.RefreshStatistics(
-            //             ffmpegPath,
-            //             ffprobePath,
-            //             existing,
-            //             result.LocalPath);
-            //
-            //     foreach (BaseError error in refreshResult.LeftToSeq())
-            //     {
-            //         _logger.LogWarning(
-            //             "Unable to refresh {Attribute} for media item {Path}. Error: {Error}",
-            //             "Statistics",
-            //             result.LocalPath,
-            //             error.Value);
-            //     }
-            //
-            //     foreach (bool _ in refreshResult.RightToSeq())
-            //     {
-            //         result.IsUpdated = true;
-            //     }
-            // }
-            // else
-            // {
-            if (maybeMediaVersion.IsNone)
-            {
-                maybeMediaVersion = await GetMediaServerStatistics(
-                    connectionParameters,
-                    library,
-                    result,
-                    incoming);
-            }
+            TEpisode existing = result.Item;
 
-            foreach (MediaVersion mediaVersion in maybeMediaVersion)
+            if (deepScan || result.IsAdded || MediaServerEtag(existing) != MediaServerEtag(incoming) ||
+                existing.MediaVersions.Head().Streams.Count == 0)
             {
-                if (await _metadataRepository.UpdateStatistics(result.Item, mediaVersion))
+                // if (maybeMediaVersion.IsNone && _fileSystem.File.Exists(result.LocalPath))
+                // {
+                //     _logger.LogDebug("Refreshing {Attribute} for {Path}", "Statistics", result.LocalPath);
+                //     Either<BaseError, bool> refreshResult =
+                //         await _localStatisticsProvider.RefreshStatistics(
+                //             ffmpegPath,
+                //             ffprobePath,
+                //             existing,
+                //             result.LocalPath);
+                //
+                //     foreach (BaseError error in refreshResult.LeftToSeq())
+                //     {
+                //         _logger.LogWarning(
+                //             "Unable to refresh {Attribute} for media item {Path}. Error: {Error}",
+                //             "Statistics",
+                //             result.LocalPath,
+                //             error.Value);
+                //     }
+                //
+                //     foreach (bool _ in refreshResult.RightToSeq())
+                //     {
+                //         result.IsUpdated = true;
+                //     }
+                // }
+                // else
+                // {
+                if (maybeMediaVersion.IsNone)
                 {
-                    result.IsUpdated = true;
+                    maybeMediaVersion = await GetMediaServerStatistics(
+                        connectionParameters,
+                        library,
+                        result,
+                        incoming);
                 }
-            }
-            // }
-        }
 
-        return result;
+                foreach (MediaVersion mediaVersion in maybeMediaVersion)
+                {
+                    if (await _metadataRepository.UpdateStatistics(result.Item, mediaVersion))
+                    {
+                        result.IsUpdated = true;
+                    }
+                }
+                // }
+            }
+
+            return result;
+        }
     }
 
     private async Task<Either<BaseError, MediaItemScanResult<TEpisode>>> UpdateSubtitles(
         MediaItemScanResult<TEpisode> existing,
+        TEpisode incoming,
+        bool deepScan,
         CancellationToken cancellationToken)
     {
         try
         {
-            MediaVersion version = existing.Item.GetHeadVersion();
-            Option<EpisodeMetadata> maybeMetadata = existing.Item.EpisodeMetadata.HeadOrNone();
-            foreach (EpisodeMetadata metadata in maybeMetadata)
+            if (deepScan || existing.IsAdded || MediaServerEtag(existing.Item) != MediaServerEtag(incoming))
             {
-                List<Subtitle> subtitles = version.Streams
-                    .Filter(s => s.MediaStreamKind is MediaStreamKind.Subtitle or MediaStreamKind.ExternalSubtitle)
-                    .Map(Subtitle.FromMediaStream)
-                    .ToList();
-
-                if (await _metadataRepository.UpdateSubtitles(metadata, subtitles, cancellationToken))
+                using (ScanProfiler.Measure("Update Episode Subtitles"))
                 {
-                    return existing;
+                    MediaVersion version = existing.Item.GetHeadVersion();
+                    Option<EpisodeMetadata> maybeMetadata = existing.Item.EpisodeMetadata.HeadOrNone();
+                    foreach (EpisodeMetadata metadata in maybeMetadata)
+                    {
+                        List<Subtitle> subtitles = version.Streams
+                            .Filter(s =>
+                                s.MediaStreamKind is MediaStreamKind.Subtitle or MediaStreamKind.ExternalSubtitle)
+                            .Map(Subtitle.FromMediaStream)
+                            .ToList();
+
+                        if (await _metadataRepository.UpdateSubtitles(metadata, subtitles, cancellationToken))
+                        {
+                            return existing;
+                        }
+                    }
+
+                    return BaseError.New("Failed to update media server subtitles");
                 }
             }
 
-            return BaseError.New("Failed to update media server subtitles");
+            return existing;
         }
         catch (Exception ex)
         {
@@ -843,18 +875,24 @@ public abstract class MediaServerTelevisionLibraryScanner<TConnectionParameters,
     {
         try
         {
-            if (string.IsNullOrEmpty(existing.LocalPath))
+            using (ScanProfiler.Measure("Update Episode Chapters"))
             {
-                // No local path available for external chapter file lookup
+                if (string.IsNullOrEmpty(existing.LocalPath))
+                {
+                    // No local path available for external chapter file lookup
+                    return existing;
+                }
+
+                if (await _localChaptersProvider.UpdateChapters(
+                        existing.Item,
+                        Some(existing.LocalPath),
+                        cancellationToken))
+                {
+                    existing.IsUpdated = true;
+                }
+
                 return existing;
             }
-
-            if (await _localChaptersProvider.UpdateChapters(existing.Item, Some(existing.LocalPath), cancellationToken))
-            {
-                existing.IsUpdated = true;
-            }
-
-            return existing;
         }
         catch (Exception ex)
         {

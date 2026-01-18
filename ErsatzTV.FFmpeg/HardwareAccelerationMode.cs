@@ -9,5 +9,7 @@ public enum HardwareAccelerationMode
     VideoToolbox = 4,
     Amf = 5,
     OpenCL = 6,
-    Vulkan = 7
+    Vulkan = 7,
+    V4l2m2m = 8,
+    Rkmpp = 9
 }

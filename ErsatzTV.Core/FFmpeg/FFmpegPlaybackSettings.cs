@@ -1,5 +1,6 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.FFmpeg;
 using ErsatzTV.FFmpeg.Format;
 
 namespace ErsatzTV.Core.FFmpeg;
@@ -23,10 +24,11 @@ public class FFmpegPlaybackSettings
     public Option<int> AudioBufferSize { get; set; }
     public Option<int> AudioChannels { get; set; }
     public Option<int> AudioSampleRate { get; set; }
-    public Option<TimeSpan> AudioDuration { get; set; }
+    public bool PadAudio { get; set; }
     public FFmpegProfileAudioFormat AudioFormat { get; set; }
     public bool Deinterlace { get; set; }
     public Option<int> VideoTrackTimeScale { get; set; }
     public NormalizeLoudnessMode NormalizeLoudnessMode { get; set; }
-    public Option<int> FrameRate { get; set; }
+    public Option<double> TargetLoudness { get; set; }
+    public Option<FrameRate> FrameRate { get; set; }
 }

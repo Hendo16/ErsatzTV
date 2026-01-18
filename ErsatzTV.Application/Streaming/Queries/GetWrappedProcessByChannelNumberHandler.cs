@@ -37,13 +37,18 @@ public class GetWrappedProcessByChannelNumberHandler : FFmpegProcessHandler<GetW
             channel,
             request.Scheme,
             request.Host,
-            request.AccessToken);
+            request.AccessToken,
+            cancellationToken);
 
         return new PlayoutItemProcessModel(
             process,
             Option<GraphicsEngineContext>.None,
             Option<TimeSpan>.None,
             DateTimeOffset.MaxValue,
-            true);
+            true,
+            Option<long>.None,
+            Option<int>.None,
+            Option<TimeSpan>.None,
+            false);
     }
 }

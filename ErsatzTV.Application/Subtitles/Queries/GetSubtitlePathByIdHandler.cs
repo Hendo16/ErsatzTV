@@ -9,9 +9,9 @@ using Microsoft.EntityFrameworkCore;
 namespace ErsatzTV.Application.Subtitles.Queries;
 
 public class GetSubtitlePathByIdHandler(IDbContextFactory<TvContext> dbContextFactory)
-    : IRequestHandler<GetSubtitlePathById, Either<BaseError, string>>
+    : IRequestHandler<GetSubtitlePathById, Either<BaseError, SubtitlePathAndCodec>>
 {
-    public async Task<Either<BaseError, string>> Handle(
+    public async Task<Either<BaseError, SubtitlePathAndCodec>> Handle(
         GetSubtitlePathById request,
         CancellationToken cancellationToken)
     {
@@ -24,31 +24,32 @@ public class GetSubtitlePathByIdHandler(IDbContextFactory<TvContext> dbContextFa
         {
             if (subtitle is { SubtitleKind: SubtitleKind.Embedded, IsExtracted: true })
             {
-                return Path.Combine(FileSystemLayout.SubtitleCacheFolder, subtitle.Path);
+                string path = Path.Combine(FileSystemLayout.SubtitleCacheFolder, subtitle.Path);
+                return new SubtitlePathAndCodec(path, subtitle.Codec);
             }
 
             foreach (string plexUrl in await GetPlexUrl(request.Id, dbContext, maybeSubtitle))
             {
-                return plexUrl;
+                return new SubtitlePathAndCodec(plexUrl, subtitle.Codec);
             }
 
             foreach (string jellyfinUrl in await GetJellyfinUrl(request.Id, dbContext, maybeSubtitle))
             {
-                return jellyfinUrl;
+                return new SubtitlePathAndCodec(jellyfinUrl, subtitle.Codec);
             }
 
             foreach (string embyUrl in await GetEmbyUrl(request.Id, dbContext, maybeSubtitle))
             {
-                return embyUrl;
+                return new SubtitlePathAndCodec(embyUrl, subtitle.Codec);
             }
 
-            return subtitle.Path;
+            return new SubtitlePathAndCodec(subtitle.Path, subtitle.Codec);
         }
 
         return BaseError.New($"Unable to locate subtitle with id {request.Id}");
     }
 
-        protected static async Task<Option<string>> GetPlexUrl(
+    protected static async Task<Option<string>> GetPlexUrl(
         int subtitleId,
         TvContext dbContext,
         Option<Subtitle> maybeSubtitle)

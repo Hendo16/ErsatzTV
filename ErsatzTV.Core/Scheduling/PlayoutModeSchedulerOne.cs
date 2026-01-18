@@ -1,17 +1,14 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Core.Scheduling;
 
-public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleItemOne>
+public class PlayoutModeSchedulerOne(ILogger logger) : PlayoutModeSchedulerBase<ProgramScheduleItemOne>(logger)
 {
-    public PlayoutModeSchedulerOne(ILogger logger) : base(logger)
-    {
-    }
-
-    public override Tuple<PlayoutBuilderState, List<PlayoutItem>> Schedule(
+    public override PlayoutSchedulerResult Schedule(
         PlayoutBuilderState playoutBuilderState,
         Dictionary<CollectionKey, IMediaCollectionEnumerator> collectionEnumerators,
         ProgramScheduleItemOne scheduleItem,
@@ -19,6 +16,8 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
         DateTimeOffset hardStop,
         CancellationToken cancellationToken)
     {
+        var warnings = new PlayoutBuildWarnings();
+
         IMediaCollectionEnumerator contentEnumerator =
             collectionEnumerators[CollectionKey.ForScheduleItem(scheduleItem)];
         foreach (MediaItem mediaItem in contentEnumerator.Current)
@@ -34,7 +33,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                 break;
             }
 
-            TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+            TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
             List<MediaChapter> itemChapters = ChaptersForMediaItem(mediaItem);
 
             var playoutItem = new PlayoutItem
@@ -55,7 +54,8 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                 PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
                 SubtitleMode = scheduleItem.SubtitleMode,
-                PlayoutItemWatermarks = []
+                PlayoutItemWatermarks = [],
+                PlayoutItemGraphicsElements = []
             };
 
             foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
@@ -66,6 +66,17 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                     {
                         PlayoutItem = playoutItem,
                         WatermarkId = programScheduleItemWatermark.WatermarkId
+                    });
+            }
+
+            foreach (ProgramScheduleItemGraphicsElement programScheduleItemGraphicsElement in scheduleItem
+                         .ProgramScheduleItemGraphicsElements ?? [])
+            {
+                playoutItem.PlayoutItemGraphicsElements.Add(
+                    new PlayoutItemGraphicsElement
+                    {
+                        PlayoutItem = playoutItem,
+                        GraphicsElementId = programScheduleItemGraphicsElement.GraphicsElementId
                     });
             }
 
@@ -87,7 +98,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                 scheduleItem,
                 playoutItem,
                 itemChapters,
-                true,
+                warnings,
                 cancellationToken);
 
             PlayoutBuilderState nextState = playoutBuilderState with
@@ -96,7 +107,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
             };
 
             nextState.ScheduleItemsEnumerator.MoveNext();
-            contentEnumerator.MoveNext();
+            contentEnumerator.MoveNext(itemStartTime);
 
             // LogScheduledItem(scheduleItem, mediaItem, itemStartTime);
 
@@ -115,6 +126,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                     scheduleItem,
                     playoutItems,
                     nextItemStart,
+                    warnings,
                     cancellationToken);
             }
 
@@ -131,9 +143,9 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
 
             nextState = nextState with { NextGuideGroup = nextState.IncrementGuideGroup };
 
-            return Tuple(nextState, playoutItems);
+            return new PlayoutSchedulerResult(nextState, playoutItems, warnings);
         }
 
-        return Tuple(playoutBuilderState, new List<PlayoutItem>());
+        return new PlayoutSchedulerResult(playoutBuilderState, [], warnings);
     }
 }

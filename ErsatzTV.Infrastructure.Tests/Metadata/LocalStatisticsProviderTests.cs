@@ -2,11 +2,13 @@
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.FFmpeg.Capabilities;
 using ErsatzTV.Infrastructure.Metadata;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NUnit.Framework;
 using Shouldly;
+using Testably.Abstractions.Testing;
 
 namespace ErsatzTV.Infrastructure.Tests.Metadata;
 
@@ -20,8 +22,10 @@ public class LocalStatisticsProviderTests
     {
         var provider = new LocalStatisticsProvider(
             Substitute.For<IMetadataRepository>(),
+            new MockFileSystem(),
             Substitute.For<ILocalFileSystem>(),
             Substitute.For<IClient>(),
+            Substitute.For<IHardwareCapabilitiesFactory>(),
             Substitute.For<ILogger<LocalStatisticsProvider>>());
 
         var input = new LocalStatisticsProvider.FFprobe(

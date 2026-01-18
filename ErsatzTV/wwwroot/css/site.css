@@ -2,7 +2,7 @@
     --fanart-background-rgb: 39, 39, 39;
     --search-bar-background: rgba(255, 255, 255, .15);
     --search-bar-text-color: #fafafa;
-    --selected-row-color: #009000;
+    --selected-row-color: #007000;
 }
 
 div.ersatztv-light {
@@ -43,7 +43,10 @@ div.ersatztv-light {
     width: 100%;
 }
 
-.media-card-poster-placeholder { font-weight: bold; }
+.media-card-poster-placeholder {
+    font-weight: bold;
+    word-wrap: break-word;
+}
 
 .media-card-overlay {
     background: rgba(0, 0, 0, 0.4);
@@ -177,7 +180,8 @@ div.ersatztv-light {
 }
 
 .form-field-stack div.mud-input-control,
-.form-field-stack ul.mud-treeview {
+.form-field-stack ul.mud-treeview,
+.mud-toolbar .mud-input-text {
     max-width: 500px;
 }
 
@@ -189,8 +193,40 @@ div.ersatztv-light {
     background-color: var(--selected-row-color) !important;
 }
 
+.playout-build-failure {
+    background-color: #573a00 !important;
+}
+
+.playout-build-failure-selected {
+    background-color: var(--mud-palette-warning-darken) !important;
+}
+
 .wrap-pre {
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
+}
+
+.playout-filler-guidemode {
+    background-color: #002e00;
+}
+
+.playout-filler-preroll, .playout-filler-midroll, .playout-filler-postroll, .playout-filler-decodefault {
+    background-color: #27272f
+}
+
+.playout-filler-tail {
+    background-color: #383843;
+}
+
+.playout-filler-fallback {
+    background-color: #573a00;
+}
+
+.playout-filler-unscheduled {
+    background-color: #52040d;
+}
+
+.channel-disabled .mud-table-cell {
+    color: var(--mud-palette-text-disabled) !important;
 }

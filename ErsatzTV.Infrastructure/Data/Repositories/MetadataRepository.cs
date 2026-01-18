@@ -5,24 +5,14 @@ using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Infrastructure.Data.Repositories;
 
-public class MetadataRepository : IMetadataRepository
+public class MetadataRepository(IDbContextFactory<TvContext> dbContextFactory) : IMetadataRepository
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-    private readonly ILogger<MetadataRepository> _logger;
-
-    public MetadataRepository(IDbContextFactory<TvContext> dbContextFactory, ILogger<MetadataRepository> logger)
-    {
-        _dbContextFactory = dbContextFactory;
-        _logger = logger;
-    }
-
     public async Task<bool> RemoveActor(Actor actor)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Actor WHERE Id = @ActorId",
                 new { ActorId = actor.Id })
@@ -31,14 +21,14 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> Update(Core.Domain.Metadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         dbContext.Entry(metadata).State = EntityState.Modified;
         return await dbContext.SaveChangesAsync() > 0;
     }
 
     public async Task<bool> Add(Core.Domain.Metadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         dbContext.Entry(metadata).State = EntityState.Added;
 
         foreach (Genre genre in Optional(metadata.Genres).Flatten())
@@ -127,14 +117,14 @@ public class MetadataRepository : IMetadataRepository
     {
         int mediaVersionId = mediaItem.GetHeadVersion().Id;
 
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         Option<MediaVersion> maybeVersion = await dbContext.MediaVersions
+            .TagWithCallSite()
             .Include(v => v.Streams)
             .Include(v => v.Chapters)
             .Include(v => v.MediaFiles)
             .OrderBy(v => v.Id)
-            .SingleOrDefaultAsync(v => v.Id == mediaVersionId)
-            .Map(Optional);
+            .SingleOrDefaultAsync(v => v.Id == mediaVersionId);
 
         return await maybeVersion.Match(
             async existing =>
@@ -148,6 +138,7 @@ public class MetadataRepository : IMetadataRepository
                     existing.Width = incoming.Width;
                     existing.Height = incoming.Height;
                     existing.VideoScanKind = incoming.VideoScanKind;
+                    existing.InterlacedRatio = incoming.InterlacedRatio;
                     existing.RFrameRate = incoming.RFrameRate;
                 }
 
@@ -252,7 +243,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> UpdateArtworkPath(Artwork artwork)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             "UPDATE Artwork SET Path = @Path, SourcePath = @SourcePath, DateUpdated = @DateUpdated, BlurHash43 = @BlurHash43, BlurHash54 = @BlurHash54, BlurHash64 = @BlurHash64 WHERE Id = @Id",
             new
@@ -264,7 +255,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> AddArtwork(Core.Domain.Metadata metadata, Artwork artwork)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
 
         var parameters = new
         {
@@ -319,17 +310,22 @@ public class MetadataRepository : IMetadataRepository
                             VALUES (@ArtworkKind, @Id, @DateAdded, @DateUpdated, @Path, @SourcePath, @BlurHash43, @BlurHash54, @BlurHash64)",
                     parameters)
                 .ToUnit(),
+            RemoteStreamMetadata => await dbContext.Connection.ExecuteAsync(
+                    @"INSERT INTO Artwork (ArtworkKind, RemoteStreamMetadataId, DateAdded, DateUpdated, Path, SourcePath, BlurHash43, BlurHash54, BlurHash64)
+                            VALUES (@ArtworkKind, @Id, @DateAdded, @DateUpdated, @Path, @SourcePath, @BlurHash43, @BlurHash54, @BlurHash64)",
+                    parameters)
+                .ToUnit(),
             _ => Unit.Default
         };
     }
 
-    public async Task<Unit> RemoveArtwork(Core.Domain.Metadata metadata, ArtworkKind artworkKind)
+    public async Task<bool> RemoveArtworkWithKind(Core.Domain.Metadata metadata, ArtworkKind artworkKind)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.Connection.ExecuteAsync(
-            @"DELETE FROM Artwork WHERE ArtworkKind = @ArtworkKind AND (MovieMetadataId = @Id
-                OR ShowMetadataId = @Id OR SeasonMetadataId = @Id OR EpisodeMetadataId = @Id OR OtherVideoMetadataId = @Id)",
-            new { ArtworkKind = artworkKind, metadata.Id }).ToUnit();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
+        var ids = metadata.Artwork.Where(a => a.ArtworkKind == artworkKind).Select(a => a.Id).ToHashSet();
+        return await dbContext.Artwork
+            .Where(a => ids.Contains(a.Id))
+            .ExecuteDeleteAsync() > 0;
     }
 
     public async Task<bool> CloneArtwork(
@@ -339,7 +335,7 @@ public class MetadataRepository : IMetadataRepository
         string sourcePath,
         DateTime lastWriteTime)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         Option<Artwork> maybeExisting = await dbContext.Artwork
             .AsNoTracking()
             .Filter(a => a.SourcePath == sourcePath && a.ArtworkKind == artworkKind && a.DateUpdated == lastWriteTime)
@@ -379,7 +375,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsUpdated(ShowMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE ShowMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -387,7 +383,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsUpdated(SeasonMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE SeasonMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -395,7 +391,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsUpdated(MovieMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE MovieMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -403,7 +399,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsUpdated(EpisodeMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE EpisodeMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -411,7 +407,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsExternal(ShowMetadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE ShowMetadata SET MetadataKind = @Kind WHERE Id = @Id",
             new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
@@ -419,7 +415,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> SetContentRating(ShowMetadata metadata, string contentRating)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE ShowMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
             new { metadata.Id, ContentRating = contentRating }).ToUnit();
@@ -427,7 +423,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsExternal(MovieMetadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE MovieMetadata SET MetadataKind = @Kind WHERE Id = @Id",
             new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
@@ -435,7 +431,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> SetContentRating(MovieMetadata metadata, string contentRating)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE MovieMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
             new { metadata.Id, ContentRating = contentRating }).ToUnit();
@@ -443,7 +439,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsUpdated(OtherVideoMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE OtherVideoMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -459,7 +455,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> MarkAsExternal(OtherVideoMetadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE OtherVideoMetadata SET MetadataKind = @Kind WHERE Id = @Id",
             new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
@@ -475,7 +471,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> SetContentRating(OtherVideoMetadata metadata, string contentRating)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE OtherVideoMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
             new { metadata.Id, ContentRating = contentRating }).ToUnit();
@@ -491,7 +487,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> SetPlot(MovieMetadata metadata, string plot)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE MovieMetadata SET Plot = @Plot WHERE Id = @Id",
             new { metadata.Id, Plot = plot }).ToUnit();
@@ -499,7 +495,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<Unit> SetPlot(OtherVideoMetadata metadata, string plot)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE OtherVideoMetadata SET Plot = @Plot WHERE Id = @Id",
             new { metadata.Id, Plot = plot }).ToUnit();
@@ -507,7 +503,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveGuid(MetadataGuid guid)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM MetadataGuid WHERE Id = @GuidId",
                 new { GuidId = guid.Id })
@@ -516,7 +512,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> AddGuid(Core.Domain.Metadata metadata, MetadataGuid guid)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return metadata switch
         {
             MovieMetadata =>
@@ -553,7 +549,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveDirector(Director director)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Director WHERE Id = @DirectorId",
                 new { DirectorId = director.Id })
@@ -562,7 +558,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveWriter(Writer writer)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Writer WHERE Id = @WriterId",
                 new { WriterId = writer.Id })
@@ -574,7 +570,7 @@ public class MetadataRepository : IMetadataRepository
         List<Subtitle> subtitles,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await UpdateSubtitles(dbContext, metadata, subtitles, cancellationToken);
     }
 
@@ -583,7 +579,7 @@ public class MetadataRepository : IMetadataRepository
         List<MediaChapter> chapters,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Option<MediaVersion> maybeExisting = await dbContext.MediaVersions
             .Include(mv => mv.Chapters)
@@ -624,7 +620,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveGenre(Genre genre)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Genre WHERE Id = @GenreId",
                 new { GenreId = genre.Id })
@@ -633,16 +629,16 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveTag(Tag tag)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
-                "DELETE FROM Tag WHERE Id = @TagId AND ExternalCollectionId = @ExternalCollectionId",
+                "DELETE FROM Tag WHERE Id = @TagId AND ((ExternalCollectionId = @ExternalCollectionId) OR (ExternalCollectionId IS NULL AND @ExternalCollectionId IS NULL))",
                 new { TagId = tag.Id, tag.ExternalCollectionId })
             .Map(result => result > 0);
     }
 
     public async Task<bool> RemoveStudio(Studio studio)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Studio WHERE Id = @StudioId",
                 new { StudioId = studio.Id })
@@ -651,7 +647,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveStyle(Style style)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
                 "DELETE FROM Style WHERE Id = @StyleId",
                 new { StyleId = style.Id })
@@ -660,7 +656,7 @@ public class MetadataRepository : IMetadataRepository
 
     public async Task<bool> RemoveMood(Mood mood)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync("DELETE FROM Mood WHERE Id = @MoodId", new { MoodId = mood.Id })
             .Map(result => result > 0);
     }
@@ -734,14 +730,42 @@ public class MetadataRepository : IMetadataRepository
                     Subtitle existingSubtitle =
                         existing.Subtitles.First(s => s.StreamIndex == incomingSubtitle.StreamIndex);
 
-                    existingSubtitle.Codec = incomingSubtitle.Codec;
+                    // when the kind, codec, language, or flags change we need to extract again
+                    if (existingSubtitle.IsExtracted)
+                    {
+                        bool differentKind = existingSubtitle.SubtitleKind != incomingSubtitle.SubtitleKind;
+                        bool differentCodec = existingSubtitle.Codec != incomingSubtitle.Codec;
+                        bool differentLanguage = existingSubtitle.Language != incomingSubtitle.Language;
+                        bool differentFlags = existingSubtitle.Default != incomingSubtitle.Default ||
+                                              existingSubtitle.Forced != incomingSubtitle.Forced ||
+                                              existingSubtitle.SDH != incomingSubtitle.SDH;
+
+                        if (differentKind || differentCodec || differentLanguage || differentFlags)
+                        {
+                            existingSubtitle.IsExtracted = false;
+                            existingSubtitle.Path = incomingSubtitle.Path;
+                        }
+                        else
+                        {
+                            // only re-extract if path changed
+                            // this probably won't ever happen?
+                            bool differentPath = existingSubtitle.Path != incomingSubtitle.Path;
+                            if (!string.IsNullOrEmpty(incomingSubtitle.Path) && differentPath)
+                            {
+                                existingSubtitle.IsExtracted = false;
+                                existingSubtitle.Path = incomingSubtitle.Path;
+                            }
+                        }
+                    }
+
                     existingSubtitle.Default = incomingSubtitle.Default;
                     existingSubtitle.Forced = incomingSubtitle.Forced;
                     existingSubtitle.SDH = incomingSubtitle.SDH;
                     existingSubtitle.Language = incomingSubtitle.Language;
                     existingSubtitle.SubtitleKind = incomingSubtitle.SubtitleKind;
+                    existingSubtitle.Codec = incomingSubtitle.Codec;
                     existingSubtitle.DateUpdated = incomingSubtitle.DateUpdated;
-                    existingSubtitle.Path = incomingSubtitle.Path;
+                    existingSubtitle.Title = incomingSubtitle.Title;
 
                     dbContext.Entry(existingSubtitle).State = EntityState.Modified;
                 }

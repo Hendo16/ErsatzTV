@@ -3,12 +3,14 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Interfaces.Emby;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Scanner.Core.Interfaces;
 
 namespace ErsatzTV.Scanner.Application.Emby;
 
 public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmbyCollections, Either<BaseError, Unit>>
 {
     private readonly IConfigElementRepository _configElementRepository;
+    private readonly IScannerProxy _scannerProxy;
     private readonly IEmbySecretStore _embySecretStore;
     private readonly IMediaSourceRepository _mediaSourceRepository;
     private readonly IEmbyCollectionScanner _scanner;
@@ -17,12 +19,14 @@ public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmby
         IMediaSourceRepository mediaSourceRepository,
         IEmbySecretStore embySecretStore,
         IEmbyCollectionScanner scanner,
-        IConfigElementRepository configElementRepository)
+        IConfigElementRepository configElementRepository,
+        IScannerProxy scannerProxy)
     {
         _mediaSourceRepository = mediaSourceRepository;
         _embySecretStore = embySecretStore;
         _scanner = scanner;
         _configElementRepository = configElementRepository;
+        _scannerProxy = scannerProxy;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(
@@ -48,7 +52,9 @@ public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmby
                 connectionParameters,
                 connectionParameters.MediaSource,
                 request.ForceScan,
-                libraryRefreshInterval));
+                request.DeepScan,
+                libraryRefreshInterval,
+                request.BaseUrl));
     }
 
     private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval(CancellationToken cancellationToken) =>
@@ -82,6 +88,8 @@ public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmby
 
     private async Task<Either<BaseError, Unit>> SynchronizeCollections(RequestParameters parameters)
     {
+        _scannerProxy.SetBaseUrl(parameters.BaseUrl);
+
         var lastScan = new DateTimeOffset(
             parameters.MediaSource.LastCollectionsScan ?? SystemTime.MinValueUtc,
             TimeSpan.Zero);
@@ -90,7 +98,8 @@ public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmby
         {
             Either<BaseError, Unit> result = await _scanner.ScanCollections(
                 parameters.ConnectionParameters.ActiveConnection.Address,
-                parameters.ConnectionParameters.ApiKey);
+                parameters.ConnectionParameters.ApiKey,
+                parameters.DeepScan);
 
             if (result.IsRight)
             {
@@ -108,7 +117,9 @@ public class SynchronizeEmbyCollectionsHandler : IRequestHandler<SynchronizeEmby
         ConnectionParameters ConnectionParameters,
         EmbyMediaSource MediaSource,
         bool ForceScan,
-        int LibraryRefreshInterval);
+        bool DeepScan,
+        int LibraryRefreshInterval,
+        string BaseUrl);
 
     private record ConnectionParameters(EmbyConnection ActiveConnection, EmbyMediaSource MediaSource)
     {

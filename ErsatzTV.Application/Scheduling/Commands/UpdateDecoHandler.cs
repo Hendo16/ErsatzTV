@@ -25,9 +25,8 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
     {
         existing.Name = request.Name;
 
-        bool hasWatermark = request.WatermarkMode is (DecoMode.Override or DecoMode.Merge);
-
         // watermark
+        bool hasWatermark = request.WatermarkMode is (DecoMode.Override or DecoMode.Merge);
         existing.WatermarkMode = request.WatermarkMode;
         existing.UseWatermarkDuringFiller = hasWatermark && request.UseWatermarkDuringFiller;
 
@@ -54,6 +53,72 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
             existing.DecoWatermarks.Clear();
         }
 
+        // graphics elements
+        bool hasGraphicsElements = request.GraphicsElementsMode is (DecoMode.Override or DecoMode.Merge);
+        existing.GraphicsElementsMode = request.GraphicsElementsMode;
+        existing.UseGraphicsElementsDuringFiller = hasGraphicsElements && request.UseGraphicsElementsDuringFiller;
+
+        if (hasGraphicsElements)
+        {
+            // this is different than schedule item/playout item because we have to merge graphics element ids
+            IEnumerable<int> toAdd =
+                request.GraphicsElementIds.Where(id => existing.DecoGraphicsElements.All(ge => ge.GraphicsElementId != id));
+            IEnumerable<DecoGraphicsElement> toRemove =
+                existing.DecoGraphicsElements.Where(ge => !request.GraphicsElementIds.Contains(ge.GraphicsElementId));
+            existing.DecoGraphicsElements.RemoveAll(toRemove.Contains);
+            foreach (int graphicsElementId in toAdd)
+            {
+                existing.DecoGraphicsElements.Add(
+                    new DecoGraphicsElement
+                    {
+                        DecoId = existing.Id,
+                        GraphicsElementId = graphicsElementId
+                    });
+            }
+        }
+        else
+        {
+            existing.DecoGraphicsElements.Clear();
+        }
+
+        // break content
+        existing.BreakContentMode = request.BreakContentMode;
+        var breakContentToAdd =
+            request.BreakContent.Where(bc => existing.BreakContent.All(b => b.Id != bc.Id)).ToList();
+        IEnumerable<DecoBreakContent> breakContentToRemove =
+            existing.BreakContent.Where(bc => !request.BreakContent.Map(b => b.Id).Contains(bc.Id));
+        var breakContentToUpdate = request.BreakContent.Except(breakContentToAdd).ToList();
+
+        existing.BreakContent.RemoveAll(breakContentToRemove.Contains);
+
+        foreach (var toUpdate in breakContentToUpdate)
+        {
+            foreach (var ex in Optional(existing.BreakContent.FirstOrDefault(b => b.Id == toUpdate.Id)))
+            {
+                ex.CollectionType = toUpdate.CollectionType;
+                ex.CollectionId = toUpdate.CollectionId;
+                ex.MultiCollectionId = toUpdate.MultiCollectionId;
+                ex.SmartCollectionId = toUpdate.SmartCollectionId;
+                ex.PlaylistId = toUpdate.PlaylistId;
+                ex.Placement = toUpdate.Placement;
+            }
+        }
+
+        foreach (var add in breakContentToAdd)
+        {
+            existing.BreakContent.Add(new DecoBreakContent
+            {
+                DecoId = existing.Id,
+                CollectionType = add.CollectionType,
+                CollectionId = add.CollectionId,
+                MultiCollectionId = add.MultiCollectionId,
+                SmartCollectionId = add.SmartCollectionId,
+                PlaylistId = add.PlaylistId,
+                Placement = add.Placement
+            });
+        }
+
+
         // default filler
         existing.DefaultFillerMode = request.DefaultFillerMode;
         existing.DefaultFillerCollectionType = request.DefaultFillerCollectionType;
@@ -65,13 +130,13 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
         {
             switch (request.DefaultFillerCollectionType)
             {
-                case ProgramScheduleItemCollectionType.Collection:
+                case CollectionType.Collection:
                     existing.DefaultFillerCollectionId = request.DefaultFillerCollectionId;
                     break;
-                case ProgramScheduleItemCollectionType.MultiCollection:
+                case CollectionType.MultiCollection:
                     existing.DefaultFillerMultiCollectionId = request.DefaultFillerMultiCollectionId;
                     break;
-                case ProgramScheduleItemCollectionType.SmartCollection:
+                case CollectionType.SmartCollection:
                     existing.DefaultFillerSmartCollectionId = request.DefaultFillerSmartCollectionId;
                     break;
                 default:
@@ -93,13 +158,13 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
         {
             switch (request.DeadAirFallbackCollectionType)
             {
-                case ProgramScheduleItemCollectionType.Collection:
+                case CollectionType.Collection:
                     existing.DeadAirFallbackCollectionId = request.DeadAirFallbackCollectionId;
                     break;
-                case ProgramScheduleItemCollectionType.MultiCollection:
+                case CollectionType.MultiCollection:
                     existing.DeadAirFallbackMultiCollectionId = request.DeadAirFallbackMultiCollectionId;
                     break;
-                case ProgramScheduleItemCollectionType.SmartCollection:
+                case CollectionType.SmartCollection:
                     existing.DeadAirFallbackSmartCollectionId = request.DeadAirFallbackSmartCollectionId;
                     break;
                 default:
@@ -117,15 +182,18 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
         TvContext dbContext,
         UpdateDeco request,
         CancellationToken cancellationToken) =>
-        (await DecoMustExist(dbContext, request, cancellationToken), await ValidateDecoName(dbContext, request))
-        .Apply((deco, _) => deco);
+        (await DecoMustExist(dbContext, request, cancellationToken), await ValidateDecoName(dbContext, request),
+            ValidateBreakContent(request))
+        .Apply((deco, _, _) => deco);
 
     private static Task<Validation<BaseError, Deco>> DecoMustExist(
         TvContext dbContext,
         UpdateDeco request,
         CancellationToken cancellationToken) =>
         dbContext.Decos
+            .Include(d => d.BreakContent)
             .Include(d => d.DecoWatermarks)
+            .Include(d => d.DecoGraphicsElements)
             .SelectOneAsync(d => d.Id, d => d.Id == request.DecoId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Deco does not exist"));
 
@@ -138,14 +206,88 @@ public class UpdateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
             return BaseError.New($"Deco name \"{request.Name}\" is invalid");
         }
 
-        Option<Deco> maybeExisting = await dbContext.Decos
-            .AsNoTracking()
-            .FirstOrDefaultAsync(d =>
-                d.Id != request.DecoId && d.DecoGroupId == request.DecoGroupId && d.Name == request.Name)
-            .Map(Optional);
+        bool duplicateName = await dbContext.Decos
+            .AnyAsync(d => d.Id != request.DecoId && d.DecoGroupId == request.DecoGroupId && d.Name == request.Name);
 
-        return maybeExisting.IsSome
+        return duplicateName
             ? BaseError.New($"A deco named \"{request.Name}\" already exists in that deco group")
             : Success<BaseError, string>(request.Name);
+    }
+
+    private static Validation<BaseError, Unit> ValidateBreakContent(UpdateDeco request)
+    {
+        int startCount = request.BreakContent.Count(bc => bc.Placement is DecoBreakPlacement.BlockStart);
+        if (startCount > 1)
+        {
+            return BaseError.New("Deco may only contain one [Block Start] break content");
+        }
+
+        int betweenCount = request.BreakContent.Count(bc => bc.Placement is DecoBreakPlacement.BetweenBlockItems);
+        if (betweenCount > 1)
+        {
+            return BaseError.New("Deco may only contain one [Between Block Items] break content");
+        }
+
+        int chapterCount = request.BreakContent.Count(bc => bc.Placement is DecoBreakPlacement.ChapterMarkers);
+        if (chapterCount > 1)
+        {
+            return BaseError.New("Deco may only contain one [At Chapter Markers] break content");
+        }
+
+        int finishCount = request.BreakContent.Count(bc => bc.Placement is DecoBreakPlacement.BlockFinish);
+        if (finishCount > 1)
+        {
+            return BaseError.New("Deco may only contain one [Block Finish] break content");
+        }
+
+        foreach (var breakContent in request.BreakContent)
+        {
+            switch (breakContent.CollectionType)
+            {
+                case CollectionType.Collection:
+                    if (breakContent.CollectionId is null)
+                    {
+                        return BaseError.New("Break content must have valid collection");
+                    }
+
+                    break;
+
+                case CollectionType.MultiCollection:
+                    if (breakContent.MultiCollectionId is null)
+                    {
+                        return BaseError.New("Break content must have valid multi collection");
+                    }
+
+                    break;
+
+                case CollectionType.SmartCollection:
+                    if (breakContent.SmartCollectionId is null)
+                    {
+                        return BaseError.New("Break content must have valid smart collection");
+                    }
+
+                    break;
+
+                case CollectionType.TelevisionShow:
+                case CollectionType.TelevisionSeason:
+                case CollectionType.Artist:
+                    if (breakContent.MediaItemId is null)
+                    {
+                        return BaseError.New("Break content must have valid media item");
+                    }
+
+                    break;
+
+                case CollectionType.Playlist:
+                    if (breakContent.PlaylistId is null)
+                    {
+                        return  BaseError.New("Break content must have valid playlist");
+                    }
+
+                    break;
+            }
+        }
+
+        return Unit.Default;
     }
 }

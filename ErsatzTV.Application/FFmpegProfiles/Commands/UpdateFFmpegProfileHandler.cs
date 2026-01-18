@@ -1,29 +1,22 @@
 ﻿using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.Search;
+using ErsatzTV.FFmpeg.Preset;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
 
 namespace ErsatzTV.Application.FFmpegProfiles;
 
-public class
-    UpdateFFmpegProfileHandler : IRequestHandler<UpdateFFmpegProfile, Either<BaseError, UpdateFFmpegProfileResult>>
+public class UpdateFFmpegProfileHandler(IDbContextFactory<TvContext> dbContextFactory, ISearchTargets searchTargets)
+    : IRequestHandler<UpdateFFmpegProfile, Either<BaseError, UpdateFFmpegProfileResult>>
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-    private readonly ISearchTargets _searchTargets;
-
-    public UpdateFFmpegProfileHandler(IDbContextFactory<TvContext> dbContextFactory, ISearchTargets searchTargets)
-    {
-        _dbContextFactory = dbContextFactory;
-        _searchTargets = searchTargets;
-    }
-
     public async Task<Either<BaseError, UpdateFFmpegProfileResult>> Handle(
         UpdateFFmpegProfile request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         Validation<BaseError, FFmpegProfile> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(p => ApplyUpdateRequest(dbContext, p, request, cancellationToken));
     }
@@ -43,6 +36,7 @@ public class
         p.QsvExtraHardwareFrames = update.QsvExtraHardwareFrames;
         p.ResolutionId = update.ResolutionId;
         p.ScalingBehavior = update.ScalingBehavior;
+        p.PadMode = update.PadMode;
         p.VideoFormat = update.VideoFormat;
         p.VideoProfile = update.VideoProfile;
         p.VideoPreset = update.VideoPreset;
@@ -53,20 +47,54 @@ public class
             ? FFmpegProfileBitDepth.EightBit
             : update.BitDepth;
 
+        if (p.HardwareAcceleration is not (HardwareAccelerationKind.Nvenc or HardwareAccelerationKind.Vaapi
+                or HardwareAccelerationKind.Qsv) &&
+            p.VideoFormat is FFmpegProfileVideoFormat.Av1)
+        {
+            p.VideoFormat = FFmpegProfileVideoFormat.Hevc;
+        }
+
+        // only allow customization with VAAPI accel
+        if (p.HardwareAcceleration is HardwareAccelerationKind.None)
+        {
+            p.PadMode = FilterMode.Software;
+        }
+        else if (p.HardwareAcceleration is not HardwareAccelerationKind.Vaapi)
+        {
+            p.PadMode = FilterMode.HardwareIfPossible;
+        }
+
         p.VideoBitrate = update.VideoBitrate;
         p.VideoBufferSize = update.VideoBufferSize;
         p.TonemapAlgorithm = update.TonemapAlgorithm;
         p.AudioFormat = update.AudioFormat;
         p.AudioBitrate = update.AudioBitrate;
         p.AudioBufferSize = update.AudioBufferSize;
+
         p.NormalizeLoudnessMode = update.NormalizeLoudnessMode;
+        p.TargetLoudness = update.NormalizeLoudnessMode is NormalizeLoudnessMode.LoudNorm
+            ? update.TargetLoudness
+            : null;
+
         p.AudioChannels = update.AudioChannels;
         p.AudioSampleRate = update.AudioSampleRate;
         p.NormalizeFramerate = update.NormalizeFramerate;
         p.DeinterlaceVideo = update.DeinterlaceVideo;
+
+        // don't save invalid preset
+        ICollection<string> presets = FFmpegLibraryHelper.PresetsForFFmpegProfile(
+            p.HardwareAcceleration,
+            p.VideoFormat,
+            p.BitDepth);
+
+        if (!presets.Contains(p.VideoPreset))
+        {
+            p.VideoPreset = VideoPreset.Unset;
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
 
-        _searchTargets.SearchTargetsChanged();
+        searchTargets.SearchTargetsChanged();
 
         return new UpdateFFmpegProfileResult(p.Id);
     }
@@ -75,7 +103,8 @@ public class
         TvContext dbContext,
         UpdateFFmpegProfile request,
         CancellationToken cancellationToken) =>
-        (await FFmpegProfileMustExist(dbContext, request, cancellationToken), ValidateName(request),
+        (await FFmpegProfileMustExist(dbContext, request, cancellationToken),
+            await ValidateName(dbContext, request),
             ValidateThreadCount(request),
             await ResolutionMustExist(dbContext, request, cancellationToken))
         .Apply((ffmpegProfileToUpdate, _, _, _) => ffmpegProfileToUpdate);
@@ -88,9 +117,25 @@ public class
             .SelectOneAsync(p => p.Id, p => p.Id == updateFFmpegProfile.FFmpegProfileId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("FFmpegProfile does not exist."));
 
-    private static Validation<BaseError, string> ValidateName(UpdateFFmpegProfile updateFFmpegProfile) =>
-        updateFFmpegProfile.NotEmpty(x => x.Name)
-            .Bind(_ => updateFFmpegProfile.NotLongerThan(50)(x => x.Name));
+    private static async Task<Validation<BaseError, string>> ValidateName(
+        TvContext dbContext,
+        UpdateFFmpegProfile updateFFmpegProfile)
+    {
+        if (updateFFmpegProfile.Name.Length > 50)
+        {
+            return BaseError.New($"FFmpeg profile name \"{updateFFmpegProfile.Name}\" is invalid");
+        }
+
+        Option<FFmpegProfile> maybeExisting = await dbContext.FFmpegProfiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(ff =>
+                ff.Id != updateFFmpegProfile.FFmpegProfileId && ff.Name == updateFFmpegProfile.Name)
+            .Map(Optional);
+
+        return maybeExisting.IsSome
+            ? BaseError.New($"An ffmpeg profile named \"{updateFFmpegProfile.Name}\" already exists in the database")
+            : Success<BaseError, string>(updateFFmpegProfile.Name);
+    }
 
     private static Validation<BaseError, int> ValidateThreadCount(UpdateFFmpegProfile updateFFmpegProfile) =>
         updateFFmpegProfile.AtLeast(0)(p => p.ThreadCount);

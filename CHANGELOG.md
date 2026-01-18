@@ -5,6 +5,502 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 ### Added
+- Channel stream selector: add zero-based culture-specific `day_of_week` to `content_condition`, for example:
+  - en-US can match sunday using `day_of_week = 0`
+  - fr-FR can match sunday using `day_of_week = 6`
+  - As a complete example, to match Saturday from 9pm (inclusive) to 11pm (exclusive), based on content start time
+    - `content_condition: day_of_week = 6 and (time_of_day_seconds >= 75600 and time_of_day_seconds < 82800)`
+- Add `Pad Mode` to ffmpeg profile. Options are:
+  - `Hardware If Possible` - default/existing behavior when hardware acceleration is properly configured
+  - `Software` - force software padding
+    - This can be used to work around buggy GPU driver behavior where padding is green instead of black
+    - This is most often seen with VAAPI acceleration (radeonsi or i965 drivers)
+- Add API endpoint to clean artwork cache folder (on demand)
+  - POST `/api/maintenance/clean_artwork`
+
+### Changed
+- Disable automatic artwork database cleanup
+  - This will be re-enabled at some point in the future (after more testing)
+  - For now, the API should be used to clean as needed
+
+### Fixed
+- Use code signing on all Windows executables (`ErsatzTV-Windows.exe`, `ErsatzTV.exe`, `ErsatzTV.Scanner.exe`)
+- Respect `z_index` (draw order) on all graphics element types
+- Restore default UI font that was erroneously removed in v26.1.1
+- Use configured searching log level on startup, instead of the default log level of `Information`
+- MySql: fix searching for shows and seasons in schedule items editor
+- Fix 500 errors when serving XMLTV due to concurrent file reads and writes
+- Fix playback of AC3 audio when targeting stereo output and input layout changes mid-stream
+- Use other video artwork in XMLTV template
+- Properly update (add or remove) artwork for all local media libraries when files have changed
+- Sync Plex library name changes
+- Sync Jellyfin and Emby library name and type changes
+  - Library type (movies, shows) can only be changed when synchronization is *disabled* for the library in ETV
+
+## [26.1.1] - 2026-01-08
+### Fixed
+- Use code signing on Windows launcher (`ErsatzTV-Windows.exe`) to avoid antivirus false positive
+
+### Changed
+- Optimize database check for orphaned artwork
+- Include web resources (CSS, JS) locally instead of relying on CDNs
+
+## [26.1.0] - 2026-01-06
+### Added
+- Graphics Engine:
+  - Add `script` graphics element type
+    - Supported in playback troubleshooting and all scheduling types
+    - Supports arbitrary scripts or executables that output graphics to ETV via stdout
+    - Supports EPG and Media Item replacement in entire template
+      - EPG data is sourced from XMLTV for the current time
+        - EPG data can also load a configurable number of subsequent (up next) entries
+      - Media Item data is sourced from the currently playing media item
+    - All template data will also be passed as JSON to the stdin stream of the command
+    - Template supports:
+      - Script and arguments (`command` and `args`)
+      - Draw order (`z_index`)
+      - Timing (`start_seconds` and `duration_seconds`)
+      - Data format (`format`)
+        - `raw` format means full frames of BGRA data to stdout
+        - `packet` format means ETV graphics packets to stdout
+  - Add framerate template data
+    - `RFrameRate` - the real content framerate (or channel normalized framerate) as reported by ffmpeg, e.g. `30000/1001`
+    - `FrameRate` - the decimal representation of `RFrameRate`, e.g. `29.97002997`
+  - Add `Channel_StartTime` template data
+    - This indicates the time that the transcode session started for the current channel
+- Add remote stream metadata
+  - Remote stream definitions (yaml files) can now contain `title`, `plot`, `year` and `content_rating` fields
+  - Remote streams can now have thumbnails (same name as yaml file but with image extension)
+  - This metadata will be used in generated XMLTV entries, using a template that can be customized like other media kinds
+- Add `Download Media Sample` button to playback troubleshooting
+  - This button will extract up to 30 seconds of the media item and zip it
+- Add `Target Loudness` (LUFS/LKFS) to ffmpeg profile when loudness normalization is enabled
+  - Default value is `-16`; some sources normalize to a quieter value, e.g. `-24`
+- Add environment variables to help troubleshoot performance
+  - `ETV_SLOW_DB_MS` - milliseconds threshold for logging slow database queries (at DEBUG level)
+    - e.g. if this is set to `1000`, queries taking longer than 1 second will be logged
+  - `ETV_SLOW_API_MS` - milliseconds threshold for logging slow API calls (at DEBUG level)
+    - This is currently limited to *Jellyfin*
+  - `ETV_JF_PAGE_SIZE` - page size for library scan API calls to Jellyfin; default value is 10
+  - `ETV_JF_ENABLE_STATS` - enables logging timing information related to Jellyfin show library scans
+- Add `Select All` button to media pages by @Erotemic
+
+### Fixed
+- Fix startup on systems unsupported by NvEncSharp
+- Fix detection of Plex Other Video libraries using `Plex Personal Media` agent
+  - If the library is already detected as a Movies library in ETV, synchronization must be disabled for the library to change it to an Other Videos library
+  - A warning will be logged when this scenario is detected
+- Graphics Engine:
+  - Optimize graphics engine to generate element frames in parallel and to eliminate redundant frame copies
+  - Match graphics engine framerate with source content (or channel normalized) framerate
+  - Fix loading requested number of epg entries for motion graphics elements
+- Fix bug with mirror channels where seemingly random content would be played every ~40 seconds
+- Fix chronological sorting for Other Videos that have release date metadata
+- Fix playout sorting after using channel number editor
+- VAAPI: Only include `-sei a53_cc` flags when misc packed headers are supported by the encoder
+  - This should fix playback in some cases, e.g. AMD VAAPI h264 encoder
+- AMD VAAPI:
+  - work around buggy ffmpeg behavior where hevc_vaapi encoder with RadeonSI driver incorrectly outputs height of 1088 instead of 1080
+  - fix green padding when encoding h264 using main profile
+- Automatically kill playback troubleshooting ffmpeg process if it hasn't completed after two minutes
+- Fix playback of certain BT.2020 content
+- Use playlist item count when using a playlist as filler (instead of a fixed count of 1 for each playlist item)
+- NVIDIA:
+  - Fix stream failure with certain content that should decode in hardware but falls back to software
+  - Fix stream failure with content that changes color metadata mid-stream
+- Fix stream failure when configured fallback filler collection is empty
+- Fix high CPU when errors are displayed; errors will now work ahead before throttling to realtime, similar to primary content
+- Fix startup error caused by duplicate smart collection names (and no longer allow duplicate smart collection names)
+- Fix erroneous downgrade health check failure with some installations that use MariaDB
+- Sequential schedules: fix `count` instruction validation to accept integer (constant) or string (expression)
+- Fix multi-part episode grouping logic so that it does NOT require release date metadata for episodes within a single show
+  - When **Treat Collections As Shows** is enabled (i.e. for crossover episodes) release date metadata is required for proper grouping
+- Fix *many* cases of duplicate names; enforce case-insensitive unique names at the db schema level
+- Fix playback when using `ETV_BASE_URL` by @JamesDearlove
+
+### Changed
+- No longer round framerate to nearest integer when normalizing framerate
+- Allow playlists to have no items included in EPG
+- Change how fallback filler works
+  - Items will no longer loop; instead, a sequence of random items will be selected from the collection
+  - Items may still be cut as needed
+  - Hardware acceleration will now be used
+  - Items can "work ahead" (transcode faster than realtime) when less than 3 minutes in duration
+- Optimize Jellyfin database fields and indexes
+- Optimize Jellyfin show library scans by only requesting `People` (actors, directors, writers) when etags don't match
+  - This should significantly speed up periodic library scans, particularly against Jellyfin 10.11.x
+- Lazy load media item images in UI
+- Align alternate schedule and template handling (between classic schedules and block schedules)
+  - Both systems now support limiting to a date range
+  - This date range can be repeating (when year is not specified for start or end dates)
+  - This date range can be exact (when year is specified for start and end dates)
+
+## [25.9.0] - 2025-11-29
+### Added
+- Show playout warnings count badge in left menu
+- Graphics Engine:
+  - Add `MediaItem_Resolution` template data (the current `Resolution` variable is the FFmpeg Profile resolution)
+  - Add `MediaItem_Start` template data (DateTimeOffset)
+  - Add `MediaItem_Stop` template data (DateTimeOffset)
+  - Add `ScaledResolution` template data (the final size of the frame before padding)
+  - Add `place_within_source_content` (true/false) field to image graphics element
+  - Add `name` field to all graphics elements to display in the UI
+- Classic and block schedules: add collection type `Search Query`
+  - This allows defining search queries directly on schedule items without creating smart collections beforehand
+  - As an example, this can be used to filter or combine existing smart collections
+    - Filter: `smart_collection:"sd movies" AND plot:"christmas"`
+    - Combine: `smart_collection:"old commercials" OR smart_collection:"nick promos"`
+- Scripted schedules: add `custom_title` to `start_epg_group`
+- Add MPEG-TS Script system
+  - This allows using something other than ffmpeg (e.g. streamlink) to concatenate segments back together when using MPEG-TS streaming mode
+  - Scripts live in config / scripts / mpegts
+  - Each script gets its own subfolder which contains an `mpegts.yml` definition and corresponding windows (batch) and linux (bash) scripts
+  - The global MPEG-TS script can be configured in **Settings** > **FFmpeg** > **Default MPEG-TS Script**
+- Add `.avs` AviSynth Script support to all local libraries
+  - `.avs` was added as a valid extension, so they should behave the same any other video file
+  - There are two requirements for AviSynth Scripts to work:
+    - FFmpeg needs to be compiled with AviSynth support (not currently available in Docker)
+    - AviSynth itself needs to be installed
+- Add `Troubleshoot` button to classic schedule list
+  - This generates JSON representing the entire schedule which can be shared when requested for troubleshooting
+- Add **Settings** > **FFmpeg** > **Probe For Interlaced Frames**
+  - When enabled, this will probe *local content* for interlaced frames on demand (immediately before playback)
+  - This will be used as a more accurate check for interlaced content
+  - The result will be cached (only probed once and stored) in the database along with all other media item statistics (e.g. duration)
+  - This feature will currently ignore content that is not streamed from disk
+- Add error/offline background customization
+  - Default error background is now named `_background.png`
+  - Error streams will prioritize using `background.png` if it exists
+    - Replacing this `background.png` file will allow custom error/offline backgrounds
+- Add `Troubleshoot Playback` buttons on movie and episode detail pages
+- Add song background and missing album art customization
+  - Default files start with an underscore; custom versions must remove the underscore
+- Expose arbitrary EPG data to graphics engine via channel guide templates
+  - XML nodes using the `etv:` namespace will be passed to the graphics engine EPG template data
+  - For example, adding `<etv:episode_number_key>{{ episode_number }}</etv:episode_number_key>` to `episode.sbntxt` will also add the `episode_number_key` field to all EPG items in the graphics engine
+  - All values parsed from XMLTV will be available as strings in the graphics engine (not numbers)
+  - All `etv:` nodes will be stripped from the XMLTV data when requested by a client
+- Add channel troubleshooting button to channels list
+  - This will open the playback troubleshooting tool in "channel" mode
+  - This mode requires entering a date and time, and will play up to 30 seconds of *one item from that channel's playout* starting at the entered date and time
+- Block schedules: add copy template button to templates table
+
+### Fixed
+- Fix HLS Direct playback with Jellyfin 10.11
+- Fix remote stream scripts (parsing issue with spaces and quotes)
+- Fix block history being removed when it is still needed for mirror channel
+  - This caused playout build errors like "Unable to locate history for playout item"
+- Fix crashes due to invalid smart collection searches, e.g. `smart_collection:"this collection does not exist"`
+- Fix UI crash when editing block playout that has default deco
+- Fix playback failure when seeking content with certain DTS audio (e.g. DTS-HD MA)
+- Properly set explicit audio decoder on combined audio and video input file
+- Fix building sequential schedules across a UTC offset change
+- Fix block start time calculation across a UTC offset change
+- Fix classic schedule start time calculation across a UTC offset change
+- Fix XMLTV generation for channels using on-demand playout mode
+- Fix some file not found songs missing from trash view
+- Fix error/offline screen generation
+- Fix subtitle title sync from Jellyfin libraries
+  - Deep scans will be required to update subtitle titles on existing media items
+- Fix saving subtitle title changes to the database
+  - This fixes e.g. where stream selection would continue to use the original title
+  - This fix applies to all libraries (local and media server)
+- Fix (3 year old) bug removing tags from local libraries when they are removed from NFO files (all content types)
+  - New scans will properly remove old tags; NFO files may need to be touched to force updating during a scan
+- Fix bug where looping motion graphics wouldn't be displayed when seeking into second half of content
+- Fix `content_total_duration` value in graphics engine opacity expressions
+  - This bug caused some graphics elements to display too early after first joining a channel
+- Optimize database calls made for search index rebuilds and updates
+  - This should improve performance of library scans
+- Add toggle to hide/show disabled channels in channel list
+- Add disabled text color and `(D)` and `(H)` labels for disabled and hidden channels in channel list
+- Graphics engine: fix subtitle path escaping and font loading
+- Fix corrupt output (green artifacts) when decoding certain 10-bit content using AMD Polaris GPUs
+- Work around sequential schedule validation limit (1000/hr by Newtonsoft.Json.Schema library)
+  - Playout builds now use JsonSchema.Net library which has no validation limit
+  - Validation tool in the UI still uses Newtonsoft.Json.Schema (with 1000/hr limit) as the error output is easier to understand
+- Fix editing scripted and sequential playouts when using MySql
+- Fix HLS Direct streams remaining open after client disconnect
+- Always log scanner exit code when it is non-zero
+
+### Changed
+- Classic schedules: `Refresh` classic playouts from playout list; do not `Reset` them
+  - This mode maintains progress; progress can be reset by editing the playout and clicking `Erase Items and History`
+- Use smaller batch size for search index updates (100, down from 1000)
+  - This should help newly scanned items appear in the UI more quickly
+- Replace favicon and logo in background image used for error streams
+- Block schedules:
+  - Auto scroll day view to block item time when adding and removing block items from template
+  - Allow keyboard selection of
+    - Block groups in block list
+    - Template groups in template list
+    - Block groups and blocks in template editor
+  - Replace template tree view with searchable table (like blocks)
+- Upgrade to dotnet 10
+
+## [25.8.0] - 2025-10-26
+### Added
+- Graphics engine:
+  - Add template data (like `MediaItem_Title`) for other video files
+  - Add `MediaItem_Path` for movies, episodes, music videos and other videos
+  - Add `get_directory_name` and `get_filename_without_extension` functions for path processing
+  - Add `text_align` property to text graphics elements (values: `left`, `right` and `center`)
+  - Add `MiddleCenter` value to `location` property on all graphics elements
+    - Positive and negative margins can be used to offset from center as desired
+  - Add `line_height` property to text element style definition
+    - This is a multiplier that defaults to 1.0 when unspecified
+  - Add `halo_color`, `halo_width` and `halo_blur` properties to text element style definition
+    - These can be used to "outline" text with the configured color (e.g. `#000000`), width (e.g. `10`) and amount of blur (e.g. `2`)
+- Add `Block Playout Troubleshooting` tool to help investigate block playout history
+- Add sequential schedule file and scripted schedule file names to playouts table
+- Add empty (but already up-to-date) sqlite3 database to greatly speed up initial startup for fresh installs
+- Add button to copy/clone block from blocks table
+- Add playback speed to playback troubleshooting output
+  - Speed is relative to realtime (1.0x is realtime)
+  - Speeds < 0.9x will be colored red, between 0.9x and 1.1x colored yellow, and > 1.1x colored green
+- Add episode thumbnail artwork URL to XMLTV template
+  - By default, poster will be added as image with type "poster" and thumbnail will be added as image with type "still"
+  - Poster will continue to be added as icon by default
+- Add buttons to edit Jellyfin and Emby connection information in **Media Sources** > **Jellyfin** and **Media Sources** > **Emby**
+- Add audio format `aac (latm)` for DVB-C compatibility; `aac` uses ADTS by default which is required in most cases
+- Add deep scan option for external collections (Plex, Jellyfin, Emby)
+  - Jellyfin and Emby collection scans have always been deep scans
+  - Now, by default, they will be quick scans that trust Jellyfin and Emby's etags for detecting changes
+  - If a quick scan misses updating a collection, deep scans can be triggered manually
+
+### Fixed
+- Fix NVIDIA startup errors on arm64
+- Fix remote stream durations in playouts created using block, sequential or scripted schedules
+- Fix playback troubleshooting selecting a subtitle even with no subtitle stream selected in the UI
+- Fix intermittent watermark opacity
+- Improve reliability of live remote streams; they should transcode closer to realtime in most cases
+- Dramatically improve stream startup time
+- VAAPI: fix scaling image-based subtitles (e.g. dvdsub)
+- VAAPI: fix overlaying picture subtitles with scaling behavior crop
+- Fix HLS Segmenter (fmp4) on Windows
+- Playback troubleshooting: wait for at least 2 initial segments (up to configured initial segment count) to reduce stalls
+- Fix Trakt List sync
+- Fix QSV audio sync
+- Fix QSV capability detection on Linux using non-drm displays (e.g. wayland)
+- Fix playlist filtering bug that made HLS Segmenter more likely to fail when streaming for multiple hours
+- Fix NVIDIA overlaying text subtitles and permanent watermark on 10-bit content
+- Fix UI error adding deco
+- Fix UI error editing watermarks and graphics elements on blocks
+- Fix showing playout build failure details when resetting a playout
+- Fix scheduling auto-generated trakt list playlists that contain shows
+- Fix playout builder getting stuck (forever) on block item with an empty collection
+- Fix HLS Direct playback when using custom stream selector or preferred audio language/title
+- Fix selecting embedded subtitles (text and picture) with HLS Direct
+- Fix building scripted schedules across a UTC offset change
+
+### Changed
+- Do not use graphics engine for single, permanent watermark
+- Rename `YAML Validation` tool to `Sequential Schedule Validation`
+- Greatly reduce debug log spam during playout builds by logging summaries of certain warnings at the end
+- Remove *experimental* `HLS Segmenter V2` streaming mode; it is not possible to maintain quality output using this mode
+- Remove *experimental* `HLS Segmenter (fmp4)` streaming mode; this mode only worked properly in a browser, many clients did not like it
+- Change how scanner process and main process communicate, which should improve reliability of search index updates when scanning
+
+## [25.7.1] - 2025-10-09
+### Added
+- Add search field to filter blocks table
+- Show full error/exception details in playback troubleshooting logs
+- Add basic free space validation on startup
+  - ETV will now fail to start with less than 128 MB free space in config or transcode folders
+- Add downgrade health check to inform users when they are doing something that WILL impact stability
+
+### Fixed
+- Do not allow deleting ffmpeg profiles that are used by channels
+- Do not allow deleting default ffmpeg profile
+- Allow ffmpeg profiles using VAAPI accel to set h264 video profile
+- Fix HLS Direct playback, and make it accessible on separate streaming port
+- Fix playback troubleshooting when using multiple watermarks or multiple graphics elements
+
+### Changed
+- Use table instead of tree view on blocks page
+- Use different release packaging system to workaround false positive from Windows Defender
+
+## [25.7.0] - 2025-10-03
+### Added
+- Add new collection type `Rerun Collection`
+  - This collection type will show up as *two* collection types in classic schedules
+    - `Rerun (First Run)`
+    - `Rerun (Rerun)`
+  - The playback order for each of these collection types can be set on the rerun collection itself
+    - e.g. `Season, Episode` order for first run, `Shuffle` for rerun
+  - When a first run item is added to a playout, it will immediately be made available in the rerun collection
+  - Rerun history is currently scoped to the playout, and only supported in classic schedules
+    - This means resetting the playout will reset the rerun history
+  - Items will still be scheduled from the rerun collection if it is used before the first run collection
+    - Otherwise, the rerun collection would be considered "empty" which prevents the playout build altogether
+- Add `Rkmpp` hardware acceleration by @peterdey
+  - This is supported using jellyfin-ffmpeg7 on devices like Orange Pi 5 Plus and NanoPi R6S
+- Block schedules: allow selecting multiple watermarks on block items
+- Block schedules: allow selecting multiple graphics elements on block items
+- Add `motion` graphics element type
+  - Supported in playback troubleshooting and all scheduling types
+  - Supports video files with alpha channel (e.g. vp8/vp9 webm, apple prores 4444)
+  - Supports EPG and Media Item replacement in entire template
+    - EPG data is sourced from XMLTV for the current time
+      - EPG data can also load a configurable number of subsequent (up next) entries
+    - Media Item data is sourced from the currently playing media item
+  - Template supports:
+    - Content (`video_path`)
+    - Placement (`location`, `horizontal_margin_percent`, `vertical_margin_percent`)
+    - Scaling (`scale`, `scale_width_percent`)
+    - Timing (`start_seconds`)
+    - End behavior (`end_behavior`)
+      - `disappear` (default) - disappear after playing once
+      - `loop` - loop forever
+      - `hold` - hold last frame forever, or `hold_seconds`
+    - Draw order (`z_index`)
+- Add search fields to filter collections, schedules and playouts tables
+- Add selected row background color to schedules and playouts tables
+- Graphics engine text element: add `width_percent` and `text_fit` to support wrapping and scaling text
+  - `text_fit: none` or unspecified will keep existing behavior (render text exactly as configured)
+  - `text_fit: wrap` will wrap text to the given `width_percent`
+  - `text_fit: scale` will scale text *smaller* to fit the given `width_percent`
+    - Text that already fits with the configured style will not be adjusted
+- Block schedules: add **experimental** `Break Content` to decos
+  - Break content is similar to filler from classic schedules
+  - Break content is currently limited to placement `Block Start` (play before anything else in the block)
+    - Future work will add other placement options
+  - Break content is currently limited to playlists (which do *not* pad - they simply play through the playlist one time)
+    - Future work will add other collection options which will pad to the full block duration
+- Add page to reorder channels (edit channel numbers) using drag and drop
+  - New page is at **Channels** > **Edit Channel Numbers**
+- Scripted schedules: add setting to configure timeout of scripted playout build
+  - New setting is at **Settings** > **Playout** > **Scripted Schedule Timeout**
+- Add *experimental* streaming mode `HLS Segmenter (fmp4)`
+  - This mode is required for better compliance with HLS spec, and to support new output codecs
+  - This mode *will replace* `HLS Segmenter` when it has received more testing
+- Allow HEVC playback in channel preview
+  - This is restricted to compatible browsers
+  - Preview button will be red when preview is disabled due to browser incompatibility
+- Add AV1 encoding support with NVIDIA, VAAPI and QSV acceleration
+  - This also requires `HLS Segmenter (fmp4)`
+- Add `Stream Selector` option to playback troubleshooting tool
+  - This can be helpful for validating stream selector behavior with specific content
+  - Manual subtitle selection will be disabled when using a stream selector
+- Add basic log viewer to playback troubleshooting tool
+  - Streaming log level will be forced to `Debug` during troubleshooting
+  - Streaming log level will be restored to its previous value after troubleshooting completes
+- Add playout build status to UI
+  - Playouts that fail to build will be highlighted yellow in the playouts table
+  - Clicking on the failed playout will display the warning or error that caused the playout build to fail
+
+### Fixed
+- Fix green output when libplacebo tonemapping is used with NVIDIA acceleration and 10-bit output in FFmpeg Profile
+- Fix playback when invalid video preset has been saved in FFmpegProfile
+  - This can happen when NVIDIA accel falls back to libx264 software encoder for 10-bit h264 output
+- Fix 10-bit output when using NVIDIA and graphics engine (watermark or other overlays)
+- Fix playback of Jellyfin content with unknown color range
+- Block schedules: skip collections (block items) that will never fit in block duration
+- Block schedules: skip media items that will never fit in block duration
+- Fix HLS playlist generation for clients that actually care about discontinuities (like hls.js)
+  - This should resolve most playback issues with built-in channel preview
+- Fix deco dead air fallback selection and duration on mirror channels
+- Fix fallback filler duration on mirror channels
+- Fix slow startup caused by check for overlapping playout items
+- Fix green line in *most* cases when overlaying content using NVIDIA acceleration and H264 output
+- Fix non-SRT (e.g. SSA/ASS) external subtitle playback from media servers
+- Fix extracted text subtitle playback from media servers
+- Fix extracted text subtitles getting into invalid state after media server deep scans
+  - Targeted deep scans will now extract text subtitles for the scanned show
+- Fix playlist preview
+- Use NVIDIA NvEnc API to detect encoder capability instead of heuristic based on GPU model/architecture
+- Use NVIDIA Cuvid API to detect decoder capability instead of heuristic based on GPU model/architecture
+- Fix filler expression not being respected when using a playlist as filler
+- Use "repeat count" metadata from animated GIFs in graphics engine (i.e. watermarks)
+  - GIFs flagged to loop forever will loop forever
+  - GIFs with a specific loop count will loop the specified number of times and then hold the final frame
+    - Note that looping is relative to the start of the content, so this works best with permanent watermarks
+- Fix some more hls.js warnings by adding codec information to multi-variant playlists
+- Fix hardware decode of h264 constrained baseline content using VAAPI accel
+- Custom stream selector: ignore embedded text subtitles that have not been extracted
+- Fix cropping Jellyfin and Emby content that is smaller than the crop resolution
+- Sync movies with non-file media sources (e.g. http/nfs) from Emby movie libraries by @jasonarends
+
+### Changed
+- Filler presets: use separate text fields for `hours`, `minutes` and `seconds` duration
+- Use autocomplete fields for collection searching in deco editor
+  - This greatly improves the editor performance
+
+## [25.6.0] - 2025-09-14
+### Added
+- Classic schedules: allow selecting multiple graphics elements on schedule items
+- Block schedules: allow selecting multiple graphics elements on decos
+- Add channel `Playout Source` setting
+  - `Generated`: default/existing behavior where channel must have its own playout
+  - `Mirror`: channel will play content from the specified `Mirror Source Channel`'s playout
+    - This allows the exact same content on different channels with different channel settings
+    - `Playout Offset` can be used to offset the times of scheduled playout items from the mirror source channel
+      - e.g. -2 hours will cause the mirror channel to play content 2 hours before the mirror source channel
+- Add support for `.aif`, `.aifc`, `.aiff` song files
+- Classic schedules: add playback order `Marathon`
+  - This can be used with collections and smart collections
+  - Items from the collection will be grouped by the `Marathon Group By` setting: `Artist`, `Album`, `Season` or `Show`
+  - The order of groups can optionally be shuffled
+  - The order of items in each group can optionally be shuffled (otherwise `Season, Episode` or `Chronological` as appropriate)
+  - A batch size can be set to limit the number of items to schedule from each group at a time
+    - Empty or zero batch size means play all items from each group before advancing
+    - Any other value means play the specified number of items before advancing to the next group
+- Log API requests when `Request Logging Minimum Log Level` is set to `Debug`
+- Add `Count` setting to each playlist item
+  - Previously, when `Play All` was unchecked, this was implicitly 1
+  - Now, the playlist can play a specific number of items from the collection before moving to the next playlist item
+- Classic schedules: add `Shuffle Playlist Items` setting to shuffle the order of playlist items
+  - Shuffling happens initially (on playout reset), and after all items from the *entire playlist* have been played
+- Add playout detail row coloring by @peterdey
+  - Filler has unique row colors
+  - Unscheduled gaps are now displayed and have a unique row color
+- Process entire graphics element YAML files using scriban
+  - This allows things like different images based on `MediaItem_ContentRating` (movie) or `MediaItem_ShowContentRating` (episode)
+- Playlists: add playback order `Shuffle In Order` for collections and smart collections
+
+### Fixed
+- Fix transcoding content with bt709/pc color metadata
+- Fix scripted schedule validation (file exists) when creating or editing playout
+- Fix adding single episode, movie, season, show to empty playlists
+- Fix startup with MySql as non-superuser
+  - `local_infile=ON` is required when using MySQL (for bulk inserts when building playouts)
+  - ETV will set this automatically when it has permission
+  - When ETV does not have permission, startup will fail with logged instructions on how to configure MySql
+- Fix scaling anamorphic content in locales that don't use period as a decimal separator (e.g. `,`)
+- Block schedules: fix playout build crash when empty collection uses random playback order
+- Fix watermarks and graphics elements on primary content split by mid-roll filler
+- Fix watermarks and graphics elements when `Scaling Behavior` is `Crop`
+- Fix hardware acceleration health check message on mobile
+- Fix deco selection logic
+- Fix inefficient database migration that would cause database initialization to get stuck
+- Classic schedules: fix scheduling behavior when a flood item is before a flexible fixed start item
+  - Sometimes the flood item wouldn't schedule anything
+- Fix troubleshooting certain text graphics elements by generating fake EPG data
+
+### Changed
+- **BREAKING CHANGE**: change how `Scripted Schedule` system works
+  - No longer uses embedded python (IronPython); instead uses HTTP API
+  - OpenAPI Description has been added at `/openapi/scripted-schedule.json`
+    - This allows scripted scheduling from *many* languages
+  - The scripted schedule file must now be directly executable (though a wrapper can be used to load a venv)
+  - The scripted schedule file will be passed the following arguments (in order):
+    - The API host (e.g. `http://localhost:8409`)
+    - The build id (a UUID string that is required on all API calls)
+    - The playout build mode (e.g. `reset` or `continue`, normally only used for specific logic when resetting a playout)
+  - Custom arguments can be included in the `Scripted Schedule` field in the playout editor
+    - Custom arguments will be passed *after* required arguments
+    - For example, a `Scripted Schedule` of `/home/jason/schedule.sh "party central" 23` will be executed like
+      - `/home/jason/schedule.sh http://localhost:8409 00000000-0000...0000 reset "party central" 23`
+    - This enables wrapper script re-use across multiple scripted schedules
+  - API reference is available at `/docs`
+  - Docker images contain pre-generated python api client and entrypoint script
+    - Entrypoint is at `/app/scripted-schedules/entrypoint.py`
+    - Scripts folder should be mounted to `/app/scripted-schedules/scripts`
+    - Playouts should be created with scripted schedule `/app/scripted-schedules/entrypoint.py script-name` (no trailing `.py`)
+- Automatically ignore Specials/Season 0 when using `Season, Episode` playback order
+
+## [25.5.0] - 2025-09-01
+### Added
 - Add *experimental* graphics engine
   - All watermarks will use new graphics engine
 - Add `Opacity Expression` watermark mode
@@ -64,6 +560,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add *experimental* `Scripted Schedule` playout system
   - This system uses python scripts to support the highest degree of customization
   - The goal is to expose methods equivalent to all sequential schedule (YAML) instructions
+- YAML and Scripted schedules: add `offline_tail` and `stop_before_end` to `pad_to_next` instruction
+  - Both parameters default to `true`
 
 ### Fix
 - Fix database operations that were slowing down playout builds
@@ -88,9 +586,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Classic schedules: always start new alternate schedules with the first schedule item
 - Classic Schedules: log offline gaps longer than 1 hour due to strict fixed start times
 - Fix `HLS Segmenter V2` streaming mode with AMF acceleration
+- Fix `HLS Segmenter V2` streaming mode with VideoToolbox acceleration
 - Fix startup process for database and search index initialization
   - Redirect all pages to home page when initializing to prevent errors
   - Clear stale sqlite migration lock on startup to prevent getting stuck on database initialization
+- Fix display of long season placeholder text (when season posters are unavailable)
 
 ### Changed
 - Rename some schedule and playout terms for clarity
@@ -2066,7 +2566,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Allow `Shuffle In Order` with Collections and Smart Collections
   - Episodes will be grouped by show, and music videos will be grouped by artist
   - All movies will be a single group (multi-collections are probably better if `Shuffle In Order` is desired for movies)
-  - All groups will be be ordered chronologically (custom ordering is only supported in multi-collections)
+  - All groups will be ordered chronologically (custom ordering is only supported in multi-collections)
 
 ### Fixed
 - Generate XMLTV that validates successfully
@@ -2621,7 +3121,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Initial release to facilitate testing outside of Docker.
 
 
-[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.4.0...HEAD
+[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v26.1.1...HEAD
+[26.1.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v26.1.0...v26.1.1
+[26.1.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.9.0...v26.1.0
+[25.9.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.8.0...v25.9.0
+[25.8.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.7.1...v25.8.0
+[25.7.1]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.7.0...v25.7.1
+[25.7.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.6.0...v25.7.0
+[25.6.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.5.0...v25.6.0
+[25.5.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.4.0...v25.5.0
 [25.4.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.3.1...v25.4.0
 [25.3.1]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.3.0...v25.3.1
 [25.3.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.2.0...v25.3.0

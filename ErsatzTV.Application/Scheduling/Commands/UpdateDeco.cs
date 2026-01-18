@@ -4,6 +4,16 @@ using ErsatzTV.Core.Domain.Scheduling;
 
 namespace ErsatzTV.Application.Scheduling;
 
+public record UpdateDecoBreakContent(
+    int Id,
+    CollectionType CollectionType,
+    int? CollectionId,
+    int? MediaItemId,
+    int? MultiCollectionId,
+    int? SmartCollectionId,
+    int? PlaylistId,
+    DecoBreakPlacement Placement);
+
 public record UpdateDeco(
     int DecoId,
     int DecoGroupId,
@@ -11,15 +21,20 @@ public record UpdateDeco(
     DecoMode WatermarkMode,
     List<int> WatermarkIds,
     bool UseWatermarkDuringFiller,
+    DecoMode GraphicsElementsMode,
+    List<int> GraphicsElementIds,
+    bool UseGraphicsElementsDuringFiller,
+    DecoMode BreakContentMode,
+    List<UpdateDecoBreakContent> BreakContent,
     DecoMode DefaultFillerMode,
-    ProgramScheduleItemCollectionType DefaultFillerCollectionType,
+    CollectionType DefaultFillerCollectionType,
     int? DefaultFillerCollectionId,
     int? DefaultFillerMediaItemId,
     int? DefaultFillerMultiCollectionId,
     int? DefaultFillerSmartCollectionId,
     bool DefaultFillerTrimToFit,
     DecoMode DeadAirFallbackMode,
-    ProgramScheduleItemCollectionType DeadAirFallbackCollectionType,
+    CollectionType DeadAirFallbackCollectionType,
     int? DeadAirFallbackCollectionId,
     int? DeadAirFallbackMediaItemId,
     int? DeadAirFallbackMultiCollectionId,

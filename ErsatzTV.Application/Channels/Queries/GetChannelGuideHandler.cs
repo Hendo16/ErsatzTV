@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.IO.Abstractions;
 using System.Text;
+using System.Text.RegularExpressions;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Iptv;
@@ -9,27 +11,18 @@ using Microsoft.IO;
 
 namespace ErsatzTV.Application.Channels;
 
-public class GetChannelGuideHandler : IRequestHandler<GetChannelGuide, Either<BaseError, ChannelGuide>>
+public partial class GetChannelGuideHandler(
+    IDbContextFactory<TvContext> dbContextFactory,
+    RecyclableMemoryStreamManager recyclableMemoryStreamManager,
+    IFileSystem fileSystem,
+    ILocalFileSystem localFileSystem)
+    : IRequestHandler<GetChannelGuide, Either<BaseError, ChannelGuide>>
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-    private readonly ILocalFileSystem _localFileSystem;
-    private readonly RecyclableMemoryStreamManager _recyclableMemoryStreamManager;
-
-    public GetChannelGuideHandler(
-        IDbContextFactory<TvContext> dbContextFactory,
-        RecyclableMemoryStreamManager recyclableMemoryStreamManager,
-        ILocalFileSystem localFileSystem)
-    {
-        _dbContextFactory = dbContextFactory;
-        _recyclableMemoryStreamManager = recyclableMemoryStreamManager;
-        _localFileSystem = localFileSystem;
-    }
-
     public async Task<Either<BaseError, ChannelGuide>> Handle(
         GetChannelGuide request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var hiddenChannelNumbers = dbContext.Channels
             .Where(c => c.ShowInEpg == false)
             .Select(c => c.Number)
@@ -37,13 +30,13 @@ public class GetChannelGuideHandler : IRequestHandler<GetChannelGuide, Either<Ba
             .Select(n => $"{n}.xml")
             .ToImmutableHashSet();
 
-        string channelsFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, "channels.xml");
-        if (!_localFileSystem.FileExists(channelsFile))
+        string channelsFile = fileSystem.Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, "channels.xml");
+        if (!fileSystem.File.Exists(channelsFile))
         {
             return BaseError.New($"Required file {channelsFile} is missing");
         }
 
-        long mtime = File.GetLastWriteTime(channelsFile).Ticks;
+        long mtime = fileSystem.File.GetLastWriteTime(channelsFile).Ticks;
 
         var accessTokenUri = $"?v={mtime}";
         if (!string.IsNullOrWhiteSpace(request.AccessToken))
@@ -51,7 +44,7 @@ public class GetChannelGuideHandler : IRequestHandler<GetChannelGuide, Either<Ba
             accessTokenUri += $"&amp;access_token={request.AccessToken}";
         }
 
-        string channelsFragment = await File.ReadAllTextAsync(channelsFile, Encoding.UTF8, cancellationToken);
+        string channelsFragment = await ReadAllTextShared(channelsFile, cancellationToken);
 
         // TODO: is regex faster?
         channelsFragment = channelsFragment
@@ -60,27 +53,54 @@ public class GetChannelGuideHandler : IRequestHandler<GetChannelGuide, Either<Ba
 
         var channelDataFragments = new Dictionary<string, string>();
 
-        foreach (string fileName in _localFileSystem.ListFiles(FileSystemLayout.ChannelGuideCacheFolder))
+        foreach (string fileName in localFileSystem.ListFiles(FileSystemLayout.ChannelGuideCacheFolder))
         {
             if (fileName.Contains("channels"))
             {
                 continue;
             }
 
-            if (hiddenChannelNumbers.Contains(Path.GetFileName(fileName)))
+            if (hiddenChannelNumbers.Contains(fileSystem.Path.GetFileName(fileName)))
             {
                 continue;
             }
 
-            string channelDataFragment = await File.ReadAllTextAsync(fileName, Encoding.UTF8, cancellationToken);
+            try
+            {
+                string channelDataFragment = await ReadAllTextShared(fileName, cancellationToken);
 
-            channelDataFragment = channelDataFragment
-                .Replace("{RequestBase}", $"{request.Scheme}://{request.Host}{request.BaseUrl}")
-                .Replace("{AccessTokenUri}", accessTokenUri);
+                channelDataFragment = channelDataFragment
+                    .Replace("{RequestBase}", $"{request.Scheme}://{request.Host}{request.BaseUrl}")
+                    .Replace("{AccessTokenUri}", accessTokenUri);
 
-            channelDataFragments.Add(Path.GetFileNameWithoutExtension(fileName), channelDataFragment);
+                channelDataFragment = EtvTagRegex().Replace(channelDataFragment, string.Empty);
+
+                channelDataFragments.Add(fileSystem.Path.GetFileNameWithoutExtension(fileName), channelDataFragment);
+            }
+            catch (FileNotFoundException)
+            {
+                // ignore this channel fragment
+            }
+            catch (IOException)
+            {
+                // ignore this channel fragment
+            }
         }
 
-        return new ChannelGuide(_recyclableMemoryStreamManager, channelsFragment, channelDataFragments);
+        return new ChannelGuide(recyclableMemoryStreamManager, channelsFragment, channelDataFragments);
     }
+
+    private async Task<string> ReadAllTextShared(string fileName, CancellationToken cancellationToken)
+    {
+        await using var stream = fileSystem.FileStream.New(
+            fileName,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite);
+        using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+        return await reader.ReadToEndAsync(cancellationToken);
+    }
+
+    [GeneratedRegex(@"<etv:[^>]+?>.*?<\/etv:[^>]+?>|<etv:[^>]+?\/>", RegexOptions.Singleline)]
+    private static partial Regex EtvTagRegex();
 }

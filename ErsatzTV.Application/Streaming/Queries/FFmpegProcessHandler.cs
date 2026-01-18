@@ -22,7 +22,13 @@ public abstract class FFmpegProcessHandler<T> : IRequestHandler<T, Either<BaseEr
             request,
             cancellationToken);
         return await validation.Match(
-            tuple => GetProcess(dbContext, request, tuple.Item1, tuple.Item2, tuple.Item3, cancellationToken),
+            tuple => GetProcess(
+                dbContext,
+                request with { Now = request.Now - (tuple.Item1.PlayoutOffset ?? TimeSpan.Zero) },
+                tuple.Item1,
+                tuple.Item2,
+                tuple.Item3,
+                cancellationToken),
             error => Task.FromResult<Either<BaseError, PlayoutItemProcessModel>>(error.Join()));
     }
 
@@ -43,31 +49,41 @@ public abstract class FFmpegProcessHandler<T> : IRequestHandler<T, Either<BaseEr
             await FFprobePathMustExist(dbContext, cancellationToken))
         .Apply((channel, ffmpegPath, ffprobePath) => Tuple(channel, ffmpegPath, ffprobePath));
 
-    private static Task<Validation<BaseError, Channel>> ChannelMustExist(
+    private static async Task<Validation<BaseError, Channel>> ChannelMustExist(
         TvContext dbContext,
         T request,
-        CancellationToken cancellationToken) =>
-        dbContext.Channels
+        CancellationToken cancellationToken)
+    {
+        Option<Channel> maybeChannel = await dbContext.Channels
+            .AsNoTracking()
             .Include(c => c.FFmpegProfile)
             .ThenInclude(p => p.Resolution)
             .Include(c => c.Artwork)
             .Include(c => c.Watermark)
-            .SelectOneAsync(c => c.Number, c => c.Number == request.ChannelNumber, cancellationToken)
-            .MapT(channel =>
-            {
-                channel.StreamingMode = request.Mode.ToLowerInvariant() switch
-                {
-                    "hls-direct" => StreamingMode.HttpLiveStreamingDirect,
-                    "segmenter" => StreamingMode.HttpLiveStreamingSegmenter,
-                    "segmenter-v2" => StreamingMode.HttpLiveStreamingSegmenterV2,
-                    "ts" => StreamingMode.TransportStreamHybrid,
-                    "ts-legacy" => StreamingMode.TransportStream,
-                    _ => channel.StreamingMode
-                };
+            .SelectOneAsync(c => c.Number, c => c.Number == request.ChannelNumber, cancellationToken);
 
-                return channel;
-            })
-            .Map(o => o.ToValidation<BaseError>($"Channel number {request.ChannelNumber} does not exist."));
+        foreach (var channel in maybeChannel)
+        {
+            channel.StreamingMode = request.Mode;
+            foreach (int ffmpegProfileId in request.FFmpegProfileId)
+            {
+                Option<FFmpegProfile> maybeFFmpegProfile = await dbContext.FFmpegProfiles
+                    .AsNoTracking()
+                    .Include(ff => ff.Resolution)
+                    .SelectOneAsync(ff => ff.Id, ff => ff.Id == ffmpegProfileId, cancellationToken);
+
+                foreach (var ffmpegProfile in maybeFFmpegProfile)
+                {
+                    channel.FFmpegProfile = ffmpegProfile;
+                    channel.FFmpegProfileId = ffmpegProfile.Id;
+                }
+            }
+
+            return channel;
+        }
+
+        return BaseError.New($"Channel number {request.ChannelNumber} does not exist.");
+    }
 
     private static Task<Validation<BaseError, string>> FFmpegPathMustExist(
         TvContext dbContext,

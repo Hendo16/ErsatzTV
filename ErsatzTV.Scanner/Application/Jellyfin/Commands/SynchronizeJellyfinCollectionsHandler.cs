@@ -3,6 +3,7 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Jellyfin;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Jellyfin;
+using ErsatzTV.Scanner.Core.Interfaces;
 
 namespace ErsatzTV.Scanner.Application.Jellyfin;
 
@@ -10,6 +11,7 @@ public class
     SynchronizeJellyfinCollectionsHandler : IRequestHandler<SynchronizeJellyfinCollections, Either<BaseError, Unit>>
 {
     private readonly IConfigElementRepository _configElementRepository;
+    private readonly IScannerProxy _scannerProxy;
     private readonly IJellyfinSecretStore _jellyfinSecretStore;
     private readonly IMediaSourceRepository _mediaSourceRepository;
     private readonly IJellyfinCollectionScanner _scanner;
@@ -18,12 +20,14 @@ public class
         IMediaSourceRepository mediaSourceRepository,
         IJellyfinSecretStore jellyfinSecretStore,
         IJellyfinCollectionScanner scanner,
-        IConfigElementRepository configElementRepository)
+        IConfigElementRepository configElementRepository,
+        IScannerProxy scannerProxy)
     {
         _mediaSourceRepository = mediaSourceRepository;
         _jellyfinSecretStore = jellyfinSecretStore;
         _scanner = scanner;
         _configElementRepository = configElementRepository;
+        _scannerProxy = scannerProxy;
     }
 
 
@@ -50,7 +54,9 @@ public class
                 connectionParameters,
                 connectionParameters.MediaSource,
                 request.ForceScan,
-                libraryRefreshInterval));
+                request.DeepScan,
+                libraryRefreshInterval,
+                request.BaseUrl));
     }
 
     private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval(CancellationToken cancellationToken) =>
@@ -83,6 +89,8 @@ public class
 
     private async Task<Either<BaseError, Unit>> SynchronizeCollections(RequestParameters parameters)
     {
+        _scannerProxy.SetBaseUrl(parameters.BaseUrl);
+
         var lastScan = new DateTimeOffset(
             parameters.MediaSource.LastCollectionsScan ?? SystemTime.MinValueUtc,
             TimeSpan.Zero);
@@ -92,7 +100,8 @@ public class
             Either<BaseError, Unit> result = await _scanner.ScanCollections(
                 parameters.ConnectionParameters.ActiveConnection.Address,
                 parameters.ConnectionParameters.ApiKey,
-                parameters.MediaSource.Id);
+                parameters.MediaSource.Id,
+                parameters.DeepScan);
 
             if (result.IsRight)
             {
@@ -110,7 +119,9 @@ public class
         ConnectionParameters ConnectionParameters,
         JellyfinMediaSource MediaSource,
         bool ForceScan,
-        int LibraryRefreshInterval);
+        bool DeepScan,
+        int LibraryRefreshInterval,
+        string BaseUrl);
 
     private record ConnectionParameters(JellyfinMediaSource MediaSource, JellyfinConnection ActiveConnection)
     {

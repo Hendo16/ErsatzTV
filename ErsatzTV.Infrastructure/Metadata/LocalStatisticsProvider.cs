@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO.Abstractions;
 using System.Text;
 using System.Text.RegularExpressions;
 using Bugsnag;
@@ -11,28 +12,35 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.FFmpeg.Capabilities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using File = TagLib.File;
 
 namespace ErsatzTV.Infrastructure.Metadata;
 
-public class LocalStatisticsProvider : ILocalStatisticsProvider
+public partial class LocalStatisticsProvider : ILocalStatisticsProvider
 {
     private readonly IClient _client;
+    private readonly IHardwareCapabilitiesFactory _hardwareCapabilitiesFactory;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<LocalStatisticsProvider> _logger;
     private readonly IMetadataRepository _metadataRepository;
+    private readonly IFileSystem _fileSystem;
 
     public LocalStatisticsProvider(
         IMetadataRepository metadataRepository,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         IClient client,
+        IHardwareCapabilitiesFactory hardwareCapabilitiesFactory,
         ILogger<LocalStatisticsProvider> logger)
     {
         _metadataRepository = metadataRepository;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _client = client;
+        _hardwareCapabilitiesFactory = hardwareCapabilitiesFactory;
         _logger = logger;
     }
 
@@ -52,6 +60,12 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         try
         {
             string filePath = await PathForMediaItem(mediaItem);
+
+            if (Path.GetExtension(filePath) == ".avs" && !_hardwareCapabilitiesFactory.IsAviSynthInstalled())
+            {
+                return BaseError.New(".avs files are not supported; compatible ffmpeg and avisynth are both required");
+            }
+
             return await RefreshStatistics(ffmpegPath, ffprobePath, mediaItem, filePath);
         }
         catch (Exception ex)
@@ -67,6 +81,14 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         try
         {
             string mediaItemPath = mediaItem.GetHeadVersion().MediaFiles.Head().Path;
+
+            // aifc is unsupported here
+            string extension = Path.GetExtension(mediaItemPath);
+            if (extension.Contains("aifc", StringComparison.OrdinalIgnoreCase))
+            {
+                return new List<SongTag>();
+            }
+
             var song = File.Create(mediaItemPath);
 
             var result = new List<SongTag>();
@@ -111,6 +133,52 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
             _client.Notify(ex);
             return BaseError.New(ex.Message);
         }
+    }
+
+    public async Task<Option<double>> GetInterlacedRatio(
+        string ffmpegPath,
+        MediaItem mediaItem,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            string filePath = await PathForMediaItem(mediaItem);
+
+            if (Path.GetExtension(filePath) == ".avs" && !_hardwareCapabilitiesFactory.IsAviSynthInstalled())
+            {
+                return Option<double>.None;
+            }
+
+            if (filePath.StartsWith("http", StringComparison.OrdinalIgnoreCase) ||
+                !_fileSystem.File.Exists(filePath))
+            {
+                _logger.LogDebug("Skipping interlaced ratio check for remote content");
+                return Option<double>.None;
+            }
+
+            var duration = mediaItem.GetDurationForPlayout();
+            if (duration < TimeSpan.FromSeconds(3))
+            {
+                return Option<double>.None;
+            }
+
+            Option<IdetStatistics> maybeStats = await GetIdetOutput(ffmpegPath, filePath, duration / 3);
+            foreach (var stats in maybeStats)
+            {
+                if (stats.TotalFrames == 0)
+                {
+                    return 0;
+                }
+
+                return (double)stats.TotalInterlacedFrames / stats.TotalFrames;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check interlaced ratio for media item {Id}", mediaItem.Id);
+        }
+
+        return Option<double>.None;
     }
 
     private async Task<Either<BaseError, bool>> RefreshStatistics(
@@ -182,8 +250,7 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         FFprobe ffprobe = JsonConvert.DeserializeObject<FFprobe>(probe.StandardOutput);
         if (ffprobe is not null)
         {
-            const string PATTERN = @"\[SAR\s+([0-9]+:[0-9]+)\s+DAR\s+([0-9]+:[0-9]+)\]";
-            Match match = Regex.Match(probe.StandardError, PATTERN);
+            Match match = SarDarRegex().Match(probe.StandardError);
             if (match.Success)
             {
                 string sar = match.Groups[1].Value;
@@ -214,6 +281,59 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         }
 
         return BaseError.New("Unable to deserialize ffprobe output");
+    }
+
+    private async Task<Option<IdetStatistics>> GetIdetOutput(string ffmpegPath, string filePath, TimeSpan seek)
+    {
+        string[] arguments =
+        [
+            "-hide_banner",
+            "-ss", $"{seek:c}",
+            "-i", filePath,
+            "-vf", "idet",
+            "-frames:v", "200",
+            "-an",
+            "-f", "null", "-"
+        ];
+
+        BufferedCommandResult idet = await Cli.Wrap(ffmpegPath)
+            .WithArguments(arguments)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(Encoding.UTF8);
+
+        if (idet.ExitCode != 0)
+        {
+            _logger.LogInformation(
+                "FFmpeg idet with arguments {Arguments} exited with code {ExitCode}",
+                arguments,
+                idet.ExitCode);
+
+            return Option<IdetStatistics>.None;
+        }
+
+        var stats = new IdetStatistics();
+
+        //_logger.LogDebug("StdErr: {Match}", idet.StandardError);
+
+        var singleMatch = SingleFrameRegex().Matches(idet.StandardError).LastOrDefault();
+        if (singleMatch?.Success == true)
+        {
+            _logger.LogDebug("Matched single frame: {Match}", singleMatch.Value);
+            stats.SingleTff = int.Parse(singleMatch.Groups[1].Value, NumberFormatInfo.InvariantInfo);
+            stats.SingleBff = int.Parse(singleMatch.Groups[2].Value, NumberFormatInfo.InvariantInfo);
+            stats.SingleProgressive = int.Parse(singleMatch.Groups[3].Value, NumberFormatInfo.InvariantInfo);
+        }
+
+        var multiMatch = MultiFrameRegex().Matches(idet.StandardError).LastOrDefault();
+        if (multiMatch?.Success == true)
+        {
+            _logger.LogDebug("Matched multi frame: {Match}", multiMatch.Value);
+            stats.MultiTff = int.Parse(multiMatch.Groups[1].Value, NumberFormatInfo.InvariantInfo);
+            stats.MultiBff = int.Parse(multiMatch.Groups[2].Value, NumberFormatInfo.InvariantInfo);
+            stats.MultiProgressive = int.Parse(multiMatch.Groups[3].Value, NumberFormatInfo.InvariantInfo);
+        }
+
+        return stats;
     }
 
     private async Task AnalyzeDuration(string ffmpegPath, string path, MediaVersion version)
@@ -348,6 +468,7 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
                         version.Width = videoStream.width;
                         version.Height = videoStream.height;
                         version.VideoScanKind = ScanKindFromFieldOrder(videoStream.field_order);
+                        version.InterlacedRatio = null;
                         version.RFrameRate = videoStream.r_frame_rate;
 
                         var stream = new MediaStream
@@ -582,4 +703,27 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
             null);
     }
     // ReSharper restore InconsistentNaming
+
+    [GeneratedRegex(@"\[SAR\s+([0-9]+:[0-9]+)\s+DAR\s+([0-9]+:[0-9]+)\]")]
+    private static partial Regex SarDarRegex();
+
+    [GeneratedRegex(@"Single frame detection: TFF:\s+(\d+) BFF:\s+(\d+) Progressive:\s+(\d+)")]
+    private static partial Regex SingleFrameRegex();
+
+    [GeneratedRegex(@"Multi frame detection: TFF:\s+(\d+) BFF:\s+(\d+) Progressive:\s+(\d+)")]
+    private static partial Regex MultiFrameRegex();
+
+    private class IdetStatistics
+    {
+        public int SingleTff { get; set; }
+        public int SingleBff { get; set; }
+        public int SingleProgressive { get; set; }
+        public int MultiTff { get; set; }
+        public int MultiBff { get; set; }
+        public int MultiProgressive { get; set; }
+
+        public int TotalInterlacedFrames => SingleTff + SingleBff + MultiTff + MultiBff;
+        public int TotalProgressiveFrames => SingleProgressive + MultiProgressive;
+        public int TotalFrames => TotalInterlacedFrames + TotalProgressiveFrames;
+    }
 }

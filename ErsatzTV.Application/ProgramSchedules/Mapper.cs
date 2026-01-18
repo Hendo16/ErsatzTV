@@ -34,6 +34,9 @@ internal static class Mapper
                     duration.SmartCollection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(duration.SmartCollection)
                         : null,
+                    duration.RerunCollection != null
+                        ? MediaCollections.Mapper.ProjectToViewModel(duration.RerunCollection)
+                        : null,
                     duration.Playlist != null
                         ? MediaCollections.Mapper.ProjectToViewModel(duration.Playlist)
                         : null,
@@ -44,7 +47,13 @@ internal static class Mapper
                         Artist artist => MediaItems.Mapper.ProjectToViewModel(artist),
                         _ => null
                     },
+                    duration.SearchTitle,
+                    duration.SearchQuery,
                     duration.PlaybackOrder,
+                    duration.MarathonGroupBy,
+                    duration.MarathonShuffleGroups,
+                    duration.MarathonShuffleItems,
+                    duration.MarathonBatchSize,
                     duration.FillWithGroupMode,
                     duration.PlayoutDuration,
                     duration.TailMode,
@@ -68,6 +77,8 @@ internal static class Mapper
                         : null,
                     duration.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
                         .ToList(),
+                    duration.ProgramScheduleItemGraphicsElements.Map(ge => Graphics.Mapper.ProjectToViewModel(ge.GraphicsElement))
+                        .ToList(),
                     duration.PreferredAudioLanguageCode,
                     duration.PreferredAudioTitle,
                     duration.PreferredSubtitleLanguageCode,
@@ -89,6 +100,9 @@ internal static class Mapper
                     flood.SmartCollection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(flood.SmartCollection)
                         : null,
+                    flood.RerunCollection != null
+                        ? MediaCollections.Mapper.ProjectToViewModel(flood.RerunCollection)
+                        : null,
                     flood.Playlist != null
                         ? MediaCollections.Mapper.ProjectToViewModel(flood.Playlist)
                         : null,
@@ -99,7 +113,13 @@ internal static class Mapper
                         Artist artist => MediaItems.Mapper.ProjectToViewModel(artist),
                         _ => null
                     },
+                    flood.SearchTitle,
+                    flood.SearchQuery,
                     flood.PlaybackOrder,
+                    flood.MarathonGroupBy,
+                    flood.MarathonShuffleGroups,
+                    flood.MarathonShuffleItems,
+                    flood.MarathonBatchSize,
                     flood.FillWithGroupMode,
                     flood.CustomTitle,
                     flood.GuideMode,
@@ -119,6 +139,8 @@ internal static class Mapper
                         ? Filler.Mapper.ProjectToViewModel(flood.FallbackFiller)
                         : null,
                     flood.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
+                    flood.ProgramScheduleItemGraphicsElements.Map(ge => Graphics.Mapper.ProjectToViewModel(ge.GraphicsElement))
                         .ToList(),
                     flood.PreferredAudioLanguageCode,
                     flood.PreferredAudioTitle,
@@ -141,6 +163,9 @@ internal static class Mapper
                     multiple.SmartCollection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(multiple.SmartCollection)
                         : null,
+                    multiple.RerunCollection != null
+                        ? MediaCollections.Mapper.ProjectToViewModel(multiple.RerunCollection)
+                        : null,
                     multiple.Playlist != null
                         ? MediaCollections.Mapper.ProjectToViewModel(multiple.Playlist)
                         : null,
@@ -151,7 +176,13 @@ internal static class Mapper
                         Artist artist => MediaItems.Mapper.ProjectToViewModel(artist),
                         _ => null
                     },
+                    multiple.SearchTitle,
+                    multiple.SearchQuery,
                     multiple.PlaybackOrder,
+                    multiple.MarathonGroupBy,
+                    multiple.MarathonShuffleGroups,
+                    multiple.MarathonShuffleItems,
+                    multiple.MarathonBatchSize,
                     multiple.FillWithGroupMode,
                     multiple.MultipleMode,
                     multiple.Count,
@@ -174,6 +205,8 @@ internal static class Mapper
                         : null,
                     multiple.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
                         .ToList(),
+                    multiple.ProgramScheduleItemGraphicsElements.Map(ge => Graphics.Mapper.ProjectToViewModel(ge.GraphicsElement))
+                        .ToList(),
                     multiple.PreferredAudioLanguageCode,
                     multiple.PreferredAudioTitle,
                     multiple.PreferredSubtitleLanguageCode,
@@ -195,6 +228,9 @@ internal static class Mapper
                     one.SmartCollection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(one.SmartCollection)
                         : null,
+                    one.RerunCollection != null
+                        ? MediaCollections.Mapper.ProjectToViewModel(one.RerunCollection)
+                        : null,
                     one.Playlist != null
                         ? MediaCollections.Mapper.ProjectToViewModel(one.Playlist)
                         : null,
@@ -205,7 +241,13 @@ internal static class Mapper
                         Artist artist => MediaItems.Mapper.ProjectToViewModel(artist),
                         _ => null
                     },
+                    one.SearchTitle,
+                    one.SearchQuery,
                     one.PlaybackOrder,
+                    one.MarathonGroupBy,
+                    one.MarathonShuffleGroups,
+                    one.MarathonShuffleItems,
+                    one.MarathonBatchSize,
                     one.FillWithGroupMode,
                     one.CustomTitle,
                     one.GuideMode,
@@ -225,6 +267,8 @@ internal static class Mapper
                         ? Filler.Mapper.ProjectToViewModel(one.FallbackFiller)
                         : null,
                     one.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
+                    one.ProgramScheduleItemGraphicsElements.Map(ge => Graphics.Mapper.ProjectToViewModel(ge.GraphicsElement))
                         .ToList(),
                     one.PreferredAudioLanguageCode,
                     one.PreferredAudioTitle,

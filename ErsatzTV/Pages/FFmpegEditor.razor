@@ -4,9 +4,7 @@
 @using ErsatzTV.Application.FFmpegProfiles
 @using ErsatzTV.Application.Resolutions
 @using ErsatzTV.Core.FFmpeg
-@using ErsatzTV.FFmpeg
 @using ErsatzTV.FFmpeg.Format
-@using ErsatzTV.FFmpeg.Preset
 @using ErsatzTV.Validators
 @using FluentValidation.Results
 @using Microsoft.Extensions.Caching.Memory
@@ -59,6 +57,18 @@
                 <MudSelectItem Value="@ScalingBehavior.Crop">Crop</MudSelectItem>
             </MudSelect>
         </MudStack>
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Pad Mode</MudText>
+            </div>
+            <MudSelect @bind-Value="_model.PadMode"
+                       For="@(() => _model.PadMode)"
+                       Disabled="_model.HardwareAcceleration is not HardwareAccelerationKind.Vaapi"
+                       HelperText="If hardware padding is green, software padding should be used instead">
+                <MudSelectItem Value="@FilterMode.HardwareIfPossible">Hardware If Possible</MudSelectItem>
+                <MudSelectItem Value="@FilterMode.Software">Software</MudSelectItem>
+            </MudSelect>
+        </MudStack>
         <MudText Typo="Typo.h5" Class="mt-10 mb-2">Video</MudText>
         <MudDivider Class="mb-6"/>
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
@@ -69,6 +79,10 @@
                 <MudSelectItem Value="@FFmpegProfileVideoFormat.H264">h264</MudSelectItem>
                 <MudSelectItem Value="@FFmpegProfileVideoFormat.Hevc">hevc</MudSelectItem>
                 <MudSelectItem Value="@FFmpegProfileVideoFormat.Mpeg2Video">mpeg-2</MudSelectItem>
+                @if (_model.HardwareAcceleration is (HardwareAccelerationKind.Nvenc or HardwareAccelerationKind.Vaapi or HardwareAccelerationKind.Qsv))
+                {
+                    <MudSelectItem Value="@FFmpegProfileVideoFormat.Av1">av1</MudSelectItem>
+                }
             </MudSelect>
         </MudStack>
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
@@ -77,11 +91,18 @@
             </div>
             <MudSelect @bind-Value="_model.VideoProfile"
                        For="@(() => _model.VideoProfile)"
-                       Disabled="@(_model.VideoFormat != FFmpegProfileVideoFormat.H264 || _model.HardwareAcceleration != HardwareAccelerationKind.Nvenc && _model.HardwareAcceleration != HardwareAccelerationKind.Qsv && _model.HardwareAcceleration != HardwareAccelerationKind.VideoToolbox && _model.HardwareAcceleration != HardwareAccelerationKind.None)"
+                       Disabled="@(_model.VideoFormat != FFmpegProfileVideoFormat.H264 || !HardwareAccelSupportsH264Profile(_model.HardwareAcceleration))"
                        Clearable="true">
                 <MudSelectItem Value="@VideoProfile.Main">main</MudSelectItem>
                 <MudSelectItem Value="@VideoProfile.High">high</MudSelectItem>
-                <MudSelectItem Value="@VideoProfile.High10">high10</MudSelectItem>
+                @if (_model.HardwareAcceleration is HardwareAccelerationKind.Nvenc)
+                {
+                    <MudSelectItem Value="@VideoProfile.High444p">high444p</MudSelectItem>
+                }
+                else
+                {
+                    <MudSelectItem Value="@VideoProfile.High10">high10</MudSelectItem>
+                }
             </MudSelect>
         </MudStack>
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
@@ -89,7 +110,10 @@
                 <MudText>Preset</MudText>
             </div>
             @{
-                ICollection<string> presets = AvailablePresets.ForAccelAndFormat(MapAccel(_model.HardwareAcceleration), MapVideoFormat(_model.VideoFormat));
+                ICollection<string> presets = FFmpegLibraryHelper.PresetsForFFmpegProfile(
+                    _model.HardwareAcceleration,
+                    _model.VideoFormat,
+                    _model.BitDepth);
             }
             <MudSelect @bind-Value="_model.VideoPreset"
                        For="@(() => _model.VideoPreset)"
@@ -230,6 +254,7 @@
             <MudSelect @bind-Value="_model.AudioFormat" For="@(() => _model.AudioFormat)">
                 <MudSelectItem Value="@FFmpegProfileAudioFormat.Aac">aac</MudSelectItem>
                 <MudSelectItem Value="@FFmpegProfileAudioFormat.Ac3">ac3</MudSelectItem>
+                <MudSelectItem Value="@FFmpegProfileAudioFormat.AacLatm">aac (latm)</MudSelectItem>
             </MudSelect>
         </MudStack>
         <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
@@ -265,6 +290,15 @@
                 <MudSelectItem Value="@NormalizeLoudnessMode.LoudNorm">loudnorm</MudSelectItem>
             </MudSelect>
         </MudStack>
+        @if (_model.NormalizeLoudnessMode is NormalizeLoudnessMode.LoudNorm)
+        {
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Target Loudness</MudText>
+                </div>
+                <MudTextField @bind-Value="_model.TargetLoudness" For="@(() => _model.TargetLoudness)" Adornment="Adornment.End" AdornmentText="LUFS"/>
+            </MudStack>
+        }
     </MudContainer>
 </div>
 </MudForm>
@@ -377,6 +411,17 @@
         }
     }
 
+    private bool HardwareAccelSupportsH264Profile(HardwareAccelerationKind accel) =>
+        accel switch
+        {
+            HardwareAccelerationKind.None => true,
+            HardwareAccelerationKind.Nvenc => true,
+            HardwareAccelerationKind.Qsv => true,
+            HardwareAccelerationKind.Vaapi => true,
+            HardwareAccelerationKind.VideoToolbox => true,
+            _ => false,
+        };
+
     private Task PersistData()
     {
         ApplicationState.PersistAsJson("_model", _model);
@@ -421,24 +466,4 @@
             // do nothing
         }
     }
-
-    private static HardwareAccelerationMode MapAccel(HardwareAccelerationKind kind) =>
-        kind switch
-        {
-            HardwareAccelerationKind.Amf => HardwareAccelerationMode.Amf,
-            HardwareAccelerationKind.Nvenc => HardwareAccelerationMode.Nvenc,
-            HardwareAccelerationKind.Qsv => HardwareAccelerationMode.Qsv,
-            HardwareAccelerationKind.Vaapi => HardwareAccelerationMode.Vaapi,
-            HardwareAccelerationKind.VideoToolbox => HardwareAccelerationMode.VideoToolbox,
-            _ => HardwareAccelerationMode.None
-        };
-
-    private static string MapVideoFormat(FFmpegProfileVideoFormat format) =>
-        format switch
-        {
-            FFmpegProfileVideoFormat.H264 => VideoFormat.H264,
-            FFmpegProfileVideoFormat.Hevc => VideoFormat.Hevc,
-            _ => VideoFormat.Mpeg2Video
-        };
-
 }

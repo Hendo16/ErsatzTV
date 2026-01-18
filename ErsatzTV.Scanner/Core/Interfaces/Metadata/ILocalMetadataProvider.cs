@@ -1,5 +1,6 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Streaming;
 
 namespace ErsatzTV.Scanner.Core.Interfaces.Metadata;
 
@@ -16,7 +17,12 @@ public interface ILocalMetadataProvider
     Task<bool> RefreshSidecarMetadata(FillerMediaItem filler, string nfoFileName);
     Task<bool> RefreshTagMetadata(Song song);
     Task<bool> RefreshTagMetadata(Image image, double? durationSeconds);
-    Task<bool> RefreshTagMetadata(RemoteStream remoteStream, CancellationToken cancellationToken);
+
+    Task<bool> RefreshMetadata(
+        RemoteStream remoteStream,
+        YamlRemoteStreamDefinition definition,
+        CancellationToken cancellationToken);
+
     Task<bool> RefreshFallbackMetadata(Movie movie);
     Task<bool> RefreshFallbackMetadata(Episode episode);
     Task<bool> RefreshFallbackMetadata(Artist artist, string artistFolder);

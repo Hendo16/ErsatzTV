@@ -8,7 +8,8 @@ public interface IPlayoutBuilder
     bool TrimStart { get; set; }
     Playlist DebugPlaylist { get; set; }
 
-    Task<PlayoutBuildResult> Build(
+    Task<Either<BaseError, PlayoutBuildResult>> Build(
+        DateTimeOffset start,
         Playout playout,
         PlayoutReferenceData referenceData,
         PlayoutBuildMode mode,

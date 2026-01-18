@@ -6,7 +6,7 @@ public class PlaylistItem
     public int Index { get; set; }
     public int PlaylistId { get; set; }
     public Playlist Playlist { get; set; }
-    public ProgramScheduleItemCollectionType CollectionType { get; set; }
+    public CollectionType CollectionType { get; set; }
     public int? CollectionId { get; set; }
     public Collection Collection { get; set; }
     public int? MediaItemId { get; set; }
@@ -16,6 +16,7 @@ public class PlaylistItem
     public int? SmartCollectionId { get; set; }
     public SmartCollection SmartCollection { get; set; }
     public PlaybackOrder PlaybackOrder { get; set; }
+    public int? Count { get; set; }
     public bool PlayAll { get; set; }
     public bool IncludeInProgramGuide { get; set; }
 }

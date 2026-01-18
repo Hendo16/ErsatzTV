@@ -1,25 +1,29 @@
-﻿using ErsatzTV.Infrastructure.Data;
+﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using static ErsatzTV.Application.MediaCollections.Mapper;
 
 namespace ErsatzTV.Application.MediaCollections;
 
-public class GetPagedCollectionsHandler : IRequestHandler<GetPagedCollections, PagedMediaCollectionsViewModel>
+public class GetPagedCollectionsHandler(IDbContextFactory<TvContext> dbContextFactory)
+    : IRequestHandler<GetPagedCollections, PagedMediaCollectionsViewModel>
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-
-    public GetPagedCollectionsHandler(IDbContextFactory<TvContext> dbContextFactory) =>
-        _dbContextFactory = dbContextFactory;
-
     public async Task<PagedMediaCollectionsViewModel> Handle(
         GetPagedCollections request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         int count = await dbContext.Collections.CountAsync(cancellationToken);
-        List<MediaCollectionViewModel> page = await dbContext.Collections
-            .AsNoTracking()
-            .OrderBy(c => EF.Functions.Collate(c.Name, TvContext.CaseInsensitiveCollation))
+
+        IQueryable<Collection> query = dbContext.Collections.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(request.Query))
+        {
+            query = query.Where(c => EF.Functions.Like(c.Name, $"%{request.Query}%"));
+        }
+
+        List<MediaCollectionViewModel> page = await query
+            .OrderBy(c => c.Name)
             .Skip(request.PageNum * request.PageSize)
             .Take(request.PageSize)
             .ToListAsync(cancellationToken)

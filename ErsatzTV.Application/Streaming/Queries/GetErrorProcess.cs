@@ -1,10 +1,12 @@
-﻿namespace ErsatzTV.Application.Streaming;
+﻿using ErsatzTV.Core.Domain;
+
+namespace ErsatzTV.Application.Streaming;
 
 public record GetErrorProcess(
     string ChannelNumber,
-    string Mode,
+    StreamingMode Mode,
     bool HlsRealtime,
-    long PtsOffset,
+    TimeSpan PtsOffset,
     Option<TimeSpan> MaybeDuration,
     DateTimeOffset Until,
     string ErrorMessage) : FFmpegProcessRequest(
@@ -14,4 +16,5 @@ public record GetErrorProcess(
     true,
     HlsRealtime,
     DateTimeOffset.Now, // unused
-    PtsOffset);
+    PtsOffset,
+    Option<int>.None);

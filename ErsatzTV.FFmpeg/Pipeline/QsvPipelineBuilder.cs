@@ -65,7 +65,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             videoStream.Codec,
             videoStream.Profile,
             videoStream.PixelFormat,
-            videoStream.ColorParams.IsHdr);
+            videoStream.ColorParams);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
@@ -77,17 +77,16 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             encodeCapability = FFmpegCapability.Software;
         }
 
+        if (desiredState.VideoFormat is VideoFormat.Av1 && ffmpegState.OutputFormat is not OutputFormatKind.HlsMp4)
+        {
+            throw new NotSupportedException("AV1 output is only supported with HLS Segmenter (fmp4)");
+        }
+
         bool isHevcOrH264 = videoStream.Codec is /*VideoFormat.Hevc or*/ VideoFormat.H264;
         bool is10Bit = videoStream.PixelFormat.Map(pf => pf.BitDepth).IfNone(8) == 10;
 
         // 10-bit hevc/h264 qsv decoders have issues, so use software
         if (decodeCapability == FFmpegCapability.Hardware && isHevcOrH264 && is10Bit)
-        {
-            decodeCapability = FFmpegCapability.Software;
-        }
-
-        // QSV cannot always decode properly when seeking, so use software
-        if (decodeCapability == FFmpegCapability.Hardware && ffmpegState.Start.Filter(s => s > TimeSpan.Zero).IsSome)
         {
             decodeCapability = FFmpegCapability.Software;
         }
@@ -193,13 +192,24 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         currentState = SetCrop(videoInputFile, desiredState, currentState);
         SetStillImageLoop(videoInputFile, videoStream, ffmpegState, desiredState, pipelineSteps);
 
-        // need to download for any sort of overlay
-        if (currentState.FrameDataLocation == FrameDataLocation.Hardware &&
-            (context.HasSubtitleOverlay || context.HasWatermark || context.HasGraphicsEngine))
+        // need to download for any sort of overlay (and always for setpts)
+        if (currentState.FrameDataLocation == FrameDataLocation.Hardware) //&&
+            //(context.HasSubtitleOverlay || context.HasWatermark || context.HasGraphicsEngine))
         {
             var hardwareDownload = new HardwareDownloadFilter(currentState);
             currentState = hardwareDownload.NextState(currentState);
             videoInputFile.FilterSteps.Add(hardwareDownload);
+        }
+
+        // use normalized fps, or source fps
+        FrameRate frameRate =
+            desiredState.FrameRate.IfNone(videoStream.FrameRate.IfNone(FrameRate.DefaultFrameRate));
+        videoInputFile.FilterSteps.Add(new ResetPtsFilter(frameRate));
+
+        // since fps will set frame rate, remove the output option
+        foreach (var fr in pipelineSteps.OfType<FrameRateOutputOption>().HeadOrNone())
+        {
+            pipelineSteps.Remove(fr);
         }
 
         currentState = SetSubtitle(
@@ -229,6 +239,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             Option<IEncoder> maybeEncoder =
                 (ffmpegState.EncoderHardwareAccelerationMode, desiredState.VideoFormat) switch
                 {
+                    (HardwareAccelerationMode.Qsv, VideoFormat.Av1) => new EncoderAv1Qsv(),
                     (HardwareAccelerationMode.Qsv, VideoFormat.Hevc) => new EncoderHevcQsv(desiredState.VideoPreset),
                     (HardwareAccelerationMode.Qsv, VideoFormat.H264) => new EncoderH264Qsv(
                         desiredState.VideoProfile,

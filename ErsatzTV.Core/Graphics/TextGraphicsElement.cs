@@ -1,10 +1,9 @@
 using ErsatzTV.FFmpeg.State;
 using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
 
 namespace ErsatzTV.Core.Graphics;
 
-public class TextGraphicsElement
+public class TextGraphicsElement : BaseGraphicsElement
 {
     [YamlMember(Alias = "opacity_percent", ApplyNamingConventions = false)]
     public int? OpacityPercent { get; set; }
@@ -20,14 +19,14 @@ public class TextGraphicsElement
     [YamlMember(Alias = "vertical_margin_percent", ApplyNamingConventions = false)]
     public double? VerticalMarginPercent { get; set; }
 
-    [YamlMember(Alias = "horizontal_alignment", ApplyNamingConventions = false)]
-    public string HorizontalAlignment { get; set; }
+    [YamlMember(Alias = "width_percent", ApplyNamingConventions = false)]
+    public double? WidthPercent { get; set; }
 
-    [YamlMember(Alias = "location_x", ApplyNamingConventions = false)]
-    public double? LocationX { get; set; }
+    [YamlMember(Alias = "text_fit", ApplyNamingConventions = false)]
+    public TextFit Fit { get; set; } = TextFit.None;
 
-    [YamlMember(Alias = "location_y", ApplyNamingConventions = false)]
-    public double? LocationY { get; set; }
+    [YamlMember(Alias = "text_align", ApplyNamingConventions = false)]
+    public TextAlignment Align { get; set; } = TextAlignment.Left;
 
     [YamlMember(Alias = "z_index", ApplyNamingConventions = false)]
     public int? ZIndex { get; set; }
@@ -44,30 +43,20 @@ public class TextGraphicsElement
     public int EpgEntries { get; set; }
 
     public string Text { get; set; }
+}
 
-    public static async Task<Option<TextGraphicsElement>> FromFile(string fileName)
-    {
-        try
-        {
-            string yaml = await File.ReadAllTextAsync(fileName);
+public enum TextFit
+{
+    None,
+    Wrap,
+    Scale
+}
 
-            // TODO: validate schema
-            // if (await yamlScheduleValidator.ValidateSchedule(yaml, isImport) == false)
-            // {
-            //     return Option<YamlPlayoutDefinition>.None;
-            // }
-
-            IDeserializer deserializer = new DeserializerBuilder()
-                .WithNamingConvention(CamelCaseNamingConvention.Instance)
-                .Build();
-
-            return deserializer.Deserialize<TextGraphicsElement>(yaml);
-        }
-        catch (Exception)
-        {
-            return Option<TextGraphicsElement>.None;
-        }
-    }
+public enum TextAlignment
+{
+    Left,
+    Center,
+    Right
 }
 
 public class StyleDefinition
@@ -91,4 +80,16 @@ public class StyleDefinition
 
     [YamlMember(Alias = "letter_spacing", ApplyNamingConventions = false)]
     public float? LetterSpacing { get; set; }
+
+    [YamlMember(Alias = "line_height", ApplyNamingConventions = false)]
+    public float? LineHeight { get; set; }
+
+    [YamlMember(Alias = "halo_color", ApplyNamingConventions = false)]
+    public string HaloColor { get; set; }
+
+    [YamlMember(Alias = "halo_width", ApplyNamingConventions = false)]
+    public float? HaloWidth { get; set; }
+
+    [YamlMember(Alias = "halo_blur", ApplyNamingConventions = false)]
+    public float? HaloBlur { get; set; }
 }

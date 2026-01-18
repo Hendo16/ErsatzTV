@@ -137,6 +137,8 @@ public class EmbyApiClient : IEmbyApiClient
 
         if (_memoryCache.TryGetValue("emby_collections_library_item_id", out string itemId))
         {
+            //_logger.LogDebug("Emby collections library item id is {ItemId}", itemId);
+
             return GetPagedLibraryContents(
                 address,
                 None,
@@ -324,7 +326,7 @@ public class EmbyApiClient : IEmbyApiClient
                 "Series" => new EmbyShow { ItemId = item.Id },
                 "Season" => new EmbySeason { ItemId = item.Id },
                 "Episode" => new EmbyEpisode { ItemId = item.Id },
-                _ => None
+                _ => Option<MediaItem>.None
             };
         }
         catch (Exception ex)
@@ -379,7 +381,7 @@ public class EmbyApiClient : IEmbyApiClient
     {
         try
         {
-            if (item.MediaSources.Any(ms => ms.Protocol != "File"))
+            if (item.MediaSources is null || item.MediaSources.Count == 0)
             {
                 return None;
             }

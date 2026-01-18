@@ -70,9 +70,9 @@
         await _form.Validate();
         if (_success)
         {
-            Either<BaseError, Unit> result = await Mediator.Send(new UpdateSmartCollection(Id, _model.Name, _model.Query), _cts.Token);
+            Either<BaseError, UpdateSmartCollectionResult> result = await Mediator.Send(new UpdateSmartCollection(Id, _model.Name, _model.Query), _cts.Token);
             result.Match(
-                _ => NavigationManager.NavigateTo("media/collections"),
+                _ => NavigationManager.NavigateTo("media/smart-collections"),
                 error =>
                 {
                     Snackbar.Add(error.Value, Severity.Error);

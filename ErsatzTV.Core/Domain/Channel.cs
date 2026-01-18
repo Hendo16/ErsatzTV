@@ -11,6 +11,7 @@ public class Channel
     public int Id { get; set; }
     public Guid UniqueId { get; init; }
     public string Number { get; set; }
+    public double SortNumber { get; set; }
     public string Name { get; set; }
     public string Group { get; set; }
     public string Categories { get; set; }
@@ -32,7 +33,11 @@ public class Channel
     public ChannelMusicVideoCreditsMode MusicVideoCreditsMode { get; set; }
     public string MusicVideoCreditsTemplate { get; set; }
     public ChannelSongVideoMode SongVideoMode { get; set; }
+    public ChannelPlayoutSource PlayoutSource { get; set; }
     public ChannelPlayoutMode PlayoutMode { get; set; }
+    public int? MirrorSourceChannelId { get; set; }
+    public Channel MirrorSourceChannel { get; set; }
+    public TimeSpan? PlayoutOffset { get; set; }
     public ChannelTranscodeMode TranscodeMode { get; set; }
     public ChannelIdleBehavior IdleBehavior { get; set; }
     public bool IsEnabled { get; set; }

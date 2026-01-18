@@ -7,7 +7,65 @@ namespace ErsatzTV.Core.Scheduling.Engine;
 
 public class MarathonHelper(IMediaCollectionRepository mediaCollectionRepository)
 {
-    public async Task<Option<MarathonContentResult>> GetEnumerator(
+    public async Task<Option<PlaylistEnumerator>> GetEnumerator(
+        List<MediaItem> mediaItems,
+        MarathonGroupBy marathonGroupBy,
+        bool marathonShuffleGroups,
+        bool marathonShuffleItems,
+        Option<int> marathonBatchSize,
+        CollectionEnumeratorState state,
+        CancellationToken cancellationToken)
+    {
+        List<IGrouping<GroupKey, MediaItem>> groups = [];
+
+        PlaybackOrder itemPlaybackOrder;
+
+        // group by show
+        switch (marathonGroupBy)
+        {
+            case MarathonGroupBy.Show:
+                groups.AddRange(mediaItems.GroupBy(MediaItemKeyByShow));
+                itemPlaybackOrder = marathonShuffleItems ? PlaybackOrder.Shuffle : PlaybackOrder.SeasonEpisode;
+                break;
+            case MarathonGroupBy.Season:
+                groups.AddRange(mediaItems.GroupBy(MediaItemKeyBySeason));
+                itemPlaybackOrder = marathonShuffleItems ? PlaybackOrder.Shuffle : PlaybackOrder.SeasonEpisode;
+                break;
+            case MarathonGroupBy.Artist:
+                groups.AddRange(mediaItems.GroupBy(MediaItemKeyByArtist));
+                itemPlaybackOrder = marathonShuffleItems ? PlaybackOrder.Shuffle : PlaybackOrder.Chronological;
+                break;
+            case MarathonGroupBy.Album:
+                groups.AddRange(mediaItems.GroupBy(MediaItemKeyByAlbum));
+                itemPlaybackOrder = marathonShuffleItems ? PlaybackOrder.Shuffle : PlaybackOrder.Chronological;
+                break;
+            default:
+                return Option<PlaylistEnumerator>.None;
+        }
+
+        Dictionary<PlaylistItem, List<MediaItem>> itemMap = [];
+
+        for (var index = 0; index < groups.Count; index++)
+        {
+            IGrouping<GroupKey, MediaItem> group = groups[index];
+            PlaylistItem playlistItem = GroupToPlaylistItem(
+                index,
+                marathonBatchSize.IsNone,
+                itemPlaybackOrder,
+                group);
+            itemMap.Add(playlistItem, group.ToList());
+        }
+
+        return await PlaylistEnumerator.Create(
+            mediaCollectionRepository,
+            itemMap,
+            state,
+            marathonShuffleGroups,
+            marathonBatchSize,
+            cancellationToken);
+    }
+
+    public async Task<Option<PlaylistContentResult>> GetEnumerator(
         Dictionary<string, List<string>> guids,
         List<string> searches,
         string groupBy,
@@ -68,9 +126,10 @@ public class MarathonHelper(IMediaCollectionRepository mediaCollectionRepository
             itemMap,
             state,
             shuffleGroups,
+            batchSize: Option<int>.None,
             cancellationToken);
 
-        return new MarathonContentResult(
+        return new PlaylistContentResult(
             enumerator,
             itemMap.ToImmutableDictionary(x => CollectionKey.ForPlaylistItem(x.Key), x => x.Value));
     }
@@ -79,55 +138,55 @@ public class MarathonHelper(IMediaCollectionRepository mediaCollectionRepository
         mediaItem switch
         {
             Episode e => new GroupKey(
-                ProgramScheduleItemCollectionType.TelevisionShow,
+                CollectionType.TelevisionShow,
                 null,
                 null,
                 null,
                 e.Season?.ShowId ?? 0),
-            _ => new GroupKey(ProgramScheduleItemCollectionType.TelevisionShow, null, null, null, 0)
+            _ => new GroupKey(CollectionType.TelevisionShow, null, null, null, 0)
         };
 
     private static GroupKey MediaItemKeyBySeason(MediaItem mediaItem) =>
         mediaItem switch
         {
             Episode e => new GroupKey(
-                ProgramScheduleItemCollectionType.TelevisionSeason,
+                CollectionType.TelevisionSeason,
                 null,
                 null,
                 null,
                 e.SeasonId),
-            _ => new GroupKey(ProgramScheduleItemCollectionType.TelevisionSeason, null, null, null, 0)
+            _ => new GroupKey(CollectionType.TelevisionSeason, null, null, null, 0)
         };
 
     private static GroupKey MediaItemKeyByArtist(MediaItem mediaItem) =>
         mediaItem switch
         {
             MusicVideo mv => new GroupKey(
-                ProgramScheduleItemCollectionType.Artist,
+                CollectionType.Artist,
                 null,
                 null,
                 null,
                 mv.ArtistId),
-            _ => new GroupKey(ProgramScheduleItemCollectionType.Artist, null, null, null, 0)
+            _ => new GroupKey(CollectionType.Artist, null, null, null, 0)
         };
 
     private static GroupKey MediaItemKeyByAlbum(MediaItem mediaItem) =>
         mediaItem switch
         {
             Song s => new GroupKey(
-                ProgramScheduleItemCollectionType.Collection,
+                CollectionType.Collection,
                 s.SongMetadata.HeadOrNone().Map(sm => sm.Album.GetStableHashCode()).IfNone(0),
                 null,
                 null,
                 null),
             MusicVideo mv => new GroupKey(
-                ProgramScheduleItemCollectionType.Collection,
+                CollectionType.Collection,
                 mv.MusicVideoMetadata.HeadOrNone()
                     .Map(mvm => $"{mv.ArtistId}-${mvm.Album}".GetStableHashCode()).IfNone(0),
                 null,
                 null,
                 null),
-            _ => new GroupKey(ProgramScheduleItemCollectionType.Collection, 0, null, null, null)
+            _ => new GroupKey(CollectionType.Collection, 0, null, null, null)
         };
 
     private static PlaylistItem GroupToPlaylistItem(
@@ -152,7 +211,7 @@ public class MarathonHelper(IMediaCollectionRepository mediaCollectionRepository
         };
 
     private record GroupKey(
-        ProgramScheduleItemCollectionType CollectionType,
+        CollectionType CollectionType,
         int? CollectionId,
         int? MultiCollectionId,
         int? SmartCollectionId,

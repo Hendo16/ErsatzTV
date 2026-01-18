@@ -46,6 +46,8 @@ public class OtherVideoRepository : IOtherVideoRepository
             .ThenInclude(ovm => ovm.Directors)
             .Include(i => i.OtherVideoMetadata)
             .ThenInclude(ovm => ovm.Writers)
+            .Include(i => i.OtherVideoMetadata)
+            .ThenInclude(ovm => ovm.Artwork)
             .Include(ov => ov.LibraryPath)
             .ThenInclude(lp => lp.Library)
             .Include(ov => ov.MediaVersions)

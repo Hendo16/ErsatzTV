@@ -1,4 +1,4 @@
-using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Interfaces.Streaming;
 
 namespace ErsatzTV.Infrastructure.Streaming.Graphics;
 
@@ -6,13 +6,11 @@ public interface IGraphicsElement
 {
     int ZIndex { get; }
 
-    bool IsFailed { get; set; }
+    string DebugKey { get; }
 
-    Task InitializeAsync(
-        Resolution squarePixelFrameSize,
-        Resolution frameSize,
-        int frameRate,
-        CancellationToken cancellationToken);
+    bool IsFinished { get; set; }
+
+    Task InitializeAsync(GraphicsEngineContext context, CancellationToken cancellationToken);
 
     ValueTask<Option<PreparedElementImage>> PrepareImage(
         TimeSpan timeOfDay,

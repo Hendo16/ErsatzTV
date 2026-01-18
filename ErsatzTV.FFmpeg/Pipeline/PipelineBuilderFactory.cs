@@ -87,7 +87,22 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                 fontsFolder,
                 _logger),
 
-            // force software pipeline when content is HDR (and not VAAPI or NVENC or QSV)
+            HardwareAccelerationMode.Rkmpp when capabilities is not NoHardwareCapabilities => new
+                RkmppPipelineBuilder(
+                    ffmpegCapabilities,
+                    capabilities,
+                    hardwareAccelerationMode,
+                    videoInputFile,
+                    audioInputFile,
+                    watermarkInputFile,
+                    subtitleInputFile,
+                    concatInputFile,
+                    graphicsEngineInput,
+                    reportsFolder,
+                    fontsFolder,
+                    _logger),
+
+            // force software pipeline when content is HDR (and not VAAPI or NVENC or QSV or Rkmpp)
             _ when isHdrContent => new SoftwarePipelineBuilder(
                 ffmpegCapabilities,
                 HardwareAccelerationMode.None,
@@ -103,6 +118,21 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
 
             HardwareAccelerationMode.VideoToolbox when capabilities is not NoHardwareCapabilities => new
                 VideoToolboxPipelineBuilder(
+                    ffmpegCapabilities,
+                    capabilities,
+                    hardwareAccelerationMode,
+                    videoInputFile,
+                    audioInputFile,
+                    watermarkInputFile,
+                    subtitleInputFile,
+                    concatInputFile,
+                    graphicsEngineInput,
+                    reportsFolder,
+                    fontsFolder,
+                    _logger),
+
+            HardwareAccelerationMode.V4l2m2m when capabilities is not NoHardwareCapabilities => new
+                V4l2m2mPipelineBuilder(
                     ffmpegCapabilities,
                     capabilities,
                     hardwareAccelerationMode,

@@ -1,3 +1,5 @@
+using System.CommandLine.Parsing;
+using System.IO.Abstractions;
 using System.Threading.Channels;
 using ErsatzTV.Application.Channels;
 using ErsatzTV.Core;
@@ -11,28 +13,17 @@ using Channel = ErsatzTV.Core.Domain.Channel;
 
 namespace ErsatzTV.Application.Playouts;
 
-public class CreateScriptedPlayoutHandler
+public class CreateScriptedPlayoutHandler(
+    IFileSystem fileSystem,
+    ChannelWriter<IBackgroundServiceRequest> channel,
+    IDbContextFactory<TvContext> dbContextFactory)
     : IRequestHandler<CreateScriptedPlayout, Either<BaseError, CreatePlayoutResponse>>
 {
-    private readonly ChannelWriter<IBackgroundServiceRequest> _channel;
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-    private readonly ILocalFileSystem _localFileSystem;
-
-    public CreateScriptedPlayoutHandler(
-        ILocalFileSystem localFileSystem,
-        ChannelWriter<IBackgroundServiceRequest> channel,
-        IDbContextFactory<TvContext> dbContextFactory)
-    {
-        _localFileSystem = localFileSystem;
-        _channel = channel;
-        _dbContextFactory = dbContextFactory;
-    }
-
     public async Task<Either<BaseError, CreatePlayoutResponse>> Handle(
         CreateScriptedPlayout request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         Validation<BaseError, Playout> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(playout => PersistPlayout(dbContext, playout, cancellationToken));
     }
@@ -44,15 +35,15 @@ public class CreateScriptedPlayoutHandler
     {
         await dbContext.Playouts.AddAsync(playout, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
-        await _channel.WriteAsync(new BuildPlayout(playout.Id, PlayoutBuildMode.Reset), cancellationToken);
+        await channel.WriteAsync(new BuildPlayout(playout.Id, PlayoutBuildMode.Reset), cancellationToken);
         if (playout.Channel.PlayoutMode is ChannelPlayoutMode.OnDemand)
         {
-            await _channel.WriteAsync(
+            await channel.WriteAsync(
                 new TimeShiftOnDemandPlayout(playout.Id, DateTimeOffset.Now, false),
                 cancellationToken);
         }
 
-        await _channel.WriteAsync(new RefreshChannelList(), cancellationToken);
+        await channel.WriteAsync(new RefreshChannelList(), cancellationToken);
         return new CreatePlayoutResponse(playout.Id);
     }
 
@@ -88,7 +79,9 @@ public class CreateScriptedPlayoutHandler
 
     private Validation<BaseError, string> ValidateScheduleFile(CreateScriptedPlayout request)
     {
-        if (!_localFileSystem.FileExists(request.ScheduleFile))
+        var args = CommandLineParser.SplitCommandLine(request.ScheduleFile).ToList();
+        string scriptFile = args[0];
+        if (!fileSystem.File.Exists(scriptFile))
         {
             return BaseError.New("Scripted schedule does not exist!");
         }

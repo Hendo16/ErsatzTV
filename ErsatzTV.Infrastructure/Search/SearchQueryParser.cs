@@ -41,6 +41,7 @@ public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCach
             { LuceneSearchIndex.TagFullField, keywordAnalyzer },
 
             { LuceneSearchIndex.CollectionField, lowercaseKeywordAnalyzer },
+            { LuceneSearchIndex.TitleAndYearSearchField, lowercaseKeywordAnalyzer },
 
             { LuceneSearchIndex.PlotField, new StandardAnalyzer(LuceneSearchIndex.AppLuceneVersion) }
         };
@@ -48,7 +49,11 @@ public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCach
         return new PerFieldAnalyzerWrapper(defaultAnalyzer, customAnalyzers);
     }
 
-    public async Task<Query> ParseQuery(string query, string smartCollectionName, CancellationToken cancellationToken)
+    public async Task<Query> ParseQuery(
+        string query,
+        string smartCollectionName,
+        List<string> defaultFields,
+        CancellationToken cancellationToken)
     {
         string parsedQuery = query;
 
@@ -77,7 +82,8 @@ public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCach
                 if (parsedQuery == replaceResult.Query)
                 {
                     logger.LogWarning(
-                        "Failed to replace smart_collection in query; is the syntax correct? Quotes are required. Giving up...");
+                        "Failed to replace smart_collection in query; is the syntax correct? Quotes are required. Giving up on collection {Name}...",
+                        smartCollectionName);
                     break;
                 }
 
@@ -91,7 +97,7 @@ public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCach
 
         var parser = new CustomMultiFieldQueryParser(
             LuceneSearchIndex.AppLuceneVersion,
-            [LuceneSearchIndex.TitleField],
+            defaultFields.ToArray(),
             analyzerWrapper)
         {
             AllowLeadingWildcard = true
@@ -124,6 +130,12 @@ public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCach
                 foreach (string smartCollectionQuery in maybeQuery)
                 {
                     result = result.Replace(match.Value, $"({smartCollectionQuery})");
+                }
+
+                if (maybeQuery.IsNone)
+                {
+                    //logger.LogError("Cannot find nested smart collection {Name}; removing from query.", smartCollectionName);
+                    result = result.Replace(match.Value, "(type:bad_query)");
                 }
             }
 

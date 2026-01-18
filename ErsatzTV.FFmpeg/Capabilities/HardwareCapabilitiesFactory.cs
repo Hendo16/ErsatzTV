@@ -1,10 +1,12 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using CliWrap;
 using CliWrap.Buffered;
+using ErsatzTV.FFmpeg.Capabilities.Nvidia;
 using ErsatzTV.FFmpeg.Capabilities.Qsv;
 using ErsatzTV.FFmpeg.Capabilities.Vaapi;
 using ErsatzTV.FFmpeg.Capabilities.VideoToolbox;
@@ -16,13 +18,19 @@ using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.FFmpeg.Capabilities;
 
-public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
+public partial class HardwareCapabilitiesFactory(
+    IMemoryCache memoryCache,
+    IRuntimeInfo runtimeInfo,
+    ILogger<HardwareCapabilitiesFactory> logger)
+    : IHardwareCapabilitiesFactory
 {
-    private const string ArchitectureCacheKey = "ffmpeg.hardware.nvidia.architecture";
-    private const string ModelCacheKey = "ffmpeg.hardware.nvidia.model";
+    private const string CudaDeviceKey = "ffmpeg.hardware.cuda.device";
 
-    private static readonly CompositeFormat
-        VaapiCacheKeyFormat = CompositeFormat.Parse("ffmpeg.hardware.vaapi.{0}.{1}.{2}");
+    private static readonly CompositeFormat VaapiCacheKeyFormat =
+        CompositeFormat.Parse("ffmpeg.hardware.vaapi.{0}.{1}.{2}");
+
+    private static readonly CompositeFormat VaapiGenerationCacheKeyFormat =
+        CompositeFormat.Parse("ffmpeg.hardware.vaapi.generation.{0}.{1}.{2}");
 
     private static readonly CompositeFormat QsvCacheKeyFormat = CompositeFormat.Parse("ffmpeg.hardware.qsv.{0}");
     private static readonly CompositeFormat FFmpegCapabilitiesCacheKeyFormat = CompositeFormat.Parse("ffmpeg.{0}");
@@ -36,19 +44,14 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         "-f", "null", "-"
     };
 
-    private readonly ILogger<HardwareCapabilitiesFactory> _logger;
-
-    private readonly IMemoryCache _memoryCache;
-    private readonly IRuntimeInfo _runtimeInfo;
-
-    public HardwareCapabilitiesFactory(
-        IMemoryCache memoryCache,
-        IRuntimeInfo runtimeInfo,
-        ILogger<HardwareCapabilitiesFactory> logger)
+    public void ClearCache()
     {
-        _memoryCache = memoryCache;
-        _runtimeInfo = runtimeInfo;
-        _logger = logger;
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "hwaccels"));
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "decoders"));
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "filters"));
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "encoders"));
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "options"));
+        memoryCache.Remove(string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "formats"));
     }
 
     public async Task<IFFmpegCapabilities> GetFFmpegCapabilities(string ffmpegPath)
@@ -72,12 +75,16 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         IReadOnlySet<string> ffmpegOptions = await GetFFmpegOptions(ffmpegPath)
             .Map(set => set.Intersect(FFmpegKnownOption.AllOptions).ToImmutableHashSet());
 
+        IReadOnlySet<string> ffmpegDemuxFormats = await GetFFmpegFormats(ffmpegPath, "D")
+            .Map(set => set.Intersect(FFmpegKnownFormat.AllFormats).ToImmutableHashSet());
+
         return new FFmpegCapabilities(
             ffmpegHardwareAccelerations,
             ffmpegDecoders,
             ffmpegFilters,
             ffmpegEncoders,
-            ffmpegOptions);
+            ffmpegOptions,
+            ffmpegDemuxFormats);
     }
 
     public async Task<IHardwareCapabilities> GetHardwareCapabilities(
@@ -95,7 +102,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
         if (!ffmpegCapabilities.HasHardwareAcceleration(hardwareAccelerationMode))
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 "FFmpeg does not support {HardwareAcceleration} acceleration; will use software mode",
                 hardwareAccelerationMode);
 
@@ -104,11 +111,13 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
         return hardwareAccelerationMode switch
         {
-            HardwareAccelerationMode.Nvenc => await GetNvidiaCapabilities(ffmpegPath, ffmpegCapabilities),
+            HardwareAccelerationMode.Nvenc => GetNvidiaCapabilities(ffmpegCapabilities),
             HardwareAccelerationMode.Qsv => await GetQsvCapabilities(ffmpegPath, vaapiDevice),
             HardwareAccelerationMode.Vaapi => await GetVaapiCapabilities(vaapiDisplay, vaapiDriver, vaapiDevice),
-            HardwareAccelerationMode.VideoToolbox => new VideoToolboxHardwareCapabilities(ffmpegCapabilities, _logger),
+            HardwareAccelerationMode.VideoToolbox => new VideoToolboxHardwareCapabilities(ffmpegCapabilities, logger),
             HardwareAccelerationMode.Amf => new AmfHardwareCapabilities(),
+            HardwareAccelerationMode.V4l2m2m => new V4l2m2mHardwareCapabilities(ffmpegCapabilities),
+            HardwareAccelerationMode.Rkmpp => new RkmppHardwareCapabilities(),
             _ => new DefaultHardwareCapabilities()
         };
     }
@@ -120,14 +129,43 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             return string.Empty;
         }
 
-        string[] arguments =
+        try
         {
+            Option<List<CudaDevice>> maybeDevices = CudaHelper.GetDevices();
+            foreach (List<CudaDevice> devices in maybeDevices.Where(list => list.Count > 0))
+            {
+                var sb = new StringBuilder();
+                foreach (CudaDevice device in devices)
+                {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"GPU #{device.Handle} < {device.Model} > has Compute SM {device.Version.Major}.{device.Version.Minor}");
+
+                    sb.AppendLine(CudaHelper.GetDeviceDetails(device));
+                }
+
+                return sb.ToString();
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            // do nothing
+        }
+        catch (TypeInitializationException)
+        {
+            // do nothing
+        }
+
+        // if we don't have a list of cuda devices, fall back to ffmpeg check
+
+        string[] arguments =
+        [
             "-f", "lavfi",
             "-i", "nullsrc",
             "-c:v", "h264_nvenc",
             "-gpu", "list",
             "-f", "null", "-"
-        };
+        ];
 
         BufferedCommandResult result = await Cli.Wrap(ffmpegPath)
             .WithArguments(arguments)
@@ -261,13 +299,14 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         return [];
     }
 
+    [SuppressMessage("ReSharper", "InconsistentNaming")]
     public List<string> GetVideoToolboxDecoders()
     {
         var result = new List<string>();
 
         foreach (string fourCC in FourCC.AllVideoToolbox)
         {
-            if (VideoToolboxUtil.IsHardwareDecoderSupported(fourCC, _logger))
+            if (VideoToolboxUtil.IsHardwareDecoderSupported(fourCC, logger))
             {
                 result.Add(fourCC);
             }
@@ -276,7 +315,27 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         return result;
     }
 
-    public List<string> GetVideoToolboxEncoders() => VideoToolboxUtil.GetAvailableEncoders(_logger);
+    public List<string> GetVideoToolboxEncoders() => VideoToolboxUtil.GetAvailableEncoders(logger);
+
+    public void SetAviSynthInstalled(bool aviSynthInstalled)
+    {
+        var cacheKey = string.Format(
+            CultureInfo.InvariantCulture,
+            FFmpegCapabilitiesCacheKeyFormat,
+            "avisynth_installed");
+
+        memoryCache.Set(cacheKey, aviSynthInstalled);
+    }
+
+    public bool IsAviSynthInstalled()
+    {
+        var cacheKey = string.Format(
+            CultureInfo.InvariantCulture,
+            FFmpegCapabilitiesCacheKeyFormat,
+            "avisynth_installed");
+
+        return memoryCache.TryGetValue(cacheKey, out bool installed) && installed;
+    }
 
     private async Task<IReadOnlySet<string>> GetFFmpegCapabilities(
         string ffmpegPath,
@@ -284,13 +343,13 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         Func<string, Option<string>> parseLine)
     {
         var cacheKey = string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, capabilities);
-        if (_memoryCache.TryGetValue(cacheKey, out IReadOnlySet<string>? cachedCapabilities) &&
+        if (memoryCache.TryGetValue(cacheKey, out IReadOnlySet<string>? cachedCapabilities) &&
             cachedCapabilities is not null)
         {
             return cachedCapabilities;
         }
 
-        string[] arguments = { "-hide_banner", $"-{capabilities}" };
+        string[] arguments = ["-hide_banner", $"-{capabilities}"];
 
         BufferedCommandResult result = await Cli.Wrap(ffmpegPath)
             .WithArguments(arguments)
@@ -301,21 +360,25 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             ? result.StandardError
             : result.StandardOutput;
 
-        return output.Split("\n").Map(s => s.Trim())
+        var capabilitiesResult = output.Split("\n").Map(s => s.Trim())
             .Bind(l => parseLine(l))
             .ToImmutableHashSet();
+
+        memoryCache.Set(cacheKey, capabilitiesResult);
+
+        return capabilitiesResult;
     }
 
     private async Task<IReadOnlySet<string>> GetFFmpegOptions(string ffmpegPath)
     {
         var cacheKey = string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "options");
-        if (_memoryCache.TryGetValue(cacheKey, out IReadOnlySet<string>? cachedCapabilities) &&
+        if (memoryCache.TryGetValue(cacheKey, out IReadOnlySet<string>? cachedCapabilities) &&
             cachedCapabilities is not null)
         {
             return cachedCapabilities;
         }
 
-        string[] arguments = { "-hide_banner", "-h", "long" };
+        string[] arguments = ["-hide_banner", "-h", "long"];
 
         BufferedCommandResult result = await Cli.Wrap(ffmpegPath)
             .WithArguments(arguments)
@@ -326,30 +389,68 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             ? result.StandardError
             : result.StandardOutput;
 
-        return output.Split("\n").Map(s => s.Trim())
+        var capabilitiesResult = output.Split("\n").Map(s => s.Trim())
             .Bind(l => ParseFFmpegOptionLine(l))
             .ToImmutableHashSet();
+
+        memoryCache.Set(cacheKey, capabilitiesResult);
+
+        return capabilitiesResult;
+    }
+
+    private async Task<IReadOnlySet<string>> GetFFmpegFormats(string ffmpegPath, string muxDemux)
+    {
+        var cacheKey = string.Format(CultureInfo.InvariantCulture, FFmpegCapabilitiesCacheKeyFormat, "formats");
+        if (memoryCache.TryGetValue(cacheKey, out IReadOnlySet<string>? cachedCapabilities) &&
+            cachedCapabilities is not null)
+        {
+            return cachedCapabilities;
+        }
+
+        string[] arguments = ["-hide_banner", "-formats"];
+
+        BufferedCommandResult result = await Cli.Wrap(ffmpegPath)
+            .WithArguments(arguments)
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(Encoding.UTF8);
+
+        string output = string.IsNullOrWhiteSpace(result.StandardOutput)
+            ? result.StandardError
+            : result.StandardOutput;
+
+        var capabilitiesResult = output.Split("\n").Map(s => s.Trim())
+            .Bind(l => ParseFFmpegFormatLine(l))
+            .Where(tuple => tuple.Item1.Contains(muxDemux))
+            .Map(tuple => tuple.Item2)
+            .ToImmutableHashSet();
+
+        memoryCache.Set(cacheKey, capabilitiesResult);
+
+        return capabilitiesResult;
     }
 
     private static Option<string> ParseFFmpegAccelLine(string input)
     {
-        const string PATTERN = @"^([\w]+)$";
-        Match match = Regex.Match(input, PATTERN);
+        Match match = AccelRegex().Match(input);
         return match.Success ? match.Groups[1].Value : Option<string>.None;
     }
 
     private static Option<string> ParseFFmpegLine(string input)
     {
-        const string PATTERN = @"^\s*?[A-Z\.]+\s+(\w+).*";
-        Match match = Regex.Match(input, PATTERN);
+        Match match = FFmpegRegex().Match(input);
         return match.Success ? match.Groups[1].Value : Option<string>.None;
     }
 
     private static Option<string> ParseFFmpegOptionLine(string input)
     {
-        const string PATTERN = @"^-([a-z_]+)\s+.*";
-        Match match = Regex.Match(input, PATTERN);
+        Match match = OptionRegex().Match(input);
         return match.Success ? match.Groups[1].Value : Option<string>.None;
+    }
+
+    private static Option<Tuple<string, string>> ParseFFmpegFormatLine(string input)
+    {
+        Match match = FormatRegex().Match(input);
+        return match.Success ? Tuple(match.Groups[1].Value, match.Groups[2].Value) : Option<Tuple<string, string>>.None;
     }
 
     private async Task<IHardwareCapabilities> GetVaapiCapabilities(
@@ -363,41 +464,55 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             {
                 // this shouldn't really happen
 
-                _logger.LogError(
+                logger.LogError(
                     "Cannot detect VAAPI capabilities without device {Device}",
                     vaapiDevice);
 
                 return new NoHardwareCapabilities();
             }
 
-            string display = vaapiDisplay.IfNone("drm");
-            string driver = vaapiDriver.IfNone(string.Empty);
-            string device = vaapiDevice.IfNone(string.Empty);
+            string display = await vaapiDisplay.IfNoneAsync("drm");
+            string driver = await vaapiDriver.IfNoneAsync(string.Empty);
+            string device = await vaapiDevice.IfNoneAsync(string.Empty);
+            string generation = string.Empty;
             var cacheKey = string.Format(CultureInfo.InvariantCulture, VaapiCacheKeyFormat, display, driver, device);
+            var generationCacheKey = string.Format(
+                CultureInfo.InvariantCulture,
+                VaapiGenerationCacheKeyFormat,
+                display,
+                driver,
+                device);
 
-            if (_memoryCache.TryGetValue(cacheKey, out List<VaapiProfileEntrypoint>? profileEntrypoints) &&
+            if (memoryCache.TryGetValue(cacheKey, out List<VaapiProfileEntrypoint>? profileEntrypoints) &&
                 profileEntrypoints is not null)
             {
-                return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
+                if (memoryCache.TryGetValue(generationCacheKey, out string? cachedGeneration) &&
+                    cachedGeneration is not null)
+                {
+                    generation = cachedGeneration;
+                }
+
+                return new VaapiHardwareCapabilities(profileEntrypoints, generation, logger);
             }
 
             Option<string> output = await GetVaapiOutput(display, vaapiDriver, device);
             if (output.IsNone)
             {
-                _logger.LogWarning("Unable to determine VAAPI capabilities; please install vainfo");
+                logger.LogWarning("Unable to determine VAAPI capabilities; please install vainfo");
                 return new DefaultHardwareCapabilities();
             }
 
             foreach (string o in output)
             {
                 profileEntrypoints = VaapiCapabilityParser.ParseFull(o);
+                generation = VaapiCapabilityParser.ParseGeneration(o);
             }
 
             if (profileEntrypoints is not null && profileEntrypoints.Count != 0)
             {
                 if (display == "drm")
                 {
-                    _logger.LogDebug(
+                    logger.LogDebug(
                         "Detected {Count} VAAPI profile entrypoints using {Driver} {Device}",
                         profileEntrypoints.Count,
                         driver,
@@ -405,26 +520,27 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
                 }
                 else
                 {
-                    _logger.LogDebug(
+                    logger.LogDebug(
                         "Detected {Count} VAAPI profile entrypoints using {Display} {Driver}",
                         profileEntrypoints.Count,
                         display,
                         driver);
                 }
 
-                _memoryCache.Set(cacheKey, profileEntrypoints);
-                return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
+                memoryCache.Set(cacheKey, profileEntrypoints);
+                memoryCache.Set(generationCacheKey, generation);
+                return new VaapiHardwareCapabilities(profileEntrypoints, generation, logger);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 ex,
                 "Error detecting VAAPI capabilities; some hardware accelerated features will be unavailable");
             return new NoHardwareCapabilities();
         }
 
-        _logger.LogWarning(
+        logger.LogWarning(
             "Error detecting VAAPI capabilities; some hardware accelerated features will be unavailable");
 
         return new NoHardwareCapabilities();
@@ -434,52 +550,63 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
     {
         try
         {
-            if (_runtimeInfo.IsOSPlatform(OSPlatform.Linux) && qsvDevice.IsNone)
+            if (runtimeInfo.IsOSPlatform(OSPlatform.Linux) && qsvDevice.IsNone)
             {
                 // this shouldn't really happen
-                _logger.LogError("Cannot detect QSV capabilities without device {Device}", qsvDevice);
+                logger.LogError("Cannot detect QSV capabilities without device {Device}", qsvDevice);
                 return new NoHardwareCapabilities();
             }
 
-            string device = qsvDevice.IfNone(string.Empty);
+            string device = await qsvDevice.IfNoneAsync(string.Empty);
             var cacheKey = string.Format(CultureInfo.InvariantCulture, QsvCacheKeyFormat, device);
 
-            if (_memoryCache.TryGetValue(cacheKey, out List<VaapiProfileEntrypoint>? profileEntrypoints) &&
+            if (memoryCache.TryGetValue(cacheKey, out List<VaapiProfileEntrypoint>? profileEntrypoints) &&
                 profileEntrypoints is not null)
             {
-                return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
+                return new VaapiHardwareCapabilities(profileEntrypoints, string.Empty, logger);
             }
 
             QsvOutput output = await GetQsvOutput(ffmpegPath, qsvDevice);
             if (output.ExitCode != 0)
             {
-                _logger.LogWarning("QSV test failed; some hardware accelerated features will be unavailable");
+                logger.LogWarning("QSV test failed; some hardware accelerated features will be unavailable");
                 return new NoHardwareCapabilities();
             }
 
-            if (_runtimeInfo.IsOSPlatform(OSPlatform.Linux))
+            if (runtimeInfo.IsOSPlatform(OSPlatform.Linux))
             {
-                Option<string> vaapiOutput = await GetVaapiOutput("drm", Option<string>.None, device);
-                if (vaapiOutput.IsNone)
+                if (!memoryCache.TryGetValue("ffmpeg.vaapi_displays", out List<string>? vaapiDisplays))
                 {
-                    _logger.LogWarning("Unable to determine QSV capabilities; please install vainfo");
-                    return new DefaultHardwareCapabilities();
+                    vaapiDisplays = ["drm"];
                 }
 
-                foreach (string o in vaapiOutput)
-                {
-                    profileEntrypoints = VaapiCapabilityParser.ParseFull(o);
-                }
+                vaapiDisplays ??= [];
+                vaapiDisplays = vaapiDisplays.OrderBy(s => s).ToList();
 
-                if (profileEntrypoints is not null && profileEntrypoints.Count != 0)
+                foreach (string vaapiDisplay in vaapiDisplays)
                 {
-                    _logger.LogDebug(
-                        "Detected {Count} VAAPI profile entrypoints using QSV device {Device}",
-                        profileEntrypoints.Count,
-                        device);
+                    Option<string> vaapiOutput = await GetVaapiOutput(vaapiDisplay, Option<string>.None, device);
+                    if (vaapiOutput.IsNone)
+                    {
+                        logger.LogWarning("Unable to determine QSV capabilities; please install vainfo");
+                        return new DefaultHardwareCapabilities();
+                    }
 
-                    _memoryCache.Set(cacheKey, profileEntrypoints);
-                    return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
+                    foreach (string o in vaapiOutput)
+                    {
+                        profileEntrypoints = VaapiCapabilityParser.ParseFull(o);
+                    }
+
+                    if (profileEntrypoints is not null && profileEntrypoints.Count != 0)
+                    {
+                        logger.LogDebug(
+                            "Detected {Count} VAAPI profile entrypoints using QSV device {Device}",
+                            profileEntrypoints.Count,
+                            device);
+
+                        memoryCache.Set(cacheKey, profileEntrypoints);
+                        return new VaapiHardwareCapabilities(profileEntrypoints, string.Empty, logger);
+                    }
                 }
             }
 
@@ -488,53 +615,59 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(
+            logger.LogWarning(
                 ex,
                 "Error detecting QSV capabilities; some hardware accelerated features will be unavailable");
             return new NoHardwareCapabilities();
         }
     }
 
-    private async Task<IHardwareCapabilities> GetNvidiaCapabilities(
-        string ffmpegPath,
-        IFFmpegCapabilities ffmpegCapabilities)
+    private IHardwareCapabilities GetNvidiaCapabilities(IFFmpegCapabilities ffmpegCapabilities)
     {
-        if (_memoryCache.TryGetValue(ArchitectureCacheKey, out int cachedArchitecture)
-            && _memoryCache.TryGetValue(ModelCacheKey, out string? cachedModel)
-            && cachedModel is not null)
+        if (memoryCache.TryGetValue(CudaDeviceKey, out CudaDevice? cudaDevice) && cudaDevice is not null)
         {
-            return new NvidiaHardwareCapabilities(
-                cachedArchitecture,
-                cachedModel,
-                ffmpegCapabilities,
-                _logger);
+            return new NvidiaHardwareCapabilities(cudaDevice, ffmpegCapabilities, logger);
         }
 
-        string output = await GetNvidiaOutput(ffmpegPath);
-
-        Option<string> maybeLine = Optional(output.Split("\n").FirstOrDefault(x => x.Contains("GPU")));
-        foreach (string line in maybeLine)
+        try
         {
-            const string ARCHITECTURE_PATTERN = @"SM\s+(\d+\.\d+)";
-            Match match = Regex.Match(line, ARCHITECTURE_PATTERN);
-            if (match.Success && int.TryParse(match.Groups[1].Value.Replace(".", string.Empty), out int architecture))
+            Option<List<CudaDevice>> maybeDevices = CudaHelper.GetDevices();
+            foreach (CudaDevice firstDevice in maybeDevices.Map(list => list.HeadOrNone()))
             {
-                const string MODEL_PATTERN = @"(GTX\s+[0-9a-zA-Z]+[\sTtIi]+)";
-                Match modelMatch = Regex.Match(line, MODEL_PATTERN);
-                string model = modelMatch.Success ? modelMatch.Groups[1].Value.Trim() : "unknown";
-                _logger.LogDebug(
-                    "Detected NVIDIA GPU model {Model} architecture SM {Architecture}",
-                    model,
-                    architecture);
-                _memoryCache.Set(ArchitectureCacheKey, architecture);
-                _memoryCache.Set(ModelCacheKey, model);
-                return new NvidiaHardwareCapabilities(architecture, model, ffmpegCapabilities, _logger);
+                logger.LogDebug(
+                    "Detected NVIDIA GPU model {Model} architecture SM {Major}.{Minor}",
+                    firstDevice.Model,
+                    firstDevice.Version.Major,
+                    firstDevice.Version.Minor);
+
+                memoryCache.Set(CudaDeviceKey, firstDevice);
+                return new NvidiaHardwareCapabilities(firstDevice, ffmpegCapabilities, logger);
             }
         }
+        catch (FileNotFoundException)
+        {
+            // do nothing
+        }
+        catch (TypeInitializationException)
+        {
+            // do nothing
+        }
 
-        _logger.LogWarning(
+        logger.LogWarning(
             "Error detecting NVIDIA GPU capabilities; some hardware accelerated features will be unavailable");
 
         return new NoHardwareCapabilities();
     }
+
+    [GeneratedRegex(@"^([\w]+)$")]
+    private static partial Regex AccelRegex();
+
+    [GeneratedRegex(@"^\s*?[A-Z\.]+\s+(\w+).*")]
+    private static partial Regex FFmpegRegex();
+
+    [GeneratedRegex(@"^-([a-z_]+)\s+.*")]
+    private static partial Regex OptionRegex();
+
+    [GeneratedRegex(@"([DE]+)\s+(\w+)")]
+    private static partial Regex FormatRegex();
 }

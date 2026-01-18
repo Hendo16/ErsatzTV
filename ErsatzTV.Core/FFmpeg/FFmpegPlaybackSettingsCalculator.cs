@@ -29,18 +29,18 @@ namespace ErsatzTV.Core.FFmpeg;
 
 public static class FFmpegPlaybackSettingsCalculator
 {
-    private static readonly List<string> CommonFormatFlags = new()
-    {
+    private static readonly List<string> CommonFormatFlags =
+    [
         "+genpts",
         "+discardcorrupt",
         "+igndts"
-    };
+    ];
 
-    private static readonly List<string> SegmenterFormatFlags = new()
-    {
+    private static readonly List<string> SegmenterFormatFlags =
+    [
         "+discardcorrupt",
         "+igndts"
-    };
+    ];
 
     public static FFmpegPlaybackSettings CalculateSettings(
         StreamingMode streamingMode,
@@ -50,10 +50,9 @@ public static class FFmpegPlaybackSettingsCalculator
         DateTimeOffset start,
         DateTimeOffset now,
         TimeSpan inPoint,
-        TimeSpan outPoint,
         bool hlsRealtime,
         StreamInputKind streamInputKind,
-        Option<int> targetFramerate)
+        Option<FrameRate> targetFramerate)
     {
         var result = new FFmpegPlaybackSettings
         {
@@ -65,7 +64,6 @@ public static class FFmpegPlaybackSettingsCalculator
             RealtimeOutput = streamingMode switch
             {
                 StreamingMode.HttpLiveStreamingSegmenter => hlsRealtime,
-                StreamingMode.HttpLiveStreamingSegmenterV2 => hlsRealtime,
                 _ => true
             },
             ThreadCount = ffmpegProfile.ThreadCount
@@ -85,13 +83,21 @@ public static class FFmpegPlaybackSettingsCalculator
                 break;
             case StreamingMode.TransportStreamHybrid:
             case StreamingMode.HttpLiveStreamingSegmenter:
-            case StreamingMode.HttpLiveStreamingSegmenterV2:
             case StreamingMode.TransportStream:
                 result.HardwareAcceleration = ffmpegProfile.HardwareAcceleration;
 
-                if (NeedToScale(ffmpegProfile, videoVersion) && videoVersion.SampleAspectRatio != "0:0")
+                string sampleAspectRatio = videoVersion.SampleAspectRatio;
+                if (sampleAspectRatio == "0:0")
                 {
-                    DisplaySize scaledSize = CalculateScaledSize(ffmpegProfile, videoVersion);
+                    sampleAspectRatio = AspectRatio.CalculateSAR(
+                        videoVersion.Width,
+                        videoVersion.Height,
+                        videoVersion.DisplayAspectRatio);
+                }
+
+                if (NeedToScale(ffmpegProfile, videoVersion, sampleAspectRatio))
+                {
+                    DisplaySize scaledSize = CalculateScaledSize(ffmpegProfile, videoVersion, sampleAspectRatio);
                     if (!scaledSize.IsSameSizeAs(videoVersion))
                     {
                         int fixedHeight = scaledSize.Height + scaledSize.Height % 2;
@@ -156,48 +162,19 @@ public static class FFmpegPlaybackSettingsCalculator
                 result.AudioBufferSize = ffmpegProfile.AudioBufferSize;
                 result.AudioChannels = ffmpegProfile.AudioChannels;
                 result.AudioSampleRate = ffmpegProfile.AudioSampleRate;
-                result.AudioDuration = outPoint - inPoint;
+                result.PadAudio = true;
                 result.NormalizeLoudnessMode = ffmpegProfile.NormalizeLoudnessMode;
+                result.TargetLoudness = ffmpegProfile.NormalizeLoudnessMode is NormalizeLoudnessMode.LoudNorm
+                    ? Optional(ffmpegProfile.TargetLoudness)
+                    : Option<double>.None;
 
-                result.Deinterlace = ffmpegProfile.DeinterlaceVideo == true &&
-                                     videoVersion.VideoScanKind == VideoScanKind.Interlaced;
+                result.Deinterlace = ffmpegProfile.DeinterlaceVideo == true;
 
                 break;
         }
 
         return result;
     }
-
-    public static FFmpegPlaybackSettings CalculateConcatSegmenterSettings(
-        FFmpegProfile ffmpegProfile,
-        Option<int> targetFramerate) =>
-        new()
-        {
-            FormatFlags = CommonFormatFlags,
-            RealtimeOutput = false,
-            ThreadCount = ffmpegProfile.ThreadCount,
-            HardwareAcceleration = ffmpegProfile.HardwareAcceleration,
-            FrameRate = targetFramerate,
-            VideoTrackTimeScale = 90000,
-            VideoFormat = ffmpegProfile.VideoFormat,
-            VideoBitrate = ffmpegProfile.VideoBitrate,
-            VideoBufferSize = ffmpegProfile.VideoBufferSize,
-            TonemapAlgorithm = ffmpegProfile.TonemapAlgorithm,
-            VideoDecoder = null,
-            PixelFormat = ffmpegProfile.BitDepth switch
-            {
-                FFmpegProfileBitDepth.TenBit when ffmpegProfile.VideoFormat != FFmpegProfileVideoFormat.Mpeg2Video
-                    => new PixelFormatYuv420P10Le(),
-                _ => new PixelFormatYuv420P()
-            },
-            AudioFormat = ffmpegProfile.AudioFormat,
-            AudioBitrate = ffmpegProfile.AudioBitrate,
-            AudioBufferSize = ffmpegProfile.AudioBufferSize,
-            AudioChannels = ffmpegProfile.AudioChannels,
-            AudioSampleRate = ffmpegProfile.AudioSampleRate,
-            NormalizeLoudnessMode = ffmpegProfile.NormalizeLoudnessMode,
-            Deinterlace = false
-        };
 
     public static FFmpegPlaybackSettings CalculateErrorSettings(
         StreamingMode streamingMode,
@@ -218,18 +195,17 @@ public static class FFmpegPlaybackSettingsCalculator
             RealtimeOutput = streamingMode switch
             {
                 StreamingMode.HttpLiveStreamingSegmenter => hlsRealtime,
-                StreamingMode.HttpLiveStreamingSegmenterV2 => hlsRealtime,
                 _ => true
             },
             VideoTrackTimeScale = 90000,
-            FrameRate = 24
+            FrameRate = FrameRate.DefaultFrameRate
         };
 
-    private static bool NeedToScale(FFmpegProfile ffmpegProfile, MediaVersion version) =>
-        IsIncorrectSize(ffmpegProfile.Resolution, version) ||
-        IsTooLarge(ffmpegProfile.Resolution, version) ||
-        IsOddSize(version) ||
-        TooSmallToCrop(ffmpegProfile, version);
+    private static bool NeedToScale(FFmpegProfile ffmpegProfile, MediaVersion version, string sampleAspectRatio) =>
+        (IsIncorrectSize(ffmpegProfile.Resolution, version) ||
+         IsTooLarge(ffmpegProfile.Resolution, version) ||
+         IsOddSize(version) ||
+         TooSmallToCrop(ffmpegProfile, version)) && sampleAspectRatio != "0:0";
 
     private static bool IsIncorrectSize(Resolution desiredResolution, MediaVersion version) =>
         IsAnamorphic(version) ||
@@ -253,14 +229,17 @@ public static class FFmpegPlaybackSettingsCalculator
         return version.Height < ffmpegProfile.Resolution.Height || version.Width < ffmpegProfile.Resolution.Width;
     }
 
-    private static DisplaySize CalculateScaledSize(FFmpegProfile ffmpegProfile, MediaVersion version)
+    private static DisplaySize CalculateScaledSize(
+        FFmpegProfile ffmpegProfile,
+        MediaVersion version,
+        string sampleAspectRatio)
     {
-        DisplaySize sarSize = SARSize(version);
-        int p = version.Width * sarSize.Width;
-        int q = version.Height * sarSize.Height;
+        (double sarWidth, double sarHeight) = SARSize(sampleAspectRatio);
+        var p = (int)Math.Round(version.Width * sarWidth);
+        var q = (int)Math.Round(version.Height * sarHeight);
         int g = Gcd(q, p);
-        p = p / g;
-        q = q / g;
+        p /= g;
+        q /= g;
         Resolution targetSize = ffmpegProfile.Resolution;
         int hw1 = targetSize.Width;
         int hh1 = hw1 * q / p;
@@ -319,11 +298,10 @@ public static class FFmpegPlaybackSettingsCalculator
         return version.DisplayAspectRatio != $"{version.Width}:{version.Height}";
     }
 
-    private static DisplaySize SARSize(MediaVersion version)
+    private static (double, double) SARSize(string sampleAspectRatio)
     {
-        string[] split = version.SampleAspectRatio.Split(":");
-        return new DisplaySize(
-            int.Parse(split[0], CultureInfo.InvariantCulture),
-            int.Parse(split[1], CultureInfo.InvariantCulture));
+        string[] split = sampleAspectRatio.Split(":");
+        return (double.Parse(split[0], CultureInfo.InvariantCulture),
+            double.Parse(split[1], CultureInfo.InvariantCulture));
     }
 }

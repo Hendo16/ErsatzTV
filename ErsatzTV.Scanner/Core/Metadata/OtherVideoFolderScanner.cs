@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -8,8 +9,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Images;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.FFmpeg;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
@@ -21,15 +22,19 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
     private readonly IClient _client;
     private readonly ILibraryRepository _libraryRepository;
     private readonly ILocalChaptersProvider _localChaptersProvider;
+    private readonly IMetadataRepository _metadataRepository;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
     private readonly ILogger<OtherVideoFolderScanner> _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
-    private readonly IMediator _mediator;
     private readonly IOtherVideoRepository _otherVideoRepository;
 
     public OtherVideoFolderScanner(
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalMetadataProvider localMetadataProvider,
@@ -37,7 +42,6 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
-        IMediator mediator,
         IOtherVideoRepository otherVideoRepository,
         ILibraryRepository libraryRepository,
         IMediaItemRepository mediaItemRepository,
@@ -45,7 +49,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         ITempFilePool tempFilePool,
         IClient client,
         ILogger<OtherVideoFolderScanner> logger) : base(
-        localFileSystem,
+        fileSystem,
         localStatisticsProvider,
         metadataRepository,
         mediaItemRepository,
@@ -55,11 +59,13 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         client,
         logger)
     {
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _localMetadataProvider = localMetadataProvider;
         _localSubtitlesProvider = localSubtitlesProvider;
         _localChaptersProvider = localChaptersProvider;
-        _mediator = mediator;
+        _metadataRepository = metadataRepository;
         _otherVideoRepository = otherVideoRepository;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
@@ -121,14 +127,12 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
                 }
 
                 decimal percentCompletion = (decimal)foldersCompleted / (foldersCompleted + folderQueue.Count);
-                await _mediator.Publish(
-                    new ScannerProgressUpdate(
-                        libraryPath.LibraryId,
-                        null,
+                if (!await _scannerProxy.UpdateProgress(
                         progressMin + percentCompletion * progressSpread,
-                        Array.Empty<int>(),
-                        Array.Empty<int>()),
-                    cancellationToken);
+                        cancellationToken))
+                {
+                    return new ScanCanceled();
+                }
 
                 string otherVideoFolder = folderQueue.Dequeue();
                 Option<int> maybeParentFolder =
@@ -205,14 +209,10 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
                     {
                         if (result.IsAdded || result.IsUpdated)
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(
-                                    libraryPath.LibraryId,
-                                    null,
-                                    null,
-                                    [result.Item.Id],
-                                    Array.Empty<int>()),
-                                cancellationToken);
+                            if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
                     }
                 }
@@ -226,31 +226,24 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
 
             foreach (string path in await _otherVideoRepository.FindOtherVideoPaths(libraryPath))
             {
-                if (!_localFileSystem.FileExists(path))
+                if (!_fileSystem.File.Exists(path))
                 {
                     _logger.LogInformation("Flagging missing other video at {Path}", path);
                     List<int> otherVideoIds = await FlagFileNotFound(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            otherVideoIds.ToArray(),
-                            Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems(otherVideoIds.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
+
                 }
                 else if (Path.GetFileName(path).StartsWith("._", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation("Removing dot underscore file at {Path}", path);
                     List<int> otherVideoIds = await _otherVideoRepository.DeleteByPath(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(
-                            libraryPath.LibraryId,
-                            null,
-                            null,
-                            Array.Empty<int>(),
-                            otherVideoIds.ToArray()),
-                        cancellationToken);
+                    if (!await _scannerProxy.RemoveMediaItems(otherVideoIds.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to remove media items from scanner process");
+                    }
                 }
             }
 
@@ -287,7 +280,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
             string path = otherVideo.MediaVersions.Head().MediaFiles.Head().Path;
 
             Option<string> maybeNfoFile = new List<string> { Path.ChangeExtension(path, "nfo") }
-                .Filter(_localFileSystem.FileExists)
+                .Filter(_fileSystem.File.Exists)
                 .HeadOrNone();
 
             if (maybeNfoFile.IsNone)
@@ -368,11 +361,18 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         {
             OtherVideo otherVideo = result.Item;
 
-            Option<string> maybeThumbnail = LocateThumbnail(otherVideo);
-            foreach (string thumbnailFile in maybeThumbnail)
+            foreach (OtherVideoMetadata metadata in otherVideo.OtherVideoMetadata.HeadOrNone())
             {
-                OtherVideoMetadata metadata = otherVideo.OtherVideoMetadata.Head();
-                await RefreshArtwork(thumbnailFile, metadata, ArtworkKind.Thumbnail, None, None, cancellationToken);
+                Option<string> maybeThumbnail = LocateThumbnail(otherVideo);
+                foreach (string thumbnailFile in maybeThumbnail)
+                {
+                    await RefreshArtwork(thumbnailFile, metadata, ArtworkKind.Thumbnail, None, None, cancellationToken);
+                }
+
+                if (maybeThumbnail.IsNone && metadata.Artwork.Any(a => a.ArtworkKind is ArtworkKind.Thumbnail))
+                {
+                    await _metadataRepository.RemoveArtworkWithKind(metadata, ArtworkKind.Thumbnail);
+                }
             }
 
             return result;
@@ -389,7 +389,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         string path = otherVideo.MediaVersions.Head().MediaFiles.Head().Path;
         return ImageFileExtensions
             .Map(ext => Path.ChangeExtension(path, ext))
-            .Filter(f => _localFileSystem.FileExists(f))
+            .Filter(f => _fileSystem.File.Exists(f))
             .HeadOrNone();
     }
 }

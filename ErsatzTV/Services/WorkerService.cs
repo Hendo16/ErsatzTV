@@ -3,6 +3,7 @@ using System.Threading.Channels;
 using Bugsnag;
 using ErsatzTV.Application;
 using ErsatzTV.Application.Channels;
+using ErsatzTV.Application.FFmpeg;
 using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Application.MediaCollections;
@@ -52,6 +53,9 @@ public class WorkerService : BackgroundService
 
                     switch (request)
                     {
+                        case RefreshFFmpegCapabilities refreshFFmpegCapabilities:
+                            await mediator.Send(refreshFFmpegCapabilities, stoppingToken);
+                            break;
                         case RefreshChannelList refreshChannelList:
                             await mediator.Send(refreshChannelList, stoppingToken);
                             break;
@@ -80,6 +84,9 @@ public class WorkerService : BackgroundService
                         }
                         case CheckForOverlappingPlayoutItems checkForOverlappingPlayoutItems:
                             await mediator.Send(checkForOverlappingPlayoutItems, stoppingToken);
+                            break;
+                        case InsertPlayoutGaps insertPlayoutGaps:
+                            await mediator.Send(insertPlayoutGaps, stoppingToken);
                             break;
                         case TimeShiftOnDemandPlayout timeShiftOnDemandPlayout:
                             await mediator.Send(timeShiftOnDemandPlayout, stoppingToken);
@@ -113,6 +120,9 @@ public class WorkerService : BackgroundService
 #if !DEBUG_NO_SYNC
                         case ExtractEmbeddedSubtitles extractEmbeddedSubtitles:
                             await mediator.Send(extractEmbeddedSubtitles, stoppingToken);
+                            break;
+                        case ExtractEmbeddedShowSubtitles extractEmbeddedShowSubtitles:
+                            await mediator.Send(extractEmbeddedShowSubtitles, stoppingToken);
                             break;
 #endif
                         case ReleaseMemory aggressivelyReleaseMemory:

@@ -1,4 +1,5 @@
 ﻿using ErsatzTV.Application.Filler;
+using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Watermarks;
@@ -14,13 +15,20 @@ public abstract record ProgramScheduleItemViewModel(
     TimeSpan? StartTime,
     FixedStartTimeBehavior? FixedStartTimeBehavior,
     PlayoutMode PlayoutMode,
-    ProgramScheduleItemCollectionType CollectionType,
+    CollectionType CollectionType,
     MediaCollectionViewModel Collection,
     MultiCollectionViewModel MultiCollection,
     SmartCollectionViewModel SmartCollection,
+    RerunCollectionViewModel RerunCollection,
     PlaylistViewModel Playlist,
     NamedMediaItemViewModel MediaItem,
+    string SearchTitle,
+    string SearchQuery,
     PlaybackOrder PlaybackOrder,
+    MarathonGroupBy MarathonGroupBy,
+    bool MarathonShuffleGroups,
+    bool MarathonShuffleItems,
+    int? MarathonBatchSize,
     FillWithGroupMode FillWithGroupMode,
     string CustomTitle,
     GuideMode GuideMode,
@@ -30,6 +38,7 @@ public abstract record ProgramScheduleItemViewModel(
     FillerPresetViewModel TailFiller,
     FillerPresetViewModel FallbackFiller,
     List<WatermarkViewModel> Watermarks,
+    List<GraphicsElementViewModel> GraphicsElements,
     string PreferredAudioLanguageCode,
     string PreferredAudioTitle,
     string PreferredSubtitleLanguageCode,
@@ -37,19 +46,23 @@ public abstract record ProgramScheduleItemViewModel(
 {
     public string Name => CollectionType switch
     {
-        ProgramScheduleItemCollectionType.Collection => Collection?.Name,
-        ProgramScheduleItemCollectionType.TelevisionShow =>
+        CollectionType.Collection => Collection?.Name,
+        CollectionType.TelevisionShow =>
             MediaItem?.Name, // $"{TelevisionShow?.Title} ({TelevisionShow?.Year})",
-        ProgramScheduleItemCollectionType.TelevisionSeason =>
+        CollectionType.TelevisionSeason =>
             MediaItem?.Name, // $"{TelevisionSeason?.Title} ({TelevisionSeason?.Plot})",
-        ProgramScheduleItemCollectionType.Artist =>
+        CollectionType.Artist =>
             MediaItem?.Name,
-        ProgramScheduleItemCollectionType.MultiCollection =>
+        CollectionType.MultiCollection =>
             MultiCollection?.Name,
-        ProgramScheduleItemCollectionType.SmartCollection =>
+        CollectionType.SmartCollection =>
             SmartCollection?.Name,
-        ProgramScheduleItemCollectionType.Playlist =>
+        CollectionType.SearchQuery =>
+            string.IsNullOrWhiteSpace(SearchTitle) ? SearchQuery : SearchTitle,
+        CollectionType.Playlist =>
             Playlist?.Name,
+        CollectionType.RerunFirstRun or CollectionType.RerunRerun =>
+            RerunCollection?.Name,
         _ => string.Empty
     };
 }

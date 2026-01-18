@@ -13,6 +13,7 @@ public class Playout
     public List<ProgramScheduleAlternate> ProgramScheduleAlternates { get; set; }
     public PlayoutScheduleKind ScheduleKind { get; set; }
     public List<PlayoutItem> Items { get; set; }
+    public List<PlayoutGap> Gaps { get; set; }
     public PlayoutAnchor Anchor { get; set; }
     public List<PlayoutProgramScheduleAnchor> ProgramScheduleAnchors { get; set; }
     public List<PlayoutScheduleItemFillGroupIndex> FillGroupIndices { get; set; }
@@ -23,4 +24,5 @@ public class Playout
     public int? DecoId { get; set; }
     public Deco Deco { get; set; }
     public DateTimeOffset? OnDemandCheckpoint { get; set; }
+    public PlayoutBuildStatus BuildStatus { get; set; }
 }

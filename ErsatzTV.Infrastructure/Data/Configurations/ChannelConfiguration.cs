@@ -13,6 +13,10 @@ public class ChannelConfiguration : IEntityTypeConfiguration<Channel>
         builder.HasIndex(c => c.Number)
             .IsUnique();
 
+        builder.Property(c => c.Name)
+            .HasMaxLength(50)
+            .HasColumnType("varchar(50)");
+
         builder.Property(c => c.IsEnabled)
             .HasDefaultValue(true);
 
@@ -43,5 +47,11 @@ public class ChannelConfiguration : IEntityTypeConfiguration<Channel>
         builder.Property(c => c.Group)
             .IsRequired()
             .HasDefaultValue("ErsatzTV");
+
+        builder.HasOne(i => i.MirrorSourceChannel)
+            .WithMany()
+            .HasForeignKey(i => i.MirrorSourceChannelId)
+            .OnDelete(DeleteBehavior.SetNull)
+            .IsRequired(false);
     }
 }

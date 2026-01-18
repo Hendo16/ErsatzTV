@@ -1,10 +1,9 @@
 using ErsatzTV.FFmpeg.State;
 using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
 
 namespace ErsatzTV.Core.Graphics;
 
-public class ImageGraphicsElement
+public class ImageGraphicsElement : BaseGraphicsElement
 {
     public string Image { get; set; }
 
@@ -36,27 +35,6 @@ public class ImageGraphicsElement
     [YamlMember(Alias = "scale_width_percent", ApplyNamingConventions = false)]
     public double? ScaleWidthPercent { get; set; }
 
-    public static async Task<Option<ImageGraphicsElement>> FromFile(string fileName)
-    {
-        try
-        {
-            string yaml = await File.ReadAllTextAsync(fileName);
-
-            // TODO: validate schema
-            // if (await yamlScheduleValidator.ValidateSchedule(yaml, isImport) == false)
-            // {
-            //     return Option<YamlPlayoutDefinition>.None;
-            // }
-
-            IDeserializer deserializer = new DeserializerBuilder()
-                .WithNamingConvention(CamelCaseNamingConvention.Instance)
-                .Build();
-
-            return deserializer.Deserialize<ImageGraphicsElement>(yaml);
-        }
-        catch (Exception)
-        {
-            return Option<ImageGraphicsElement>.None;
-        }
-    }
+    [YamlMember(Alias = "place_within_source_content", ApplyNamingConventions = false)]
+    public bool PlaceWithinSourceContent { get; set; }
 }

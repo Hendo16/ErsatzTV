@@ -1,18 +1,19 @@
-﻿using System.Diagnostics;
-using System.IO.Pipelines;
-using System.Text;
+﻿using System.CommandLine.Parsing;
+using System.Diagnostics;
 using CliWrap;
 using ErsatzTV.Application.Emby;
 using ErsatzTV.Application.Jellyfin;
 using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Plex;
 using ErsatzTV.Application.Streaming;
+using ErsatzTV.Application.Subtitles;
 using ErsatzTV.Application.Subtitles.Queries;
 using ErsatzTV.Core;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
-using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Extensions;
+using ErsatzTV.FFmpeg;
 using Flurl;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -21,21 +22,17 @@ namespace ErsatzTV.Controllers;
 
 [ApiController]
 [ApiExplorerSettings(IgnoreApi = true)]
-public class InternalController : ControllerBase
+public class InternalController : StreamingControllerBase
 {
-    private readonly IFFmpegSegmenterService _ffmpegSegmenterService;
-    private readonly IGraphicsEngine _graphicsEngine;
     private readonly ILogger<InternalController> _logger;
     private readonly IMediator _mediator;
 
     public InternalController(
-        IFFmpegSegmenterService ffmpegSegmenterService,
         IGraphicsEngine graphicsEngine,
         IMediator mediator,
         ILogger<InternalController> logger)
+        : base(graphicsEngine, logger)
     {
-        _ffmpegSegmenterService = ffmpegSegmenterService;
-        _graphicsEngine = graphicsEngine;
         _mediator = mediator;
         _logger = logger;
     }
@@ -47,19 +44,7 @@ public class InternalController : ControllerBase
             .ToActionResult();
 
     [HttpGet("ffmpeg/stream/{channelNumber}")]
-    public async Task<IActionResult> GetStream(
-        string channelNumber,
-        [FromQuery]
-        string mode = "mixed")
-    {
-        switch (mode)
-        {
-            case "segmenter-v2":
-                return await GetSegmenterV2Stream(channelNumber);
-            default:
-                return await GetTsLegacyStream(channelNumber, mode);
-        }
-    }
+    public Task<IActionResult> GetStream(string channelNumber) => GetTsLegacyStream(channelNumber);
 
     [HttpGet("ffmpeg/remote-stream/{remoteStreamId}")]
     public async Task<IActionResult> GetRemoteStream(int remoteStreamId, CancellationToken cancellationToken)
@@ -76,11 +61,13 @@ public class InternalController : ControllerBase
 
             if (!string.IsNullOrWhiteSpace(remoteStream.Script))
             {
-                string[] split = remoteStream.Script.Split(" ");
-                if (split.Length > 0)
+                var split = CommandLineParser.SplitCommandLine(remoteStream.Script).ToList();
+                if (split.Count > 0)
                 {
+                    _logger.LogDebug("Remote stream script: {Arguments}", split);
+
                     Command command = Cli.Wrap(split.Head());
-                    if (split.Length > 1)
+                    if (split.Count > 1)
                     {
                         command = command.WithArguments(split.Tail());
                     }
@@ -202,21 +189,23 @@ public class InternalController : ControllerBase
     [HttpGet("/media/subtitle/{id:int}")]
     public async Task<IActionResult> GetSubtitle(int id, [FromQuery] long? seekToMs)
     {
-        Either<BaseError, string> maybePath = await _mediator.Send(new GetSubtitlePathById(id));
+        Either<BaseError, SubtitlePathAndCodec> maybePath = await _mediator.Send(new GetSubtitlePathById(id));
 
-        foreach (string path in maybePath.RightToSeq())
+        foreach (SubtitlePathAndCodec pathAndCodec in maybePath.RightToSeq())
         {
-            string mimeType = Path.GetExtension(path).ToLowerInvariant() switch
+            string mimeType = Path.GetExtension(pathAndCodec.Path ?? string.Empty).ToLowerInvariant() switch
             {
                 ".ass" or ".ssa" => "text/x-ssa",
                 ".vtt" => "text/vtt",
+                _ when pathAndCodec.Codec.ToLowerInvariant() is "ass" or "ssa" => "text/x-ssa",
+                _ when pathAndCodec.Codec.ToLowerInvariant() is "vtt" => "text/vtt",
                 _ => "application/x-subrip"
             };
 
             if (seekToMs is > 0)
             {
                 Either<BaseError, SeekTextSubtitleProcess> maybeProcess = await _mediator.Send(
-                    new GetSeekTextSubtitleProcess(path, TimeSpan.FromMilliseconds(seekToMs.Value)));
+                    new GetSeekTextSubtitleProcess(pathAndCodec, TimeSpan.FromMilliseconds(seekToMs.Value)));
                 foreach (SeekTextSubtitleProcess processModel in maybeProcess.RightToSeq())
                 {
                     Command command = processModel.Process;
@@ -250,121 +239,33 @@ public class InternalController : ControllerBase
                 return new NotFoundResult();
             }
 
-            if (path.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            if (pathAndCodec.Path.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
-                return new RedirectResult(path);
+                return new RedirectResult(pathAndCodec.Path);
             }
 
-            return new PhysicalFileResult(path, mimeType);
+            return new PhysicalFileResult(pathAndCodec.Path, mimeType);
         }
 
         return new NotFoundResult();
     }
 
-    private async Task<IActionResult> GetSegmenterV2Stream(string channelNumber)
-    {
-        if (_ffmpegSegmenterService.TryGetWorker(channelNumber, out IHlsSessionWorker worker) &&
-            worker is HlsSessionWorkerV2 v2)
-        {
-            Either<BaseError, PlayoutItemProcessModel> result = await v2.GetNextPlayoutItemProcess();
-            return GetProcessResponse(result, channelNumber, "segmenter-v2");
-        }
-
-        _logger.LogWarning("Unable to locate session worker for channel {Channel}", channelNumber);
-        return new NotFoundResult();
-    }
-
-    private async Task<IActionResult> GetTsLegacyStream(string channelNumber, string mode)
+    private async Task<IActionResult> GetTsLegacyStream(string channelNumber)
     {
         var request = new GetPlayoutItemProcessByChannelNumber(
             channelNumber,
-            mode,
+            StreamingMode.TransportStream,
             DateTimeOffset.Now,
             false,
             true,
             DateTimeOffset.Now,
-            0,
+            TimeSpan.Zero,
+            Option<FrameRate>.None,
+            IsTroubleshooting: false,
             Option<int>.None);
 
         Either<BaseError, PlayoutItemProcessModel> result = await _mediator.Send(request);
 
-        return GetProcessResponse(result, channelNumber, mode);
-    }
-
-    private IActionResult GetProcessResponse(
-        Either<BaseError, PlayoutItemProcessModel> result,
-        string channelNumber,
-        string mode)
-    {
-        foreach (BaseError error in result.LeftToSeq())
-        {
-            _logger.LogError(
-                "Failed to create stream for channel {ChannelNumber}: {Error}",
-                channelNumber,
-                error.Value);
-
-            return BadRequest(error.Value);
-        }
-
-        foreach (PlayoutItemProcessModel processModel in result.RightToSeq())
-        {
-            // for process counter
-            var ffmpegProcess = new FFmpegProcess();
-
-            Command process = processModel.Process;
-
-            _logger.LogDebug("ffmpeg arguments {FFmpegArguments}", process.Arguments);
-
-            var cts = new CancellationTokenSource();
-            HttpContext.Response.OnCompleted(async () =>
-            {
-                ffmpegProcess.Dispose();
-                await cts.CancelAsync();
-                cts.Dispose();
-            });
-
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-                cts.Token,
-                HttpContext.RequestAborted);
-
-            var pipe = new Pipe();
-            var stdErrBuffer = new StringBuilder();
-
-            Command processWithPipe = process;
-            foreach (GraphicsEngineContext graphicsEngineContext in processModel.GraphicsEngineContext)
-            {
-                var gePipe = new Pipe();
-                processWithPipe = process.WithStandardInputPipe(PipeSource.FromStream(gePipe.Reader.AsStream()));
-
-                // fire and forget graphics engine task
-                _ = _graphicsEngine.Run(
-                    graphicsEngineContext,
-                    gePipe.Writer,
-                    linkedCts.Token);
-            }
-
-            CommandTask<CommandResult> task = processWithPipe
-                .WithStandardOutputPipe(PipeTarget.ToStream(pipe.Writer.AsStream()))
-                .WithStandardErrorPipe(PipeTarget.ToStringBuilder(stdErrBuffer))
-                .WithValidation(CommandResultValidation.None)
-                .ExecuteAsync(linkedCts.Token);
-
-            // ensure pipe writer is completed when ffmpeg exits
-            _ = task.Task.ContinueWith(
-                (_, state) => ((PipeWriter)state!).Complete(),
-                pipe.Writer,
-                TaskScheduler.Default);
-
-            string contentType = mode switch
-            {
-                "segmenter-v2" => "video/x-matroska",
-                _ => "video/mp2t"
-            };
-
-            return new FileStreamResult(pipe.Reader.AsStream(), contentType);
-        }
-
-        // this will never happen
-        return new NotFoundResult();
+        return GetProcessResponse(result, channelNumber, StreamingMode.TransportStream);
     }
 }

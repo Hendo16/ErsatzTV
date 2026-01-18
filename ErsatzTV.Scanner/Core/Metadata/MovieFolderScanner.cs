@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.IO.Abstractions;
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -9,8 +10,8 @@ using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Images;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
-using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces;
 using ErsatzTV.Scanner.Core.Interfaces.FFmpeg;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
@@ -23,16 +24,20 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
     private readonly IClient _client;
     private readonly ILibraryRepository _libraryRepository;
     private readonly ILocalChaptersProvider _localChaptersProvider;
+    private readonly IScannerProxy _scannerProxy;
+    private readonly IFileSystem _fileSystem;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
+    private readonly IMetadataRepository _metadataRepository;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
     private readonly ILogger<MovieFolderScanner> _logger;
     private readonly IMediaItemRepository _mediaItemRepository;
-    private readonly IMediator _mediator;
     private readonly IMovieRepository _movieRepository;
     private readonly IFillerRepository _fillerRepository;
 
     public MovieFolderScanner(
+        IScannerProxy scannerProxy,
+        IFileSystem fileSystem,
         ILocalFileSystem localFileSystem,
         IMovieRepository movieRepository,
         ILocalStatisticsProvider localStatisticsProvider,
@@ -43,14 +48,13 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         IImageCache imageCache,
         ILibraryRepository libraryRepository,
         IMediaItemRepository mediaItemRepository,
-        IMediator mediator,
         IFFmpegPngService ffmpegPngService,
         ITempFilePool tempFilePool,
         IClient client,
         IFillerRepository fillerRepository,
         ILogger<MovieFolderScanner> logger)
         : base(
-            localFileSystem,
+            fileSystem,
             localStatisticsProvider,
             metadataRepository,
             mediaItemRepository,
@@ -60,15 +64,17 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
             client,
             logger)
     {
+        _scannerProxy = scannerProxy;
+        _fileSystem = fileSystem;
         _localFileSystem = localFileSystem;
         _movieRepository = movieRepository;
         _fillerRepository = fillerRepository;
         _localSubtitlesProvider = localSubtitlesProvider;
         _localChaptersProvider = localChaptersProvider;
         _localMetadataProvider = localMetadataProvider;
+        _metadataRepository = metadataRepository;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
-        _mediator = mediator;
         _client = client;
         _logger = logger;
     }
@@ -114,14 +120,12 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                 }
 
                 decimal percentCompletion = (decimal)foldersCompleted / (foldersCompleted + folderQueue.Count);
-                await _mediator.Publish(
-                    new ScannerProgressUpdate(
-                        libraryPath.LibraryId,
-                        null,
+                if (!await _scannerProxy.UpdateProgress(
                         progressMin + percentCompletion * progressSpread,
-                        Array.Empty<int>(),
-                        Array.Empty<int>()),
-                    cancellationToken);
+                        cancellationToken))
+                {
+                    return new ScanCanceled();
+                }
 
                 string movieFolder = folderQueue.Dequeue();
                 Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(
@@ -202,14 +206,10 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                     {
                         if (result.IsAdded || result.IsUpdated)
                         {
-                            await _mediator.Publish(
-                                new ScannerProgressUpdate(
-                                    libraryPath.LibraryId,
-                                    null,
-                                    null,
-                                    new[] { result.Item.Id },
-                                    Array.Empty<int>()),
-                                cancellationToken);
+                            if (!await _scannerProxy.ReindexMediaItems([result.Item.Id], cancellationToken))
+                            {
+                                _logger.LogWarning("Failed to reindex media items from scanner process");
+                            }
                         }
 
                         await _libraryRepository.SetEtag(libraryPath, knownFolder, movieFolder, etag);
@@ -219,21 +219,24 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
 
             foreach (string path in await _movieRepository.FindMoviePaths(libraryPath))
             {
-                if (!_localFileSystem.FileExists(path))
+                if (!_fileSystem.File.Exists(path))
                 {
                     _logger.LogInformation("Flagging missing movie at {Path}", path);
                     List<int> ids = await FlagFileNotFound(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(libraryPath.LibraryId, null, null, ids.ToArray(), Array.Empty<int>()),
-                        cancellationToken);
+                    if (!await _scannerProxy.ReindexMediaItems(ids.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to reindex media items from scanner process");
+                    }
+
                 }
                 else if (Path.GetFileName(path).StartsWith("._", StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation("Removing dot underscore file at {Path}", path);
                     List<int> ids = await _movieRepository.DeleteByPath(libraryPath, path);
-                    await _mediator.Publish(
-                        new ScannerProgressUpdate(libraryPath.LibraryId, null, null, Array.Empty<int>(), ids.ToArray()),
-                        cancellationToken);
+                    if (!await _scannerProxy.RemoveMediaItems(ids.ToArray(), cancellationToken))
+                    {
+                        _logger.LogWarning("Failed to remove media items from scanner process");
+                    }
                 }
             }
 
@@ -325,11 +328,18 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         try
         {
             Movie movie = result.Item;
-            Option<string> maybeArtwork = LocateArtwork(movie, artworkKind);
-            foreach (string posterFile in maybeArtwork)
+            foreach (MovieMetadata metadata in movie.MovieMetadata.HeadOrNone())
             {
-                MovieMetadata metadata = movie.MovieMetadata.Head();
-                await RefreshArtwork(posterFile, metadata, artworkKind, None, None, cancellationToken);
+                Option<string> maybeArtwork = LocateArtwork(movie, artworkKind);
+                foreach (string posterFile in maybeArtwork)
+                {
+                    await RefreshArtwork(posterFile, metadata, artworkKind, None, None, cancellationToken);
+                }
+
+                if (maybeArtwork.IsNone && metadata.Artwork.Any(a => a.ArtworkKind == artworkKind))
+                {
+                    await _metadataRepository.RemoveArtworkWithKind(metadata, artworkKind);
+                }
             }
 
             return result;
@@ -379,7 +389,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         string movieAsNfo = Path.ChangeExtension(path, "nfo");
         string movieNfo = Path.Combine(Path.GetDirectoryName(path) ?? string.Empty, "movie.nfo");
         return Seq.create(movieAsNfo, movieNfo)
-            .Filter(s => _localFileSystem.FileExists(s))
+            .Filter(s => _fileSystem.File.Exists(s))
             .HeadOrNone();
     }
 
@@ -397,12 +407,12 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         IEnumerable<string> possibleMoviePosters = ImageFileExtensions.Collect(ext =>
                 new[] { $"{segment}.{ext}", Path.GetFileNameWithoutExtension(path) + $"-{segment}.{ext}" })
             .Map(f => Path.Combine(folder, f));
-        Option<string> result = possibleMoviePosters.Filter(p => _localFileSystem.FileExists(p)).HeadOrNone();
+        Option<string> result = possibleMoviePosters.Filter(p => _fileSystem.File.Exists(p)).HeadOrNone();
         if (result.IsNone && artworkKind == ArtworkKind.Poster)
         {
             IEnumerable<string> possibleFolderPosters = ImageFileExtensions.Collect(ext => new[] { $"folder.{ext}" })
                 .Map(f => Path.Combine(folder, f));
-            result = possibleFolderPosters.Filter(p => _localFileSystem.FileExists(p)).HeadOrNone();
+            result = possibleFolderPosters.Filter(p => _fileSystem.File.Exists(p)).HeadOrNone();
         }
 
         return result;

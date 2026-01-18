@@ -1,4 +1,5 @@
-﻿using Bugsnag;
+﻿using System.IO.Abstractions;
+using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
@@ -6,6 +7,7 @@ using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Core.Streaming;
 using ErsatzTV.Infrastructure.Metadata;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Interfaces.Metadata.Nfo;
@@ -16,15 +18,13 @@ namespace ErsatzTV.Scanner.Core.Metadata;
 
 public class LocalMetadataProvider : ILocalMetadataProvider
 {
-    private static readonly char[] GenreSeparators = { '/', '|', ';', '\\' };
-
     private readonly IArtistNfoReader _artistNfoReader;
     private readonly IArtistRepository _artistRepository;
     private readonly IClient _client;
     private readonly IEpisodeNfoReader _episodeNfoReader;
     private readonly IFallbackMetadataProvider _fallbackMetadataProvider;
+    private readonly IFileSystem _fileSystem;
     private readonly IImageRepository _imageRepository;
-    private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalStatisticsProvider _localStatisticsProvider;
     private readonly ILogger<LocalMetadataProvider> _logger;
     private readonly IMetadataRepository _metadataRepository;
@@ -53,7 +53,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         IImageRepository imageRepository,
         IRemoteStreamRepository remoteStreamRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
-        ILocalFileSystem localFileSystem,
+        IFileSystem fileSystem,
         IMovieNfoReader movieNfoReader,
         IEpisodeNfoReader episodeNfoReader,
         IArtistNfoReader artistNfoReader,
@@ -76,7 +76,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         _imageRepository = imageRepository;
         _remoteStreamRepository = remoteStreamRepository;
         _fallbackMetadataProvider = fallbackMetadataProvider;
-        _localFileSystem = localFileSystem;
+        _fileSystem = fileSystem;
         _movieNfoReader = movieNfoReader;
         _episodeNfoReader = episodeNfoReader;
         _artistNfoReader = artistNfoReader;
@@ -93,7 +93,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
     {
         string nfoFileName = Path.Combine(showFolder, "tvshow.nfo");
         Option<ShowMetadata> maybeMetadata = None;
-        if (_localFileSystem.FileExists(nfoFileName))
+        if (_fileSystem.File.Exists(nfoFileName))
         {
             maybeMetadata = await LoadTelevisionShowMetadata(nfoFileName);
         }
@@ -113,7 +113,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
     {
         string nfoFileName = Path.Combine(artistFolder, "artist.nfo");
         Option<ArtistMetadata> maybeMetadata = None;
-        if (_localFileSystem.FileExists(nfoFileName))
+        if (_fileSystem.File.Exists(nfoFileName))
         {
             maybeMetadata = await LoadArtistMetadata(nfoFileName);
         }
@@ -261,13 +261,19 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         return await RefreshFallbackMetadata(image);
     }
 
-    public async Task<bool> RefreshTagMetadata(RemoteStream remoteStream, CancellationToken cancellationToken) =>
-        // Option<RemoteStreamMetadata> maybeMetadata = LoadRemoteStreamMetadata(remoteStream);
-        // foreach (RemoteStreamMetadata metadata in maybeMetadata)
-        // {
-        //     return await ApplyMetadataUpdate(remoteStream, metadata);
-        // }
-        await RefreshFallbackMetadata(remoteStream, cancellationToken);
+    public async Task<bool> RefreshMetadata(
+        RemoteStream remoteStream,
+        YamlRemoteStreamDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        Option<RemoteStreamMetadata> maybeMetadata = LoadRemoteStreamMetadata(remoteStream, definition);
+        foreach (RemoteStreamMetadata metadata in maybeMetadata)
+        {
+            return await ApplyMetadataUpdate(remoteStream, metadata, cancellationToken);
+        }
+
+        return await RefreshFallbackMetadata(remoteStream, cancellationToken);
+    }
 
     public Task<bool> RefreshFallbackMetadata(Movie movie) =>
         ApplyMetadataUpdate(movie, _fallbackMetadataProvider.GetFallbackMetadata(movie));
@@ -366,7 +372,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 {
                     MetadataKind = MetadataKind.Sidecar,
                     DateAdded = DateTime.UtcNow,
-                    DateUpdated = File.GetLastWriteTimeUtc(nfoFileName),
+                    DateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName),
                     Album = nfo.Album,
                     Title = nfo.Title,
                     Plot = nfo.Plot,
@@ -377,7 +383,8 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                     Genres = nfo.Genres.Map(g => new Genre { Name = g }).ToList(),
                     Tags = nfo.Tags.Map(t => new Tag { Name = t }).ToList(),
                     Studios = nfo.Studios.Map(s => new Studio { Name = s }).ToList(),
-                    Directors = nfo.Directors.Map(s => new Director { Name = s }).ToList()
+                    Directors = nfo.Directors.Map(s => new Director { Name = s }).ToList(),
+                    Artwork = []
                 };
             }
 
@@ -407,7 +414,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 {
                     MetadataKind = MetadataKind.Embedded,
                     DateAdded = DateTime.UtcNow,
-                    DateUpdated = File.GetLastWriteTimeUtc(path),
+                    DateUpdated = _fileSystem.File.GetLastWriteTimeUtc(path),
 
                     Artists = [],
                     AlbumArtists = [],
@@ -492,7 +499,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 {
                     MetadataKind = MetadataKind.Embedded,
                     DateAdded = DateTime.UtcNow,
-                    DateUpdated = File.GetLastWriteTimeUtc(path),
+                    DateUpdated = _fileSystem.File.GetLastWriteTimeUtc(path),
                     DurationSeconds = durationSeconds,
 
                     Artwork = [],
@@ -544,65 +551,53 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         }
     }
 
-    private Option<RemoteStreamMetadata> LoadRemoteStreamMetadata(RemoteStream remoteStream)
+    private Option<RemoteStreamMetadata> LoadRemoteStreamMetadata(
+        RemoteStream remoteStream,
+        YamlRemoteStreamDefinition definition)
     {
         string path = remoteStream.GetHeadVersion().MediaFiles.Head().Path;
 
         try
         {
-            Either<BaseError, List<SongTag>> maybeTags = _localStatisticsProvider.GetSongTags(remoteStream);
+            Option<RemoteStreamMetadata> maybeFallbackMetadata =
+                _fallbackMetadataProvider.GetFallbackMetadata(remoteStream);
 
-            foreach (List<SongTag> tags in maybeTags.RightToSeq())
+            var result = new RemoteStreamMetadata
             {
-                Option<RemoteStreamMetadata> maybeFallbackMetadata =
-                    _fallbackMetadataProvider.GetFallbackMetadata(remoteStream);
+                MetadataKind = MetadataKind.Embedded,
+                DateAdded = DateTime.UtcNow,
+                DateUpdated = _fileSystem.File.GetLastWriteTimeUtc(path),
 
-                var result = new RemoteStreamMetadata
+                Artwork = [],
+                Actors = [],
+                Genres = [],
+                Studios = [],
+                Tags = [],
+
+                Title = definition.Title,
+                Plot = definition.Plot,
+                ContentRating = definition.ContentRating,
+                Year = definition.Year
+            };
+
+            foreach (RemoteStreamMetadata fallbackMetadata in maybeFallbackMetadata)
+            {
+                // title is not required in remote stream definition; use fallback title if missing
+                if (string.IsNullOrWhiteSpace(result.Title))
                 {
-                    MetadataKind = MetadataKind.Embedded,
-                    DateAdded = DateTime.UtcNow,
-                    DateUpdated = File.GetLastWriteTimeUtc(path),
-
-                    Artwork = [],
-                    Actors = [],
-                    Genres = [],
-                    Studios = [],
-                    Tags = []
-                };
-
-                foreach (SongTag tag in tags)
-                {
-                    switch (tag.Tag)
-                    {
-                        case MetadataSongTag.Genre:
-                            result.Genres.Add(new Genre { Name = tag.Value });
-                            break;
-                        case MetadataSongTag.Title:
-                            result.Title = tag.Value;
-                            break;
-                    }
+                    result.Title = fallbackMetadata.Title;
                 }
 
-                foreach (RemoteStreamMetadata fallbackMetadata in maybeFallbackMetadata)
+                result.OriginalTitle = fallbackMetadata.OriginalTitle;
+
+                // preserve folder tagging
+                foreach (Tag tag in fallbackMetadata.Tags)
                 {
-                    if (string.IsNullOrWhiteSpace(result.Title))
-                    {
-                        result.Title = fallbackMetadata.Title;
-                    }
-
-                    result.OriginalTitle = fallbackMetadata.OriginalTitle;
-
-                    // preserve folder tagging
-                    foreach (Tag tag in fallbackMetadata.Tags)
-                    {
-                        result.Tags.Add(tag);
-                    }
+                    result.Tags.Add(tag);
                 }
-
-                return result;
             }
 
-            return Option<RemoteStreamMetadata>.None;
+            return result;
         }
         catch (Exception ex)
         {
@@ -616,7 +611,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
     {
         var updated = false;
 
-        episode.EpisodeMetadata ??= new List<EpisodeMetadata>();
+        episode.EpisodeMetadata ??= [];
 
         var toUpdate = episode.EpisodeMetadata
             .Where(em => episodeMetadata.Any(em2 => em2.EpisodeNumber == em.EpisodeNumber))
@@ -1003,7 +998,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
             ? SortTitle.GetSortTitle(metadata.Title)
             : metadata.SortTitle;
         metadata.ArtistId = artist.Id;
-        artist.ArtistMetadata = new List<ArtistMetadata> { metadata };
+        artist.ArtistMetadata = [metadata];
 
         return await _metadataRepository.Add(metadata);
     }
@@ -1373,6 +1368,8 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 ? SortTitle.GetSortTitle(metadata.Title)
                 : metadata.SortTitle;
             existing.OriginalTitle = metadata.OriginalTitle;
+            existing.Plot = metadata.Plot;
+            existing.ContentRating = metadata.ContentRating;
 
             bool updated = await UpdateMetadataCollections(
                 existing,
@@ -1410,7 +1407,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
             foreach (ShowNfo nfo in maybeNfo.RightToSeq())
             {
                 DateTime dateAdded = DateTime.UtcNow;
-                DateTime dateUpdated = File.GetLastWriteTimeUtc(nfoFileName);
+                DateTime dateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName);
 
                 return new ShowMetadata
                 {
@@ -1430,7 +1427,8 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                     Actors = Actors(nfo.Actors, dateAdded, dateUpdated),
                     Guids = nfo.UniqueIds
                         .Map(id => new MetadataGuid { Guid = $"{id.Type}://{id.Guid}" })
-                        .ToList()
+                        .ToList(),
+                    Artwork = []
                 };
             }
 
@@ -1463,13 +1461,14 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 {
                     MetadataKind = MetadataKind.Sidecar,
                     DateAdded = DateTime.UtcNow,
-                    DateUpdated = File.GetLastWriteTimeUtc(nfoFileName),
+                    DateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName),
                     Title = nfo.Name,
                     Disambiguation = nfo.Disambiguation,
                     Biography = nfo.Biography,
                     Genres = nfo.Genres.Map(g => new Genre { Name = g }).ToList(),
                     Styles = nfo.Styles.Map(s => new Style { Name = s }).ToList(),
-                    Moods = nfo.Moods.Map(m => new Mood { Name = m }).ToList()
+                    Moods = nfo.Moods.Map(m => new Mood { Name = m }).ToList(),
+                    Artwork = []
                 };
             }
 
@@ -1500,7 +1499,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
             foreach (EpisodeNfo nfo in maybeNfo.RightToSeq().Flatten())
             {
                 DateTime dateAdded = DateTime.UtcNow;
-                DateTime dateUpdated = File.GetLastWriteTimeUtc(nfoFileName);
+                DateTime dateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName);
 
                 var metadata = new EpisodeMetadata
                 {
@@ -1521,8 +1520,8 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                     Writers = nfo.Writers.Map(w => new Writer { Name = w }).ToList(),
                     Genres = nfo.Genres.Map(g => new Genre { Name = g }).ToList(),
                     Tags = nfo.Tags.Map(t => new Tag { Name = t }).ToList(),
-                    Studios = new List<Studio>(),
-                    Artwork = new List<Artwork>()
+                    Studios = [],
+                    Artwork = []
                 };
 
                 result.Add(metadata);
@@ -1556,7 +1555,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
             foreach (MovieNfo nfo in maybeNfo.RightToSeq())
             {
                 DateTime dateAdded = DateTime.UtcNow;
-                DateTime dateUpdated = File.GetLastWriteTimeUtc(nfoFileName);
+                DateTime dateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName);
 
                 var year = 0;
                 if (nfo.Year > 1000)
@@ -1709,7 +1708,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
             foreach (OtherVideoNfo nfo in maybeNfo.RightToSeq())
             {
                 DateTime dateAdded = DateTime.UtcNow;
-                DateTime dateUpdated = File.GetLastWriteTimeUtc(nfoFileName);
+                DateTime dateUpdated = _fileSystem.File.GetLastWriteTimeUtc(nfoFileName);
 
                 var year = 0;
                 if (nfo.Year > 1000)
@@ -1926,16 +1925,5 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         }
 
         return result;
-    }
-
-    private static IEnumerable<string> SplitGenres(string genre)
-    {
-        char[] delimiters = GenreSeparators.Filter(s => genre.Contains(s, StringComparison.OrdinalIgnoreCase))
-            .DefaultIfEmpty(',')
-            .ToArray();
-
-        return genre.Split(delimiters, StringSplitOptions.RemoveEmptyEntries)
-            .Where(i => !string.IsNullOrWhiteSpace(i))
-            .Select(i => i.Trim());
     }
 }

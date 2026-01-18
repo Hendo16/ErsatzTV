@@ -4,6 +4,7 @@ using Bugsnag;
 using ErsatzTV.Application;
 using ErsatzTV.Application.Channels;
 using ErsatzTV.Application.Emby;
+using ErsatzTV.Application.FFmpeg;
 using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.Jellyfin;
 using ErsatzTV.Application.Maintenance;
@@ -13,6 +14,7 @@ using ErsatzTV.Application.Playouts;
 using ErsatzTV.Application.Plex;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Locking;
 using ErsatzTV.Core.Scheduling;
 using ErsatzTV.Infrastructure.Data;
@@ -64,6 +66,7 @@ public class SchedulerService : BackgroundService
             // run once immediately at startup
             if (!stoppingToken.IsCancellationRequested)
             {
+                await QueueFFmpegCapabilitiesRefresh(stoppingToken);
                 await DoWork(stoppingToken);
             }
 
@@ -116,8 +119,8 @@ public class SchedulerService : BackgroundService
     {
         try
         {
-            await DeleteOrphanedArtwork(cancellationToken);
             await DeleteOrphanedSubtitles(cancellationToken);
+            await RefreshMpegTsScripts(cancellationToken);
             await RefreshChannelGuideChannelList(cancellationToken);
             await BuildPlayouts(cancellationToken);
 #if !DEBUG_NO_SYNC
@@ -213,11 +216,12 @@ public class SchedulerService : BackgroundService
             .Include(p => p.Channel)
             .ToListAsync(cancellationToken);
 
-        foreach (int playoutId in playouts.OrderBy(p => decimal.Parse(p.Channel.Number, CultureInfo.InvariantCulture))
-                     .Map(p => p.Id))
+        foreach (Playout playout in playouts.OrderBy(p => decimal.Parse(
+                     p.Channel.Number,
+                     CultureInfo.InvariantCulture)))
         {
             await _workerChannel.WriteAsync(
-                new BuildPlayout(playoutId, PlayoutBuildMode.Continue),
+                new BuildPlayout(playout.Id, PlayoutBuildMode.Continue),
                 cancellationToken);
         }
     }
@@ -268,7 +272,7 @@ public class SchedulerService : BackgroundService
         foreach (int mediaSourceId in mediaSourceIds)
         {
             await _scannerWorkerChannel.WriteAsync(
-                new SynchronizePlexCollections(mediaSourceId, false),
+                new SynchronizePlexCollections(mediaSourceId, false, false),
                 cancellationToken);
         }
     }
@@ -295,7 +299,7 @@ public class SchedulerService : BackgroundService
         foreach (int mediaSourceId in mediaSourceIds)
         {
             await _scannerWorkerChannel.WriteAsync(
-                new SynchronizeJellyfinCollections(mediaSourceId, false),
+                new SynchronizeJellyfinCollections(mediaSourceId, false, false),
                 cancellationToken);
         }
     }
@@ -322,7 +326,7 @@ public class SchedulerService : BackgroundService
         foreach (int mediaSourceId in mediaSourceIds)
         {
             await _scannerWorkerChannel.WriteAsync(
-                new SynchronizeEmbyCollections(mediaSourceId, false),
+                new SynchronizeEmbyCollections(mediaSourceId, false, false),
                 cancellationToken);
         }
     }
@@ -375,15 +379,22 @@ public class SchedulerService : BackgroundService
         }
     }
 
+    private async Task RefreshMpegTsScripts(CancellationToken _)
+    {
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<IMpegTsScriptService>();
+        await service.RefreshScripts();
+    }
+
     private ValueTask RefreshGraphicsElements(CancellationToken cancellationToken) =>
         _workerChannel.WriteAsync(new RefreshGraphicsElements(), cancellationToken);
-
-    private ValueTask DeleteOrphanedArtwork(CancellationToken cancellationToken) =>
-        _workerChannel.WriteAsync(new DeleteOrphanedArtwork(), cancellationToken);
 
     private ValueTask DeleteOrphanedSubtitles(CancellationToken cancellationToken) =>
         _workerChannel.WriteAsync(new DeleteOrphanedSubtitles(), cancellationToken);
 
     private ValueTask ReleaseMemory(CancellationToken cancellationToken) =>
         _workerChannel.WriteAsync(new ReleaseMemory(false), cancellationToken);
+
+    private ValueTask QueueFFmpegCapabilitiesRefresh(CancellationToken cancellationToken) =>
+        _workerChannel.WriteAsync(new RefreshFFmpegCapabilities(), cancellationToken);
 }

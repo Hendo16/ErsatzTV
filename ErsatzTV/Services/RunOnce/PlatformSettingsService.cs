@@ -1,6 +1,7 @@
 ﻿using System.Runtime.InteropServices;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.FFmpeg.Capabilities;
+using ErsatzTV.FFmpeg.Capabilities.Nvidia;
 using ErsatzTV.FFmpeg.Runtime;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -14,29 +15,48 @@ public class PlatformSettingsService(IServiceScopeFactory serviceScopeFactory) :
 
         using IServiceScope scope = serviceScopeFactory.CreateScope();
         IRuntimeInfo runtimeInfo = scope.ServiceProvider.GetRequiredService<IRuntimeInfo>();
-        if (runtimeInfo != null && runtimeInfo.IsOSPlatform(OSPlatform.Linux))
+        if (runtimeInfo != null)
         {
-            if (Directory.Exists("/dev/dri"))
+            if (runtimeInfo.IsOSPlatform(OSPlatform.Linux) || runtimeInfo.IsOSPlatform(OSPlatform.Windows))
             {
-                ILocalFileSystem localFileSystem = scope.ServiceProvider.GetRequiredService<ILocalFileSystem>();
-                IMemoryCache memoryCache = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
-
-                var devices = localFileSystem.ListFiles("/dev/dri")
-                    .Filter(s => s.StartsWith("/dev/dri/render", StringComparison.OrdinalIgnoreCase)
-                                 || s.StartsWith("/dev/dri/card", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                memoryCache.Set("ffmpeg.render_devices", devices);
+                try
+                {
+                    NvEncSharpRedirector.Init();
+                }
+                catch (FileNotFoundException)
+                {
+                    // do nothing
+                }
+                catch (TypeInitializationException)
+                {
+                    // do nothing
+                }
             }
 
-            IHardwareCapabilitiesFactory hardwareCapabilitiesFactory =
-                scope.ServiceProvider.GetRequiredService<IHardwareCapabilitiesFactory>();
-            if (hardwareCapabilitiesFactory != null)
+            if (runtimeInfo.IsOSPlatform(OSPlatform.Linux))
             {
-                IMemoryCache memoryCache = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
+                if (Directory.Exists("/dev/dri"))
+                {
+                    ILocalFileSystem localFileSystem = scope.ServiceProvider.GetRequiredService<ILocalFileSystem>();
+                    IMemoryCache memoryCache = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
 
-                List<string> displays = await hardwareCapabilitiesFactory.GetVaapiDisplays();
-                memoryCache.Set("ffmpeg.vaapi_displays", displays);
+                    var devices = localFileSystem.ListFiles("/dev/dri")
+                        .Filter(s => s.StartsWith("/dev/dri/render", StringComparison.OrdinalIgnoreCase)
+                                     || s.StartsWith("/dev/dri/card", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    memoryCache.Set("ffmpeg.render_devices", devices);
+                }
+
+                IHardwareCapabilitiesFactory hardwareCapabilitiesFactory =
+                    scope.ServiceProvider.GetRequiredService<IHardwareCapabilitiesFactory>();
+                if (hardwareCapabilitiesFactory != null)
+                {
+                    IMemoryCache memoryCache = scope.ServiceProvider.GetRequiredService<IMemoryCache>();
+
+                    List<string> displays = await hardwareCapabilitiesFactory.GetVaapiDisplays();
+                    memoryCache.Set("ffmpeg.vaapi_displays", displays);
+                }
             }
         }
     }

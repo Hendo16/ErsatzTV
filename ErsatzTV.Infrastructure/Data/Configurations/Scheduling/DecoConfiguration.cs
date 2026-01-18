@@ -11,6 +11,10 @@ public class DecoConfiguration : IEntityTypeConfiguration<Deco>
     {
         builder.ToTable("Deco");
 
+        builder.Property(d => d.Name)
+            .HasMaxLength(50)
+            .HasColumnType("varchar(50)");
+
         builder.HasIndex(d => new { d.DecoGroupId, d.Name })
             .IsUnique();
 
@@ -44,6 +48,11 @@ public class DecoConfiguration : IEntityTypeConfiguration<Deco>
             .OnDelete(DeleteBehavior.Cascade)
             .IsRequired(false);
 
+        builder.HasMany(d => d.BreakContent)
+            .WithOne(bc => bc.Deco)
+            .HasForeignKey(bc => bc.DecoId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.HasMany(c => c.Watermarks)
             .WithMany(m => m.Decos)
             .UsingEntity<DecoWatermark>(
@@ -56,5 +65,18 @@ public class DecoConfiguration : IEntityTypeConfiguration<Deco>
                     .HasForeignKey(ci => ci.DecoId)
                     .OnDelete(DeleteBehavior.Cascade),
                 j => j.HasKey(ci => new { ci.DecoId, ci.WatermarkId }));
+
+        builder.HasMany(c => c.GraphicsElements)
+            .WithMany(m => m.Decos)
+            .UsingEntity<DecoGraphicsElement>(
+                j => j.HasOne(ci => ci.GraphicsElement)
+                    .WithMany(mi => mi.DecoGraphicsElements)
+                    .HasForeignKey(ci => ci.GraphicsElementId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasOne(ci => ci.Deco)
+                    .WithMany(c => c.DecoGraphicsElements)
+                    .HasForeignKey(ci => ci.DecoId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasKey(ci => new { ci.DecoId, ci.GraphicsElementId }));
     }
 }

@@ -50,7 +50,9 @@ public static class FileSystemLayout
     public static readonly string GraphicsElementsTemplatesFolder;
     public static readonly string GraphicsElementsTextTemplatesFolder;
     public static readonly string GraphicsElementsImageTemplatesFolder;
+    public static readonly string GraphicsElementsScriptTemplatesFolder;
     public static readonly string GraphicsElementsSubtitleTemplatesFolder;
+    public static readonly string GraphicsElementsMotionTemplatesFolder;
 
     public static readonly string ScriptsFolder;
 
@@ -59,6 +61,10 @@ public static class FileSystemLayout
     public static readonly string AudioStreamSelectorScriptsFolder;
 
     public static readonly string ChannelStreamSelectorsFolder;
+
+    public static readonly string MpegTsScriptsFolder;
+
+    public static readonly string DefaultMpegTsScriptFolder;
 
     public static readonly string MacOsOldAppDataFolder = Path.Combine(
         Environment.GetEnvironmentVariable("HOME") ?? string.Empty,
@@ -170,7 +176,9 @@ public static class FileSystemLayout
         GraphicsElementsTemplatesFolder = Path.Combine(TemplatesFolder, "graphics-elements");
         GraphicsElementsTextTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "text");
         GraphicsElementsImageTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "image");
+        GraphicsElementsScriptTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "script");
         GraphicsElementsSubtitleTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "subtitle");
+        GraphicsElementsMotionTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "motion");
 
         ScriptsFolder = Path.Combine(AppDataFolder, "scripts");
 
@@ -179,5 +187,8 @@ public static class FileSystemLayout
         AudioStreamSelectorScriptsFolder = Path.Combine(ScriptsFolder, "audio-stream-selector");
 
         ChannelStreamSelectorsFolder = Path.Combine(ScriptsFolder, "channel-stream-selectors");
+
+        MpegTsScriptsFolder = Path.Combine(ScriptsFolder, "mpegts");
+        DefaultMpegTsScriptFolder = Path.Combine(MpegTsScriptsFolder, "default");
     }
 }

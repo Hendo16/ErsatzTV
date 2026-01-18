@@ -1,3 +1,6 @@
+using ErsatzTV.Application.Graphics;
+using ErsatzTV.Application.MediaCollections;
+using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Scheduling;
@@ -12,16 +15,21 @@ public record DecoViewModel(
     DecoMode WatermarkMode,
     List<WatermarkViewModel> Watermarks,
     bool UseWatermarkDuringFiller,
+    DecoMode GraphicsElementsMode,
+    List<GraphicsElementViewModel> GraphicsElements,
+    bool UseGraphicsElementsDuringFiller,
+    DecoMode BreakContentMode,
+    List<DecoBreakContentViewModel> BreakContent,
     DecoMode DefaultFillerMode,
-    ProgramScheduleItemCollectionType DefaultFillerCollectionType,
-    int? DefaultFillerCollectionId,
-    int? DefaultFillerMediaItemId,
-    int? DefaultFillerMultiCollectionId,
-    int? DefaultFillerSmartCollectionId,
+    CollectionType DefaultFillerCollectionType,
+    MediaCollectionViewModel DefaultFillerCollection,
+    NamedMediaItemViewModel DefaultFillerMediaItem,
+    MultiCollectionViewModel DefaultFillerMultiCollection,
+    SmartCollectionViewModel DefaultFillerSmartCollection,
     bool DefaultFillerTrimToFit,
     DecoMode DeadAirFallbackMode,
-    ProgramScheduleItemCollectionType DeadAirFallbackCollectionType,
-    int? DeadAirFallbackCollectionId,
-    int? DeadAirFallbackMediaItemId,
-    int? DeadAirFallbackMultiCollectionId,
-    int? DeadAirFallbackSmartCollectionId);
+    CollectionType DeadAirFallbackCollectionType,
+    MediaCollectionViewModel DeadAirFallbackCollection,
+    NamedMediaItemViewModel DeadAirFallbackMediaItem,
+    MultiCollectionViewModel DeadAirFallbackMultiCollection,
+    SmartCollectionViewModel DeadAirFallbackSmartCollection);

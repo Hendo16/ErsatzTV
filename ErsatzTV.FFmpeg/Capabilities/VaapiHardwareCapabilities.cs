@@ -4,29 +4,28 @@ using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.FFmpeg.Capabilities;
 
-public class VaapiHardwareCapabilities : IHardwareCapabilities
+public class VaapiHardwareCapabilities(
+    List<VaapiProfileEntrypoint> profileEntrypoints,
+    string generation,
+    ILogger logger)
+    : IHardwareCapabilities
 {
-    private readonly ILogger _logger;
-    private readonly List<VaapiProfileEntrypoint> _profileEntrypoints;
+    public int EntrypointCount => profileEntrypoints.Count;
 
-    public VaapiHardwareCapabilities(List<VaapiProfileEntrypoint> profileEntrypoints, ILogger logger)
-    {
-        _profileEntrypoints = profileEntrypoints;
-        _logger = logger;
-    }
-
-    public int EntrypointCount => _profileEntrypoints.Count;
+    public string Generation => generation;
 
     public FFmpegCapability CanDecode(
         string videoFormat,
         Option<string> videoProfile,
         Option<IPixelFormat> maybePixelFormat,
-        bool isHdr)
+        ColorParams colorParams)
     {
         int bitDepth = maybePixelFormat.Map(pf => pf.BitDepth).IfNone(8);
 
         bool isHardware = (videoFormat, videoProfile.IfNone(string.Empty).ToLowerInvariant()) switch
         {
+            (_, _) when colorParams.IsBt2020Ten => false,
+
             // no hardware decoding of 10-bit h264
             (VideoFormat.H264, _) when bitDepth == 10 => false,
 
@@ -34,112 +33,112 @@ public class VaapiHardwareCapabilities : IHardwareCapabilities
             (VideoFormat.H264, "baseline" or "66") => false,
 
             (VideoFormat.H264, "main" or "77") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.H264Main,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.H264, "high" or "100") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.H264High,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.H264, "high 10" or "110") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.H264High,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
-            (VideoFormat.H264, "baseline constrained" or "578") =>
-                _profileEntrypoints.Any(e => e is
+            (VideoFormat.H264, "baseline constrained" or "constrained baseline" or "578") =>
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.H264ConstrainedBaseline,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Mpeg2Video, "main" or "4") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Mpeg2Main,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Mpeg2Video, "simple" or "5") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Mpeg2Simple,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vc1, "simple" or "0") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vc1Simple,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vc1, "main" or "1") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vc1Main,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vc1, "advanced" or "3") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vc1Advanced,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Hevc, "main" or "1") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.HevcMain,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Hevc, "main 10" or "2") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.HevcMain10,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vp9, "profile 0" or "0") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vp9Profile0,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vp9, "profile 1" or "1") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vp9Profile1,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vp9, "profile 2" or "2") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vp9Profile2,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Vp9, "profile 3" or "3") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Vp9Profile3,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
                 }),
 
             (VideoFormat.Av1, "main" or "0") =>
-                _profileEntrypoints.Any(e => e is
+                profileEntrypoints.Any(e => e is
                 {
                     VaapiProfile: VaapiProfile.Av1Profile0,
                     VaapiEntrypoint: VaapiEntrypoint.Decode
@@ -151,7 +150,7 @@ public class VaapiHardwareCapabilities : IHardwareCapabilities
 
         if (!isHardware)
         {
-            _logger.LogDebug(
+            logger.LogDebug(
                 "VAAPI does not support decoding {Format}/{Profile}, will use software decoder",
                 videoFormat,
                 videoProfile);
@@ -166,46 +165,11 @@ public class VaapiHardwareCapabilities : IHardwareCapabilities
         Option<IPixelFormat> maybePixelFormat)
     {
         int bitDepth = maybePixelFormat.Map(pf => pf.BitDepth).IfNone(8);
-
-        bool isHardware = videoFormat switch
-        {
-            // vaapi cannot encode 10-bit h264
-            VideoFormat.H264 when bitDepth == 10 => false,
-
-            VideoFormat.H264 =>
-                _profileEntrypoints.Any(e => e is
-                {
-                    VaapiProfile: VaapiProfile.H264Main,
-                    VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                }),
-
-            VideoFormat.Hevc when bitDepth == 10 =>
-                _profileEntrypoints.Any(e => e is
-                {
-                    VaapiProfile: VaapiProfile.HevcMain10,
-                    VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                }),
-
-            VideoFormat.Hevc =>
-                _profileEntrypoints.Any(e => e is
-                {
-                    VaapiProfile: VaapiProfile.HevcMain,
-                    VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                }),
-
-            VideoFormat.Mpeg2Video =>
-                _profileEntrypoints.Any(e => e is
-                {
-                    VaapiProfile: VaapiProfile.Mpeg2Main,
-                    VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                }),
-
-            _ => false
-        };
+        bool isHardware = GetEntrypoint(videoFormat, bitDepth).IsSome;
 
         if (!isHardware)
         {
-            _logger.LogDebug(
+            logger.LogDebug(
                 "VAAPI does not support encoding {Format} with bit depth {BitDepth}, will use software encoder",
                 videoFormat,
                 bitDepth);
@@ -217,47 +181,7 @@ public class VaapiHardwareCapabilities : IHardwareCapabilities
     public Option<RateControlMode> GetRateControlMode(string videoFormat, Option<IPixelFormat> maybePixelFormat)
     {
         int bitDepth = maybePixelFormat.Map(pf => pf.BitDepth).IfNone(8);
-        Option<VaapiProfileEntrypoint> maybeEntrypoint = videoFormat switch
-        {
-            // vaapi cannot encode 10-bit h264
-            VideoFormat.H264 when bitDepth == 10 => None,
-
-            VideoFormat.H264 =>
-                _profileEntrypoints.Where(e => e is
-                    {
-                        VaapiProfile: VaapiProfile.H264Main,
-                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                    })
-                    .HeadOrNone(),
-
-            VideoFormat.Hevc when bitDepth == 10 =>
-                _profileEntrypoints.Where(e => e is
-                    {
-                        VaapiProfile: VaapiProfile.HevcMain10,
-                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                    })
-                    .HeadOrNone(),
-
-            VideoFormat.Hevc =>
-                _profileEntrypoints.Where(e => e is
-                    {
-                        VaapiProfile: VaapiProfile.HevcMain,
-                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                    })
-                    .HeadOrNone(),
-
-            VideoFormat.Mpeg2Video =>
-                _profileEntrypoints.Where(e => e is
-                    {
-                        VaapiProfile: VaapiProfile.Mpeg2Main,
-                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
-                    })
-                    .HeadOrNone(),
-
-            _ => None
-        };
-
-        foreach (VaapiProfileEntrypoint entrypoint in maybeEntrypoint)
+        foreach (VaapiProfileEntrypoint entrypoint in GetEntrypoint(videoFormat, bitDepth))
         {
             if (entrypoint.RateControlModes.Contains(RateControlMode.VBR) ||
                 entrypoint.RateControlModes.Contains(RateControlMode.CBR))
@@ -273,4 +197,64 @@ public class VaapiHardwareCapabilities : IHardwareCapabilities
 
         return Option<RateControlMode>.None;
     }
+
+    public bool GetPackedHeaderMisc(string videoFormat, Option<IPixelFormat> maybePixelFormat)
+    {
+        int bitDepth = maybePixelFormat.Map(pf => pf.BitDepth).IfNone(8);
+        foreach (VaapiProfileEntrypoint entrypoint in GetEntrypoint(videoFormat, bitDepth))
+        {
+            return entrypoint.PackedHeaderMisc;
+        }
+
+        return false;
+    }
+
+    private Option<VaapiProfileEntrypoint> GetEntrypoint(string videoFormat, int bitDepth) =>
+        videoFormat switch
+        {
+            // vaapi cannot encode 10-bit h264
+            VideoFormat.H264 when bitDepth == 10 => None,
+
+            VideoFormat.H264 =>
+                profileEntrypoints.Where(e => e is
+                    {
+                        VaapiProfile: VaapiProfile.H264Main,
+                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
+                    })
+                    .HeadOrNone(),
+
+            VideoFormat.Hevc when bitDepth == 10 =>
+                profileEntrypoints.Where(e => e is
+                    {
+                        VaapiProfile: VaapiProfile.HevcMain10,
+                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
+                    })
+                    .HeadOrNone(),
+
+            VideoFormat.Hevc =>
+                profileEntrypoints.Where(e => e is
+                    {
+                        VaapiProfile: VaapiProfile.HevcMain,
+                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
+                    })
+                    .HeadOrNone(),
+
+            VideoFormat.Av1 =>
+                profileEntrypoints.Where(e => e is
+                {
+                    VaapiProfile: VaapiProfile.Av1Profile0,
+                    VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
+                })
+                .HeadOrNone(),
+
+            VideoFormat.Mpeg2Video =>
+                profileEntrypoints.Where(e => e is
+                    {
+                        VaapiProfile: VaapiProfile.Mpeg2Main,
+                        VaapiEntrypoint: VaapiEntrypoint.Encode or VaapiEntrypoint.EncodeLowPower
+                    })
+                    .HeadOrNone(),
+
+            _ => None
+        };
 }

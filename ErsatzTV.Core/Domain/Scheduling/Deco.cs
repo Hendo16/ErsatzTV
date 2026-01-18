@@ -14,9 +14,15 @@ public class Deco
     public List<DecoWatermark> DecoWatermarks { get; set; }
     public bool UseWatermarkDuringFiller { get; set; }
 
+    // graphics elements
+    public DecoMode GraphicsElementsMode { get; set; }
+    public List<GraphicsElement> GraphicsElements { get; set; }
+    public List<DecoGraphicsElement> DecoGraphicsElements { get; set; }
+    public bool UseGraphicsElementsDuringFiller { get; set; }
+
     // default filler
     public DecoMode DefaultFillerMode { get; set; }
-    public ProgramScheduleItemCollectionType DefaultFillerCollectionType { get; set; }
+    public CollectionType DefaultFillerCollectionType { get; set; }
     public int? DefaultFillerCollectionId { get; set; }
     public Collection DefaultFillerCollection { get; set; }
     public int? DefaultFillerMediaItemId { get; set; }
@@ -29,7 +35,7 @@ public class Deco
 
     // dead air fallback
     public DecoMode DeadAirFallbackMode { get; set; }
-    public ProgramScheduleItemCollectionType DeadAirFallbackCollectionType { get; set; }
+    public CollectionType DeadAirFallbackCollectionType { get; set; }
     public int? DeadAirFallbackCollectionId { get; set; }
     public Collection DeadAirFallbackCollection { get; set; }
     public int? DeadAirFallbackMediaItemId { get; set; }
@@ -38,6 +44,10 @@ public class Deco
     public MultiCollection DeadAirFallbackMultiCollection { get; set; }
     public int? DeadAirFallbackSmartCollectionId { get; set; }
     public SmartCollection DeadAirFallbackSmartCollection { get; set; }
+
+    // break content
+    public DecoMode BreakContentMode {  get; set; }
+    public List<DecoBreakContent> BreakContent { get; set; }
 
     // can be added directly to (block) playouts
     public ICollection<Playout> Playouts { get; set; }
