@@ -762,14 +762,14 @@ public abstract class PlayoutModeSchedulerBase<T>(ILogger logger) : IPlayoutMode
             {
                 foreach (MediaItem mediaItem in enumerator.Current)
                 {
-                    TimeSpan itemDuration = DurationForMediaItem(mediaItem);
+                    TimeSpan itemDuration = mediaItem.GetDurationForPlayout();
                     TimeSpan inPoint = InPointForMediaItem(mediaItem);
                     FillerMediaItem mappedFiller = (FillerMediaItem)mediaItem;
 
                     //Filter out fillers that are associated with movies but have already been used for this media item
                     if (mappedFiller.FillerMetadata[0].MovieId != null && usedIds.Contains((int)mappedFiller.FillerMetadata[0].MovieId))
                     {
-                        enumerator.MoveNext();
+                        enumerator.MoveNext(Option<DateTimeOffset>.None);
                         continue;
                     }
 

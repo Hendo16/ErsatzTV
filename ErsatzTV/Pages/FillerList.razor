@@ -137,7 +137,7 @@
         await RefreshData();
     }
 
-    protected override async Task RefreshData()
+    protected async Task RefreshData()
     {
         string searchQuery = string.IsNullOrWhiteSpace(_query) ? "type:filler" : $"type:filler AND ({_query})";
         _data = await Mediator.Send(new QuerySearchIndexFiller(searchQuery, PageNumber, PageSize), CancellationToken);
@@ -184,7 +184,7 @@
             var parameters = new DialogParameters { { "EntityType", "filler" }, { "EntityName", filler.Title } };
             var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };
 
-            IDialogReference dialog = Dialog.Show<AddToCollectionDialog>("Add To Collection", parameters, options);
+            IDialogReference dialog = await Dialog.ShowAsync<AddToCollectionDialog>("Add To Collection", parameters, options);
             DialogResult result = await dialog.Result;
             if (!result.Canceled && result.Data is MediaCollectionViewModel collection)
             {

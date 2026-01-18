@@ -495,6 +495,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                             musicVideoTemplate,
                             songTemplate,
                             otherVideoTemplate,
+                            fillerTemplate,
                             remoteStreamTemplate,
                             minifier,
                             xml);
@@ -1111,13 +1112,13 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         string templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "filler.sbntxt");
 
         // fall back to default template
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             templateFileName = Path.Combine(FileSystemLayout.ChannelGuideTemplatesFolder, "_filler.sbntxt");
         }
 
         // fail if file doesn't exist
-        if (!_localFileSystem.FileExists(templateFileName))
+        if (!_fileSystem.File.Exists(templateFileName))
         {
             _logger.LogError(
                 "Unable to generate filler XMLTV fragment without template file {File}; please restart ErsatzTV",

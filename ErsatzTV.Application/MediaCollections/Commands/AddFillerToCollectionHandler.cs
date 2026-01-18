@@ -33,7 +33,7 @@ public class AddFillerToCollectionHandler :
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Parameters> validation = await Validate(dbContext, request);
+        Validation<BaseError, Parameters> validation = await Validate(dbContext, request, cancellationToken);
         return await LanguageExtensions.Apply(
             validation,
             parameters => ApplyAddFillerRequest(dbContext, parameters));
@@ -57,23 +57,26 @@ public class AddFillerToCollectionHandler :
 
     private static async Task<Validation<BaseError, Parameters>> Validate(
         TvContext dbContext,
-        AddFillerToCollection request) =>
-        (await CollectionMustExist(dbContext, request), await ValidateFiller(dbContext, request))
+        AddFillerToCollection request,
+        CancellationToken cancellationToken) =>
+        (await CollectionMustExist(dbContext, request, cancellationToken), await ValidateFiller(dbContext, request, cancellationToken))
         .Apply((collection, episode) => new Parameters(collection, episode));
 
     private static Task<Validation<BaseError, Collection>> CollectionMustExist(
         TvContext dbContext,
-        AddFillerToCollection request) =>
+        AddFillerToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.Collections
             .Include(c => c.MediaItems)
-            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId)
+            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Collection does not exist."));
 
     private static Task<Validation<BaseError, FillerMediaItem>> ValidateFiller(
         TvContext dbContext,
-        AddFillerToCollection request) =>
+        AddFillerToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.FillerMediaItems
-            .SelectOneAsync(m => m.Id, e => e.Id == request.FillerId)
+            .SelectOneAsync(m => m.Id, e => e.Id == request.FillerId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Filler does not exist"));
 
     private sealed record Parameters(Collection Collection, FillerMediaItem Filler);

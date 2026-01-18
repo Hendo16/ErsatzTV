@@ -1,4 +1,4 @@
-using ErsatzTV.Core.Domain;
+﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
 
@@ -97,9 +97,9 @@ internal static class Mapper
                 return fv.FillerMetadata.HeadOrNone()
                     .Map(fm => fm.Title ?? string.Empty)
                     .Map(
-                        s => string.IsNullOrWhiteSpace(playoutItem.ChapterTitle)
+                        s => string.IsNullOrWhiteSpace(chapterTitle)
                             ? s
-                            : $"{s} ({playoutItem.ChapterTitle})")
+                            : $"{s} ({chapterTitle})")
                     .IfNone("[unknown filler]");
             case Song s:
                 string songArtist = s.SongMetadata.HeadOrNone()

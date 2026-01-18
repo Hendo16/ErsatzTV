@@ -138,7 +138,7 @@ public class MediaCollectionRepository : IMediaCollectionRepository
 
                     break;
 
-                case ProgramScheduleItemCollectionType.Filler:
+                case CollectionType.Filler:
                     foreach (var mediaItemId in Optional(playlistItem.MediaItemId))
                     {
                         mediaItems.AddRange(await GetFillerItems(dbContext, [mediaItemId]));

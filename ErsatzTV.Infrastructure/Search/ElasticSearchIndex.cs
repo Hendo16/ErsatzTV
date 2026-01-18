@@ -320,7 +320,7 @@ public class ElasticSearchIndex : ISearchIndex
                 await UpdateOtherVideo(languageCodeService, otherVideo);
                 break;
             case FillerMediaItem filler:
-                await UpdateFiller(searchRepository, filler);
+                await UpdateFiller(languageCodeService, filler);
                 break;
             case Song song:
                 await UpdateSong(languageCodeService, song);
@@ -751,7 +751,8 @@ public class ElasticSearchIndex : ISearchIndex
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
+
             }
             catch (Exception ex)
             {

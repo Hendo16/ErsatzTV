@@ -12,7 +12,8 @@ public interface IFillerRepository
     Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> GetOrAdd(
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
-        string path);
+        string path,
+        CancellationToken cancellationToken);
 
     Task<IEnumerable<string>> FindFillerPaths(LibraryPath libraryPath);
     Task<List<int>> DeleteByPath(LibraryPath libraryPath, string path);

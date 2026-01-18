@@ -1,5 +1,6 @@
 ﻿using System.Linq.Expressions;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using Microsoft.EntityFrameworkCore;
 
 namespace ErsatzTV.Infrastructure.Extensions;
@@ -95,6 +96,19 @@ public static class QueryableExtensions
             .Include(m => m.ArtistMetadata).ThenInclude(mm => mm.Styles)
             .Include(m => m.ArtistMetadata).ThenInclude(mm => mm.Moods)
             .Include(m => m.ArtistMetadata).ThenInclude(mm => mm.Guids);
+
+    public static IQueryable<FillerMediaItem> IncludeForSearch(this IQueryable<FillerMediaItem> fillers) =>
+        fillers
+            .Include(mi => mi.Collections)
+            .Include(mi => mi.LibraryPath).ThenInclude(lp => lp.Library)
+            .Include(m => m.FillerMetadata).ThenInclude(mm => mm.Genres)
+            .Include(m => m.FillerMetadata).ThenInclude(mm => mm.Tags)
+            .Include(m => m.FillerMetadata).ThenInclude(mm => mm.Studios)
+            .Include(m => m.FillerMetadata).ThenInclude(mm => mm.Actors)
+            .Include(m => m.FillerMetadata).ThenInclude(mm => mm.Guids)
+            .Include(m => m.MediaVersions).ThenInclude(mv => mv.Chapters)
+            .Include(m => m.MediaVersions).ThenInclude(mv => mv.Streams)
+            .Include(m => m.MediaVersions).ThenInclude(mv => mv.MediaFiles);
 
     public static IQueryable<OtherVideo> IncludeForSearch(this IQueryable<OtherVideo> otherVideos) =>
         otherVideos

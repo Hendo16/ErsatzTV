@@ -43,10 +43,10 @@ public class GetFillerByIdHandler : IRequestHandler<GetFillerById, Option<Filler
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        Option<JellyfinMediaSource> maybeJellyfin = await _mediaSourceRepository.GetAllJellyfin()
+        Option<JellyfinMediaSource> maybeJellyfin = await _mediaSourceRepository.GetAllJellyfin(cancellationToken)
             .Map(list => list.HeadOrNone());
 
-        Option<EmbyMediaSource> maybeEmby = await _mediaSourceRepository.GetAllEmby()
+        Option<EmbyMediaSource> maybeEmby = await _mediaSourceRepository.GetAllEmby(cancellationToken)
             .Map(list => list.HeadOrNone());
 
         Option<FillerMediaItem> maybeFiller = await _fillerRepository.GetFiller(request.Id);
@@ -69,7 +69,7 @@ public class GetFillerByIdHandler : IRequestHandler<GetFillerById, Option<Filler
                 _plexPathReplacementService,
                 _jellyfinPathReplacementService,
                 _embyPathReplacementService,
-                false);
+                cancellationToken,false);
             return ProjectToViewModel(filler, localPath, languageCodes);
         }
 

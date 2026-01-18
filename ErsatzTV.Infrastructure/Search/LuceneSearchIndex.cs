@@ -393,7 +393,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                 UpdateOtherVideo(languageCodeService, otherVideo);
                 break;
             case FillerMediaItem filler:
-                await UpdateFiller(searchRepository, filler);
+                UpdateFiller(languageCodeService, filler);
                 break;
             case Song song:
                 UpdateSong(languageCodeService, song);
@@ -1253,8 +1253,7 @@ public sealed class LuceneSearchIndex : ISearchIndex
                     new StringField(StateField, filler.State.ToString(), Field.Store.NO),
                     new TextField(MetadataKindField, metadata.MetadataKind.ToString(), Field.Store.NO)
                 };
-
-                await AddLanguages(searchRepository, doc, filler.MediaVersions);
+                AddLanguages(languageCodeService, doc, filler.MediaVersions);
 
                 AddStatistics(doc, filler.MediaVersions);
 

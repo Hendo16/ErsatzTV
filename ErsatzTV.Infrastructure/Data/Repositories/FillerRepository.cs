@@ -50,13 +50,14 @@ public class FillerRepository : IFillerRepository
             .SingleOrDefaultAsync(m => m.Id == fillerId)
             .Map(Optional);
     }
-
+    
     public async Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> GetOrAdd(
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
-        string path)
+        string path,
+        CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         Option<FillerMediaItem> maybeExisting = await dbContext.FillerMediaItems
             .AsNoTracking()
             .Include(i => i.FillerMetadata)
@@ -80,13 +81,13 @@ public class FillerRepository : IFillerRepository
             .Include(ov => ov.TraktListItems)
             .ThenInclude(tli => tli.TraktList)
             .OrderBy(i => i.MediaVersions.First().MediaFiles.First().Path)
-            .SingleOrDefaultAsync(i => i.MediaVersions.First().MediaFiles.First().Path == path);
+            .SingleOrDefaultAsync(i => i.MediaVersions.First().MediaFiles.First().Path == path, cancellationToken);
 
         return await maybeExisting.Match(
             mediaItem =>
                 Right<BaseError, MediaItemScanResult<FillerMediaItem>>(
                     new MediaItemScanResult<FillerMediaItem>(mediaItem) { IsAdded = false }).AsTask(),
-            async () => await AddFiller(dbContext, libraryPath.Id, libraryFolder.Id, path));
+            async () => await AddFiller(dbContext, libraryPath.Id, libraryFolder.Id, path, cancellationToken));
     }
 
     public async Task<bool> AllFillerExists(List<int> fillerIds)
@@ -185,11 +186,12 @@ public class FillerRepository : IFillerRepository
         TvContext dbContext,
         int libraryPathId,
         int libraryFolderId,
-        string path)
+        string path,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (await MediaItemRepository.MediaFileAlreadyExists(path, libraryPathId, dbContext, _logger))
+            if (await MediaItemRepository.MediaFileAlreadyExists(path, libraryPathId, dbContext, _logger, cancellationToken))
             {
                 return new MediaFileAlreadyExists();
             }
@@ -208,10 +210,10 @@ public class FillerRepository : IFillerRepository
                 TraktListItems = []
             };
 
-            await dbContext.FillerMediaItems.AddAsync(filler);
-            await dbContext.SaveChangesAsync();
-            await dbContext.Entry(filler).Reference(m => m.LibraryPath).LoadAsync();
-            await dbContext.Entry(filler.LibraryPath).Reference(lp => lp.Library).LoadAsync();
+            await dbContext.FillerMediaItems.AddAsync(filler, cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.Entry(filler).Reference(m => m.LibraryPath).LoadAsync(cancellationToken);
+            await dbContext.Entry(filler.LibraryPath).Reference(lp => lp.Library).LoadAsync(cancellationToken);
             return new MediaItemScanResult<FillerMediaItem>(filler) { IsAdded = true };
         }
         catch (Exception ex)

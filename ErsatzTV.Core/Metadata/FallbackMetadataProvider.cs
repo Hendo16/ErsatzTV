@@ -389,7 +389,7 @@ public partial class FallbackMetadataProvider(IClient client) : IFallbackMetadat
         }
         catch (Exception ex)
         {
-            _client.Notify(ex);
+            client.Notify(ex);
             return None;
         }
     }

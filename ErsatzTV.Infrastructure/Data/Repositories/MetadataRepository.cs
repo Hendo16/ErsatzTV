@@ -447,7 +447,7 @@ public class MetadataRepository(IDbContextFactory<TvContext> dbContextFactory) :
 
     public async Task<Unit> MarkAsUpdated(FillerMetadata metadata, DateTime dateUpdated)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE FillerMetadata SET DateUpdated = @DateUpdated WHERE Id = @Id",
             new { DateUpdated = dateUpdated, metadata.Id }).ToUnit();
@@ -463,7 +463,7 @@ public class MetadataRepository(IDbContextFactory<TvContext> dbContextFactory) :
 
     public async Task<Unit> MarkAsExternal(FillerMetadata metadata)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE FillerMetadata SET MetadataKind = @Kind WHERE Id = @Id",
             new { metadata.Id, Kind = (int)MetadataKind.External }).ToUnit();
@@ -479,7 +479,7 @@ public class MetadataRepository(IDbContextFactory<TvContext> dbContextFactory) :
 
     public async Task<Unit> SetContentRating(FillerMetadata metadata, string contentRating)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync();
         return await dbContext.Connection.ExecuteAsync(
             @"UPDATE FillerMetadata SET ContentRating = @ContentRating WHERE Id = @Id",
             new { metadata.Id, ContentRating = contentRating }).ToUnit();

@@ -65,6 +65,16 @@ public class MovieFolderScannerTests
             _movieRepository.FindMoviePaths(Arg.Any<LibraryPath>())
                 .Returns(new List<string>().AsEnumerable().AsTask());
 
+            _fillerRepository = Substitute.For<IFillerRepository>();
+            /*
+            _fillerRepository.GetOrAdd(Arg.Any<LibraryPath>(), Arg.Any<LibraryFolder>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(args =>
+                    Right<BaseError, MediaItemScanResult<Movie>>(new FakeMovieWithPath(args.Arg<string>()))
+                        .AsTask());
+            _fillerRepository.FindMoviePaths(Arg.Any<LibraryPath>())
+                .Returns(new List<string>().AsEnumerable().AsTask());
+            */
+
             _mediaItemRepository = Substitute.For<IMediaItemRepository>();
             _mediaItemRepository.FlagFileNotFound(Arg.Any<LibraryPath>(), Arg.Any<string>())
                 .Returns(new List<int>().AsTask());
@@ -96,6 +106,7 @@ public class MovieFolderScannerTests
         }
 
         private IMovieRepository _movieRepository;
+        private IFillerRepository _fillerRepository;
         private IMediaItemRepository _mediaItemRepository;
         private ILocalStatisticsProvider _localStatisticsProvider;
         private ILocalMetadataProvider _localMetadataProvider;
@@ -741,6 +752,7 @@ public class MovieFolderScannerTests
                 Substitute.For<IFFmpegPngService>(),
                 Substitute.For<ITempFilePool>(),
                 Substitute.For<IClient>(),
+                _fillerRepository,
                 Logger);
         }
 
@@ -769,6 +781,7 @@ public class MovieFolderScannerTests
                 Substitute.For<IFFmpegPngService>(),
                 Substitute.For<ITempFilePool>(),
                 Substitute.For<IClient>(),
+                _fillerRepository,
                 Logger);
         }
     }
