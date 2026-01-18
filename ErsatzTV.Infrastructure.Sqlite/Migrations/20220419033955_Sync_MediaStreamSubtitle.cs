@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System;
+using System.Globalization;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -13,7 +14,7 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
 
             // delete all subtitles
             migrationBuilder.Sql("DELETE FROM Subtitle");
-        
+
             // sync media stream (kind == 3/subtitles) to subtitles table
             migrationBuilder.Sql(
                 $@"INSERT INTO Subtitle (Codec, `Default`, Forced, Language, StreamIndex, SubtitleKind, DateAdded, DateUpdated, EpisodeMetadataId)
@@ -30,7 +31,7 @@ namespace ErsatzTV.Infrastructure.Sqlite.Migrations
                      INNER JOIN MediaVersion MV on MV.Id = MediaStream.MediaVersionId
                      INNER JOIN MovieMetadata MM on MV.MovieId = MM.MovieId
                      WHERE MediaStreamKind = 3");
-        
+
             migrationBuilder.Sql(
                 $@"INSERT INTO Subtitle (Codec, `Default`, Forced, Language, StreamIndex, SubtitleKind, DateAdded, DateUpdated, MusicVideoMetadataId)
                      SELECT Codec, `Default`, Forced, Language, `Index`, 0, '{now}', '{now}', MVM.Id

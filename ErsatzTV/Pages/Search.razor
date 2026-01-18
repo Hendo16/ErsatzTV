@@ -90,10 +90,10 @@
                 {
                     <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#songs")" Style="margin-bottom: auto; margin-top: auto">@_songs.Count Songs</MudLink>
                 }
-            if (_fillers?.Count > 0)
-            {
-                <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#fillers")" Style="margin-bottom: auto; margin-top: auto">@_fillers.Count Fillers</MudLink>
-            }
+                @if (_fillers?.Count > 0)
+                {
+                    <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#fillers")" Style="margin-bottom: auto; margin-top: auto">@_fillers.Count Fillers</MudLink>
+                }
 
                 @if (_images?.Count > 0)
                 {
@@ -338,7 +338,7 @@
             <MudText Typo="Typo.h4"
                      Style="scroll-margin-top: 160px"
                      UserAttributes="@(new Dictionary<string, object> { { "id", "fillers" } })">
-                Other Videos
+                Filler
             </MudText>
             @if (_fillers.Count > 50)
             {
@@ -767,7 +767,7 @@
 
             IDialogReference dialog = await Dialog.ShowAsync<AddToCollectionDialog>("Add To Collection", parameters, options);
             DialogResult result = await dialog.Result;
-            if (!result.Canceled && result.Data is MediaCollectionViewModel collection)
+            if (result is { Canceled: false, Data: MediaCollectionViewModel collection })
             {
                 var request = new AddFillerToCollection(collection.Id, filler.FillerId);
                 Either<BaseError, Unit> addResult = await Mediator.Send(request, CancellationToken);

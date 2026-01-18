@@ -77,6 +77,11 @@
                     <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#other_videos")" Style="margin-bottom: auto; margin-top: auto">@_otherVideos.Count Other Videos</MudLink>
                 }
 
+                @if (_fillers?.Cards.Count > 0)
+                {
+                    <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#fillers")" Style="margin-bottom: auto; margin-top: auto">@_fillers.Count Fillers</MudLink>
+                }
+
                 @if (_songs?.Cards.Count > 0)
                 {
                     <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#songs")" Style="margin-bottom: auto; margin-top: auto">@_songs.Count Songs</MudLink>
@@ -326,6 +331,34 @@
             </MudStack>
         }
 
+        @if (_fillers?.Cards.Count > 0)
+        {
+            <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
+                <MudText Typo="Typo.h4" UserAttributes="@(new Dictionary<string, object> { { "id", "fillers" } })">
+                    Fillers
+                </MudText>
+                @if (_fillers.Count > 50)
+                {
+                    <MudLink Href="@GetFillersLink()" Class="ml-4">See All >></MudLink>
+                }
+            </div>
+            <MudDivider Class="mb-6"/>
+
+            <MudStack Row="true" Wrap="Wrap.Wrap" Class="mb-10">
+                @foreach (FillerCardViewModel card in _fillers.Cards.OrderBy(s => s.SortTitle))
+                {
+                    <MediaCard Data="@card"
+                               Href=""
+                               ArtworkKind="ArtworkKind.Thumbnail"
+                               DeleteClicked="@DeleteItemFromDatabase"
+                               SelectColor="@Color.Error"
+                               SelectClicked="@(e => SelectClicked(card, e))"
+                               IsSelected="@IsSelected(card)"
+                               IsSelectMode="@IsSelectMode()"/>
+                }
+            </MudStack>
+        }
+
         @if (_songs?.Cards.Count > 0)
         {
             <div class="mb-4" style="align-items: baseline; display: flex; flex-direction: row;">
@@ -423,6 +456,7 @@
     private TelevisionEpisodeCardResultsViewModel _episodes = new(0, [], new SearchPageMap([]));
     private MusicVideoCardResultsViewModel _musicVideos = new(0, [], new SearchPageMap([]));
     private OtherVideoCardResultsViewModel _otherVideos = new(0, [], new SearchPageMap([]));
+    private FillerCardResultsViewModel _fillers = new(0, [], new SearchPageMap([]));
     private SongCardResultsViewModel _songs = new(0, [], new SearchPageMap([]));
     private ImageCardResultsViewModel _images = new(0, [], new SearchPageMap([]));
     private RemoteStreamCardResultsViewModel _remoteStreams = new(0, [], new SearchPageMap([]));
@@ -619,6 +653,18 @@
     private string GetMusicVideosLink()
     {
         var uri = "media/music/videos/page/1";
+        if (!string.IsNullOrWhiteSpace(_query))
+        {
+            (string key, string value) = _query.EncodeQuery();
+            uri = $"{uri}?{key}={value}";
+        }
+
+        return uri;
+    }
+
+    private string GetFillersLink()
+    {
+        var uri = "media/filler/videos/page/1";
         if (!string.IsNullOrWhiteSpace(_query))
         {
             (string key, string value) = _query.EncodeQuery();

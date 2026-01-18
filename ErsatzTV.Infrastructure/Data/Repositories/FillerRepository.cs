@@ -50,7 +50,7 @@ public class FillerRepository : IFillerRepository
             .SingleOrDefaultAsync(m => m.Id == fillerId)
             .Map(Optional);
     }
-    
+
     public async Task<Either<BaseError, MediaItemScanResult<FillerMediaItem>>> GetOrAdd(
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
@@ -120,7 +120,7 @@ public class FillerRepository : IFillerRepository
             @"SELECT O.Id
             FROM FillerMediaItem O
             INNER JOIN MediaItem MI on O.Id = MI.Id
-            INNER JOIN MediaVersion MV on O.Id = MV.FillerId
+            INNER JOIN MediaVersion MV on O.Id = MV.FillerMediaItemId
             INNER JOIN MediaFile MF on MV.Id = MF.MediaVersionId
             WHERE MI.LibraryPathId = @LibraryPathId AND MF.Path = @Path",
             new { LibraryPathId = libraryPath.Id, Path = path }).Map(result => result.ToList());
@@ -203,7 +203,7 @@ public class FillerRepository : IFillerRepository
                 [
                     new MediaVersion
                     {
-                        MediaFiles = [new MediaFile { Path = path, LibraryFolderId = libraryFolderId }],
+                        MediaFiles = [new MediaFile { Path = path, PathHash = PathUtils.GetPathHash(path), LibraryFolderId = libraryFolderId }],
                         Streams = []
                     }
                 ],

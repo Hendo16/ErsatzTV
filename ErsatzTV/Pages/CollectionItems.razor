@@ -77,10 +77,10 @@
                         <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#other_videos")">@_data.OtherVideoCards.Count Other Videos</MudLink>
                     }
 
-            @if (_data?.FillerCards.Count > 0)
-            {
-                <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#filler")">@_data.FillerCards.Count Filler</MudLink>
-            }
+                    @if (_data?.FillerCards.Count > 0)
+                    {
+                        <MudLink Class="ml-4" Href="@(NavigationManager.Uri.Split("#").Head() + "#filler")">@_data.FillerCards.Count Filler</MudLink>
+                    }
 
                     @if (_data?.SongCards.Count > 0)
                     {
@@ -289,29 +289,29 @@
             </MudStack>
         }
 
-    @if (_data?.FillerCards.Count > 0)
-    {
-    <MudText GutterBottom="true"
-             Typo="Typo.h4"
-             Style="scroll-margin-top: 160px"
-             UserAttributes="@(new Dictionary<string, object> { { "id", "filler" } })">
-        Filler
-    </MudText>
-
-    <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
-        @foreach (FillerCardViewModel card in _data.FillerCards.OrderBy(e => e.SortTitle))
+        @if (_data?.FillerCards.Count > 0)
         {
-        <MediaCard Data="@card"
-                   Href="@($"media/filler/{card.FillerId}")"
-                   ArtworkKind="ArtworkKind.Thumbnail"
-                   DeleteClicked="@RemoveFillerFromCollection"
-                   SelectColor="@Color.Error"
-                   SelectClicked="@(e => SelectClicked(card, e))"
-                   IsSelected="@IsSelected(card)"
-                   IsSelectMode="@IsSelectMode()"/>
+        <MudText GutterBottom="true"
+                 Typo="Typo.h4"
+                 Style="scroll-margin-top: 160px"
+                 UserAttributes="@(new Dictionary<string, object> { { "id", "filler" } })">
+            Filler
+        </MudText>
+
+        <MudContainer MaxWidth="MaxWidth.False" Class="media-card-grid">
+            @foreach (FillerCardViewModel card in _data.FillerCards.OrderBy(e => e.SortTitle))
+            {
+            <MediaCard Data="@card"
+                       Href="@($"media/filler/{card.FillerId}")"
+                       ArtworkKind="ArtworkKind.Thumbnail"
+                       DeleteClicked="@RemoveFillerFromCollection"
+                       SelectColor="@Color.Error"
+                       SelectClicked="@(e => SelectClicked(card, e))"
+                       IsSelected="@IsSelected(card)"
+                       IsSelectMode="@IsSelectMode()"/>
+            }
+        </MudContainer>
         }
-    </MudContainer>
-    }
 
         @if (_data?.SongCards.Count > 0)
         {

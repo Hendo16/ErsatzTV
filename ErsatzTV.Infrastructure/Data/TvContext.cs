@@ -60,9 +60,9 @@ public class TvContext : DbContext
     public DbSet<MusicVideo> MusicVideos { get; set; }
     public DbSet<MusicVideoMetadata> MusicVideoMetadata { get; set; }
     public DbSet<OtherVideo> OtherVideos { get; set; }
+    public DbSet<FillerMetadata> FillerMetadata { get; set; }
     public DbSet<FillerMediaItem> FillerMediaItems { get; set; }
     public DbSet<OtherVideoMetadata> OtherVideoMetadata { get; set; }
-    public DbSet<FillerMetadata> FillerMetadata { get; set; }
     public DbSet<Song> Songs { get; set; }
     public DbSet<SongMetadata> SongMetadata { get; set; }
     public DbSet<Image> Images { get; set; }
@@ -170,6 +170,7 @@ public class TvContext : DbContext
             modelBuilder.Entity<DecoTemplateGroup>().Property(d => d.Name).UseCollation(collation);
             modelBuilder.Entity<FillerPreset>().Property(fp => fp.Name).UseCollation(collation);
             modelBuilder.Entity<MetadataGuid>().Property(mg => mg.Guid).UseCollation(collation);
+            modelBuilder.Entity<FillerMetadata>().Property(fm => fm.Title).UseCollation(collation);
             modelBuilder.Entity<MovieMetadata>().Property(mm => mm.Title).UseCollation(collation);
             modelBuilder.Entity<MultiCollection>().Property(mc => mc.Name).UseCollation(collation);
             modelBuilder.Entity<Playlist>().Property(p => p.Name).UseCollation(collation);
