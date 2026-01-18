@@ -7,27 +7,25 @@ namespace ErsatzTV.Infrastructure.Jellyfin;
 public interface IJellyfinApi
 {
     [Get("/System/Info")]
-    public Task<JellyfinSystemInformationResponse> GetSystemInformation(
+    Task<JellyfinSystemInformationResponse> GetSystemInformation(
         [Header("X-Emby-Token")]
         string apiKey,
         CancellationToken cancellationToken);
 
     [Get("/Users")]
-    public Task<List<JellyfinUserResponse>> GetUsers(
+    Task<List<JellyfinUserResponse>> GetUsers(
         [Header("X-Emby-Token")]
         string apiKey);
 
     [Get("/Library/VirtualFolders")]
-    public Task<List<JellyfinLibraryResponse>> GetLibraries(
+    Task<List<JellyfinLibraryResponse>> GetLibraries(
         [Header("X-Emby-Token")]
         string apiKey);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetMovieLibraryItems(
+    Task<JellyfinLibraryItemsResponse> GetMovieLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -45,11 +43,9 @@ public interface IJellyfinApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetShowLibraryItems(
+    Task<JellyfinLibraryItemsResponse> GetShowLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -62,14 +58,14 @@ public interface IJellyfinApi
         [Query]
         int startIndex = 0,
         [Query]
-        int limit = 0);
+        int limit = 0,
+        [Query]
+        string ids = null);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetSeasonLibraryItems(
+    Task<JellyfinLibraryItemsResponse> GetSeasonLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -84,11 +80,9 @@ public interface IJellyfinApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetEpisodeLibraryItems(
+    Task<JellyfinLibraryItemsResponse> GetEpisodeLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -103,11 +97,9 @@ public interface IJellyfinApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetCollectionLibraryItems(
+    Task<JellyfinLibraryItemsResponse> GetCollectionLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -122,11 +114,9 @@ public interface IJellyfinApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<JellyfinLibraryItemsResponse> GetCollectionItems(
+    Task<JellyfinLibraryItemsResponse> GetCollectionItems(
         [Header("X-Emby-Token")]
         string apiKey,
-        [Query]
-        string userId,
         [Query]
         string parentId,
         [Query]
@@ -141,10 +131,21 @@ public interface IJellyfinApi
         int limit = 0);
 
     [Get("/Items/{itemId}/PlaybackInfo")]
-    public Task<JellyfinPlaybackInfoResponse> GetPlaybackInfo(
+    Task<JellyfinPlaybackInfoResponse> GetPlaybackInfo(
+        [Header("X-Emby-Token")]
+        string apiKey,
+        string itemId);
+
+    [Get("/Search/Hints")]
+    Task<JellyfinSearchHintsResponse> SearchHints(
         [Header("X-Emby-Token")]
         string apiKey,
         [Query]
-        string userId,
-        string itemId);
+        string searchTerm,
+        [Query]
+        string includeItemTypes = "Series",
+        [Query]
+        string parentId = null,
+        [Query]
+        int limit = 20);
 }

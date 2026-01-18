@@ -2,6 +2,7 @@
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +28,7 @@ public class GetWrappedProcessByChannelNumberHandler : FFmpegProcessHandler<GetW
         CancellationToken cancellationToken)
     {
         bool saveReports = await dbContext.ConfigElements
-            .GetValue<bool>(ConfigElementKey.FFmpegSaveReports)
+            .GetValue<bool>(ConfigElementKey.FFmpegSaveReports, cancellationToken)
             .Map(result => result.IfNone(false));
 
         Command process = await _ffmpegProcessService.WrapSegmenter(
@@ -38,6 +39,11 @@ public class GetWrappedProcessByChannelNumberHandler : FFmpegProcessHandler<GetW
             request.Host,
             request.AccessToken);
 
-        return new PlayoutItemProcessModel(process, Option<TimeSpan>.None, DateTimeOffset.MaxValue, true);
+        return new PlayoutItemProcessModel(
+            process,
+            Option<GraphicsEngineContext>.None,
+            Option<TimeSpan>.None,
+            DateTimeOffset.MaxValue,
+            true);
     }
 }

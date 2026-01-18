@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Application.Tree;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Application.MediaCollections;
@@ -30,7 +31,9 @@ internal static class Mapper
             $"{traktList.User}/{traktList.List}",
             traktList.Name,
             traktList.ItemCount,
-            traktList.Items.Count(i => i.MediaItemId.HasValue));
+            traktList.Items.Count(i => i.MediaItemId.HasValue),
+            traktList.AutoRefresh,
+            traktList.GeneratePlaylist);
 
     private static MultiCollectionItemViewModel ProjectToViewModel(MultiCollectionItem multiCollectionItem) =>
         new(
@@ -47,11 +50,19 @@ internal static class Mapper
             multiCollectionSmartItem.ScheduleAsGroup,
             multiCollectionSmartItem.PlaybackOrder);
 
+    internal static TreeViewModel ProjectToViewModel(List<PlaylistGroup> playlistGroups) =>
+        new(
+            playlistGroups.Map(bg => new TreeGroupViewModel(
+                bg.Id,
+                bg.Name,
+                bg.Playlists.Map(b => new TreeItemViewModel(b.Id, b.Name, b.IsSystem)).ToList(),
+                bg.IsSystem)).ToList());
+
     internal static PlaylistGroupViewModel ProjectToViewModel(PlaylistGroup playlistGroup) =>
-        new(playlistGroup.Id, playlistGroup.Name, playlistGroup.Playlists.Count);
+        new(playlistGroup.Id, playlistGroup.Name, playlistGroup.Playlists.Count, playlistGroup.IsSystem);
 
     internal static PlaylistViewModel ProjectToViewModel(Playlist playlist) =>
-        new(playlist.Id, playlist.PlaylistGroupId, playlist.Name);
+        new(playlist.Id, playlist.PlaylistGroupId, playlist.Name, playlist.IsSystem);
 
     internal static PlaylistItemViewModel ProjectToViewModel(PlaylistItem playlistItem) =>
         new(

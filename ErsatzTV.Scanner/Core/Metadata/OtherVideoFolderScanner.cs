@@ -20,6 +20,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
 {
     private readonly IClient _client;
     private readonly ILibraryRepository _libraryRepository;
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
@@ -33,6 +34,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalMetadataProvider localMetadataProvider,
         ILocalSubtitlesProvider localSubtitlesProvider,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
         IMediator mediator,
@@ -56,6 +58,7 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
         _localFileSystem = localFileSystem;
         _localMetadataProvider = localMetadataProvider;
         _localSubtitlesProvider = localSubtitlesProvider;
+        _localChaptersProvider = localChaptersProvider;
         _mediator = mediator;
         _otherVideoRepository = otherVideoRepository;
         _libraryRepository = libraryRepository;
@@ -128,7 +131,8 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
                     cancellationToken);
 
                 string otherVideoFolder = folderQueue.Dequeue();
-                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(otherVideoFolder);
+                Option<int> maybeParentFolder =
+                    await _libraryRepository.GetParentFolderId(libraryPath, otherVideoFolder, cancellationToken);
 
                 foldersCompleted++;
 
@@ -182,12 +186,13 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
                     _logger.LogDebug("Processing other video file {File}", file);
 
                     Either<BaseError, MediaItemScanResult<OtherVideo>> maybeVideo = await _otherVideoRepository
-                        .GetOrAdd(libraryPath, knownFolder, file)
+                        .GetOrAdd(libraryPath, knownFolder, file, cancellationToken)
                         .BindT(video => UpdateStatistics(video, ffmpegPath, ffprobePath))
                         .BindT(video => UpdateLibraryFolderId(video, knownFolder))
                         .BindT(UpdateMetadata)
                         .BindT(video => UpdateThumbnail(video, cancellationToken))
-                        .BindT(UpdateSubtitles)
+                        .BindT(result => UpdateSubtitles(result, cancellationToken))
+                        .BindT(result => UpdateChapters(result, cancellationToken))
                         .BindT(FlagNormal);
 
                     foreach (BaseError error in maybeVideo.LeftToSeq())
@@ -324,11 +329,28 @@ public class OtherVideoFolderScanner : LocalFolderScanner, IOtherVideoFolderScan
     }
 
     private async Task<Either<BaseError, MediaItemScanResult<OtherVideo>>> UpdateSubtitles(
-        MediaItemScanResult<OtherVideo> result)
+        MediaItemScanResult<OtherVideo> result,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true);
+            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true, cancellationToken);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _client.Notify(ex);
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, MediaItemScanResult<OtherVideo>>> UpdateChapters(
+        MediaItemScanResult<OtherVideo> result,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _localChaptersProvider.UpdateChapters(result.Item, None, cancellationToken);
             return result;
         }
         catch (Exception ex)

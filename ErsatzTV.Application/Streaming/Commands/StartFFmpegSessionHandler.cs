@@ -1,6 +1,7 @@
 ﻿using System.Threading.Channels;
 using Bugsnag;
 using ErsatzTV.Application.Channels;
+using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
@@ -9,6 +10,7 @@ using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Core.Interfaces.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -20,6 +22,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
     private readonly IClient _client;
     private readonly IConfigElementRepository _configElementRepository;
     private readonly IFFmpegSegmenterService _ffmpegSegmenterService;
+    private readonly IGraphicsEngine _graphicsEngine;
     private readonly IHlsPlaylistFilter _hlsPlaylistFilter;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILocalFileSystem _localFileSystem;
@@ -41,6 +44,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
         ILogger<HlsSessionWorkerV2> sessionWorkerV2Logger,
         IFFmpegSegmenterService ffmpegSegmenterService,
         IConfigElementRepository configElementRepository,
+        IGraphicsEngine graphicsEngine,
         IHostApplicationLifetime hostApplicationLifetime,
         ChannelWriter<IBackgroundServiceRequest> workerChannel)
     {
@@ -54,6 +58,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
         _sessionWorkerV2Logger = sessionWorkerV2Logger;
         _ffmpegSegmenterService = ffmpegSegmenterService;
         _configElementRepository = configElementRepository;
+        _graphicsEngine = graphicsEngine;
         _hostApplicationLifetime = hostApplicationLifetime;
         _workerChannel = workerChannel;
     }
@@ -68,13 +73,23 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
 
     private async Task<Unit> StartProcess(StartFFmpegSession request, CancellationToken cancellationToken)
     {
-        TimeSpan idleTimeout = await _configElementRepository
-            .GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout)
+        Option<TimeSpan> idleTimeout = await _configElementRepository
+            .GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout, cancellationToken)
             .Map(maybeTimeout => maybeTimeout.Match(i => TimeSpan.FromSeconds(i), () => TimeSpan.FromMinutes(1)));
 
         Option<int> targetFramerate = await _mediator.Send(
             new GetChannelFramerate(request.ChannelNumber),
             cancellationToken);
+
+        // disable idle timeout when configured to keep running
+        Option<ChannelViewModel> channel =
+            await _mediator.Send(new GetChannelByNumber(request.ChannelNumber), cancellationToken);
+        if (await channel.Map(c => c.IdleBehavior is ChannelIdleBehavior.KeepRunning).IfNoneAsync(false))
+        {
+            idleTimeout = Option<TimeSpan>.None;
+        }
+
+        await _mediator.Send(new RefreshGraphicsElements(), cancellationToken);
 
         IHlsSessionWorker worker = GetSessionWorker(request, targetFramerate);
 
@@ -94,7 +109,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
                 TaskScheduler.Default);
 
         int initialSegmentCount = await _configElementRepository
-            .GetValue<int>(ConfigElementKey.FFmpegInitialSegmentCount)
+            .GetValue<int>(ConfigElementKey.FFmpegInitialSegmentCount, cancellationToken)
             .Map(maybeCount => maybeCount.Match(identity, () => 1));
 
         await worker.WaitForPlaylistSegments(initialSegmentCount, cancellationToken);
@@ -114,6 +129,7 @@ public class StartFFmpegSessionHandler : IRequestHandler<StartFFmpegSession, Eit
                 request.Host),
             _ => new HlsSessionWorker(
                 _serviceScopeFactory,
+                _graphicsEngine,
                 _client,
                 _hlsPlaylistFilter,
                 _configElementRepository,

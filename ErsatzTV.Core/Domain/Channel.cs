@@ -1,5 +1,5 @@
-using ErsatzTV.Core.Domain.Filler;
 using System.Net;
+using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Core.Domain;
 
@@ -23,6 +23,8 @@ public class Channel
     public StreamingMode StreamingMode { get; set; }
     public List<Playout> Playouts { get; set; }
     public List<Artwork> Artwork { get; set; }
+    public ChannelStreamSelectorMode StreamSelectorMode { get; set; }
+    public string StreamSelector { get; set; }
     public string PreferredAudioLanguageCode { get; set; }
     public string PreferredAudioTitle { get; set; }
     public string PreferredSubtitleLanguageCode { get; set; }
@@ -30,6 +32,10 @@ public class Channel
     public ChannelMusicVideoCreditsMode MusicVideoCreditsMode { get; set; }
     public string MusicVideoCreditsTemplate { get; set; }
     public ChannelSongVideoMode SongVideoMode { get; set; }
-    public ChannelProgressMode ProgressMode { get; set; }
+    public ChannelPlayoutMode PlayoutMode { get; set; }
+    public ChannelTranscodeMode TranscodeMode { get; set; }
+    public ChannelIdleBehavior IdleBehavior { get; set; }
+    public bool IsEnabled { get; set; }
+    public bool ShowInEpg { get; set; }
     public string WebEncodedName => WebUtility.UrlEncode(Name);
 }

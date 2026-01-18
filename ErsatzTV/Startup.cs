@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
-using System.Net.Security;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -32,13 +31,18 @@ using ErsatzTV.Core.Interfaces.Scripting;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Core.Interfaces.Trakt;
+using ErsatzTV.Core.Interfaces.Troubleshooting;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Metadata;
 using ErsatzTV.Core.Plex;
 using ErsatzTV.Core.Scheduling;
 using ErsatzTV.Core.Scheduling.BlockScheduling;
+using ErsatzTV.Core.Scheduling.Engine;
+using ErsatzTV.Core.Scheduling.ScriptedScheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling;
+using ErsatzTV.Core.Search;
 using ErsatzTV.Core.Trakt;
+using ErsatzTV.Core.Troubleshooting;
 using ErsatzTV.FFmpeg.Capabilities;
 using ErsatzTV.FFmpeg.Pipeline;
 using ErsatzTV.FFmpeg.Runtime;
@@ -63,6 +67,7 @@ using ErsatzTV.Infrastructure.Scripting;
 using ErsatzTV.Infrastructure.Search;
 using ErsatzTV.Infrastructure.Sqlite.Data;
 using ErsatzTV.Infrastructure.Streaming;
+using ErsatzTV.Infrastructure.Streaming.Graphics;
 using ErsatzTV.Infrastructure.Trakt;
 using ErsatzTV.Serialization;
 using ErsatzTV.Services;
@@ -110,34 +115,32 @@ public class Startup
     {
         BugsnagConfiguration bugsnagConfig = Configuration.GetSection("Bugsnag").Get<BugsnagConfiguration>();
         services.Configure<BugsnagConfiguration>(Configuration.GetSection("Bugsnag"));
-        services.Configure<ForwardedHeadersOptions>(
-            options =>
-            {
-                options.ForwardedHeaders = ForwardedHeaders.All;
-                options.ForwardLimit = 2;
-                options.KnownNetworks.Clear();
-                options.KnownProxies.Clear();
-            });
+        services.Configure<ForwardedHeadersOptions>(options =>
+        {
+            options.ForwardedHeaders = ForwardedHeaders.All;
+            options.ForwardLimit = 2;
+            options.KnownNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
 
-        services.AddBugsnag(
-            configuration =>
-            {
-                configuration.ApiKey = bugsnagConfig.ApiKey;
-                configuration.ProjectNamespaces = new[] { "ErsatzTV" };
-                configuration.AppVersion = Assembly.GetEntryAssembly()
-                    ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
-                    ?.InformationalVersion ?? "unknown";
-                configuration.AutoNotify = true;
+        services.AddBugsnag(configuration =>
+        {
+            configuration.ApiKey = bugsnagConfig.ApiKey;
+            configuration.ProjectNamespaces = new[] { "ErsatzTV" };
+            configuration.AppVersion = Assembly.GetEntryAssembly()
+                ?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion ?? "unknown";
+            configuration.AutoNotify = true;
 
-                configuration.NotifyReleaseStages = new[] { "public", "develop" };
+            configuration.NotifyReleaseStages = new[] { "public", "develop" };
 
 #if DEBUG || DEBUG_NO_SYNC
-                configuration.ReleaseStage = "develop";
+            configuration.ReleaseStage = "develop";
 #else
-                    // effectively "disable" by tweaking app config
-                    configuration.ReleaseStage = bugsnagConfig.Enable ? "public" : "private";
+            // effectively "disable" by tweaking app config
+            configuration.ReleaseStage = bugsnagConfig.Enable ? "public" : "private";
 #endif
-            });
+        });
 
         services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(FileSystemLayout.DataProtectionFolder));
 
@@ -147,12 +150,11 @@ public class Startup
 
         if (OidcHelper.IsEnabled)
         {
-            services.AddAuthentication(
-                    options =>
-                    {
-                        options.DefaultScheme = "cookie";
-                        options.DefaultChallengeScheme = "oidc";
-                    })
+            services.AddAuthentication(options =>
+                {
+                    options.DefaultScheme = "cookie";
+                    options.DefaultChallengeScheme = "oidc";
+                })
                 .AddCookie(
                     "cookie",
                     options =>
@@ -233,8 +235,7 @@ public class Startup
 
         if (OidcHelper.IsEnabled || JwtHelper.IsEnabled)
         {
-            services.AddAuthorization(
-                options =>
+            services.AddAuthorization(options =>
                 {
                     if (OidcHelper.IsEnabled)
                     {
@@ -261,35 +262,32 @@ public class Startup
             );
         }
 
-        services.AddCors(
-            o => o.AddPolicy(
-                "AllowAll",
-                builder =>
-                {
-                    builder.AllowAnyOrigin()
-                        .AllowAnyMethod()
-                        .AllowAnyHeader();
-                }));
+        services.AddCors(o => o.AddPolicy(
+            "AllowAll",
+            builder =>
+            {
+                builder.AllowAnyOrigin()
+                    .AllowAnyMethod()
+                    .AllowAnyHeader();
+            }));
 
         services.AddLocalization();
 
-        services.AddControllers(
-                options =>
-                {
-                    options.OutputFormatters.Insert(0, new ConcatPlaylistOutputFormatter());
-                    options.OutputFormatters.Insert(0, new ChannelPlaylistOutputFormatter());
-                    options.OutputFormatters.Insert(0, new ChannelGuideOutputFormatter());
-                    options.OutputFormatters.Insert(0, new DeviceXmlOutputFormatter());
-                    options.OutputFormatters.Insert(0, new HdhrJsonOutputFormatter());
-                })
-            .AddNewtonsoftJson(
-                opt =>
-                {
-                    opt.SerializerSettings.NullValueHandling = NullValueHandling.Ignore;
-                    opt.SerializerSettings.ReferenceLoopHandling = ReferenceLoopHandling.Ignore;
-                    opt.SerializerSettings.ContractResolver = new CustomContractResolver();
-                    opt.SerializerSettings.Converters.Add(new StringEnumConverter());
-                });
+        services.AddControllers(options =>
+            {
+                options.OutputFormatters.Insert(0, new ConcatPlaylistOutputFormatter());
+                options.OutputFormatters.Insert(0, new ChannelPlaylistOutputFormatter());
+                options.OutputFormatters.Insert(0, new ChannelGuideOutputFormatter());
+                options.OutputFormatters.Insert(0, new DeviceXmlOutputFormatter());
+                options.OutputFormatters.Insert(0, new HdhrJsonOutputFormatter());
+            })
+            .AddNewtonsoftJson(opt =>
+            {
+                opt.SerializerSettings.NullValueHandling = NullValueHandling.Ignore;
+                opt.SerializerSettings.ReferenceLoopHandling = ReferenceLoopHandling.Ignore;
+                opt.SerializerSettings.ContractResolver = new CustomContractResolver();
+                opt.SerializerSettings.Converters.Add(new StringEnumConverter());
+            });
 
         services.AddScoped(_ => new ConditionalIptvAuthorizeFilter("JwtOnlyScheme"));
 
@@ -298,14 +296,13 @@ public class Startup
 
         services.AddMemoryCache();
 
-        services.AddRazorPages(
-            options =>
+        services.AddRazorPages(options =>
+        {
+            if (OidcHelper.IsEnabled)
             {
-                if (OidcHelper.IsEnabled)
-                {
-                    options.Conventions.AuthorizeFolder("/");
-                }
-            });
+                options.Conventions.AuthorizeFolder("/");
+            }
+        });
 
         services.AddServerSideBlazor()
             .AddHubOptions(hubOptions => hubOptions.MaximumReceiveMessageSize = 1024 * 1024);
@@ -328,7 +325,7 @@ public class Startup
         Log.Logger.Warning(
             "Give feedback at {GitHub} or {Discord}",
             "https://github.com/ErsatzTV/ErsatzTV",
-            "https://discord.gg/hHaJm3yGy6");
+            "https://discord.ersatztv.org");
 
         CopyMacOsConfigFolderIfNeeded();
 
@@ -340,7 +337,12 @@ public class Startup
             FileSystemLayout.FontsCacheFolder,
             FileSystemLayout.TemplatesFolder,
             FileSystemLayout.MusicVideoCreditsTemplatesFolder,
+            FileSystemLayout.ChannelStreamSelectorsFolder,
             FileSystemLayout.ChannelGuideTemplatesFolder,
+            FileSystemLayout.GraphicsElementsTemplatesFolder,
+            FileSystemLayout.GraphicsElementsTextTemplatesFolder,
+            FileSystemLayout.GraphicsElementsImageTemplatesFolder,
+            FileSystemLayout.GraphicsElementsSubtitleTemplatesFolder,
             FileSystemLayout.ScriptsFolder,
             FileSystemLayout.MultiEpisodeShuffleTemplatesFolder,
             FileSystemLayout.AudioStreamSelectorScriptsFolder
@@ -369,6 +371,8 @@ public class Startup
             {
                 if (databaseProvider == Provider.Sqlite.Name)
                 {
+                    TvContext.IsSqlite = true;
+
                     options.UseSqlite(
                         sqliteConnectionString,
                         o =>
@@ -380,6 +384,8 @@ public class Startup
 
                 if (databaseProvider == Provider.MySql.Name)
                 {
+                    TvContext.IsSqlite = false;
+
                     options.UseMySql(
                         mySqlConnectionString,
                         ServerVersion.AutoDetect(mySqlConnectionString),
@@ -394,33 +400,32 @@ public class Startup
             ServiceLifetime.Scoped,
             ServiceLifetime.Singleton);
 
-        services.AddDbContextFactory<TvContext>(
-            options =>
+        services.AddDbContextFactory<TvContext>(options =>
+        {
+            if (databaseProvider == Provider.Sqlite.Name)
             {
-                if (databaseProvider == Provider.Sqlite.Name)
-                {
-                    options.UseSqlite(
-                        sqliteConnectionString,
-                        o =>
-                        {
-                            o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
-                            o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
-                        });
-                }
+                options.UseSqlite(
+                    sqliteConnectionString,
+                    o =>
+                    {
+                        o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+                        o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
+                    });
+            }
 
-                if (databaseProvider == Provider.MySql.Name)
-                {
-                    options.UseMySql(
-                        mySqlConnectionString,
-                        ServerVersion.AutoDetect(mySqlConnectionString),
-                        o =>
-                        {
-                            o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
-                            o.MigrationsAssembly("ErsatzTV.Infrastructure.MySql");
-                        }
-                    );
-                }
-            });
+            if (databaseProvider == Provider.MySql.Name)
+            {
+                options.UseMySql(
+                    mySqlConnectionString,
+                    ServerVersion.AutoDetect(mySqlConnectionString),
+                    o =>
+                    {
+                        o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+                        o.MigrationsAssembly("ErsatzTV.Infrastructure.MySql");
+                    }
+                );
+            }
+        });
 
         if (databaseProvider == Provider.Sqlite.Name)
         {
@@ -459,7 +464,7 @@ public class Startup
 
     public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
     {
-        string baseUrl = Environment.GetEnvironmentVariable("ETV_BASE_URL");
+        string baseUrl = SystemEnvironment.BaseUrl;
         if (!string.IsNullOrWhiteSpace(baseUrl))
         {
             try
@@ -478,53 +483,52 @@ public class Startup
         app.UseCors("AllowAll");
         app.UseForwardedHeaders();
 
-        // app.UseHttpLogging();
-        app.UseSerilogRequestLogging(
-            options =>
+        //app.UseHttpLogging();
+        app.UseSerilogRequestLogging(options =>
+        {
+            options.IncludeQueryInRequestPath = true;
+
+            // Emit debug-level events instead of the defaults
+            options.GetLevel = (httpContext, elapsed, ex) =>
             {
-                options.IncludeQueryInRequestPath = true;
-
-                // Emit debug-level events instead of the defaults
-                options.GetLevel = (httpContext, elapsed, ex) =>
+                if (ex is not null)
                 {
-                    if (ex is not null)
-                    {
-                        return LogEventLevel.Error;
-                    }
+                    return LogEventLevel.Error;
+                }
 
-                    if (httpContext.Response.StatusCode > 499)
-                    {
-                        return LogEventLevel.Error;
-                    }
-
-                    if (httpContext.Request.Path.ToUriComponent().StartsWith(
-                            "/iptv",
-                            StringComparison.OrdinalIgnoreCase))
-                    {
-                        return LogEventLevel.Debug;
-                    }
-
-                    return LogEventLevel.Verbose;
-                };
-
-                options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+                if (httpContext.Response.StatusCode > 499)
                 {
-                    diagnosticContext.Set("RemoteIP", httpContext.Connection.RemoteIpAddress);
-                    diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"]);
-                };
+                    return LogEventLevel.Error;
+                }
 
-                options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.00} ms from {UserAgent} at {RemoteIP}";
-            });
+                if (httpContext.Request.Path.ToUriComponent().StartsWith(
+                        "/iptv",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return LogEventLevel.Debug;
+                }
 
-        app.UseRequestLocalization(
-            options =>
+                return LogEventLevel.Verbose;
+            };
+
+            options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
             {
-                CultureInfo[] cinfo = CultureInfo.GetCultures(CultureTypes.AllCultures & ~CultureTypes.NeutralCultures);
-                string[] supportedCultures = cinfo.Select(t => t.Name).Distinct().ToArray();
-                options.AddSupportedCultures(supportedCultures)
-                    .AddSupportedUICultures(supportedCultures)
-                    .SetDefaultCulture("en-US");
-            });
+                diagnosticContext.Set("RemoteIP", httpContext.Connection.RemoteIpAddress);
+                diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"]);
+            };
+
+            options.MessageTemplate =
+                "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.00} ms from {UserAgent} at {RemoteIP}";
+        });
+
+        app.UseRequestLocalization(options =>
+        {
+            CultureInfo[] cinfo = CultureInfo.GetCultures(CultureTypes.AllCultures & ~CultureTypes.NeutralCultures);
+            string[] supportedCultures = cinfo.Select(t => t.Name).Distinct().ToArray();
+            options.AddSupportedCultures(supportedCultures)
+                .AddSupportedUICultures(supportedCultures)
+                .SetDefaultCulture("en-US");
+        });
 
         app.UseStaticFiles();
 
@@ -556,21 +560,21 @@ public class Startup
 
         app.UseResponseCompression();
 
-        app.Use(
-            async (context, next) =>
+        app.Use(async (context, next) =>
+        {
+            if (!context.Request.Host.Value.StartsWith("localhost", StringComparison.OrdinalIgnoreCase) &&
+                !IsIptvPath(context.Request.Path) &&
+                context.Connection.LocalPort != Settings.UiPort)
             {
-                if (!context.Request.Path.StartsWithSegments("/iptv") &&
-                    context.Connection.LocalPort != Settings.UiPort)
-                {
-                    context.Response.StatusCode = 404;
-                    return;
-                }
+                context.Response.StatusCode = 404;
+                return;
+            }
 
-                await next(context);
-            });
+            await next(context);
+        });
 
         app.MapWhen(
-            ctx => !ctx.Request.Path.StartsWithSegments("/iptv"),
+            ctx => !IsIptvPath(ctx.Request.Path),
             blazor =>
             {
                 blazor.UseRouting();
@@ -583,22 +587,31 @@ public class Startup
 #pragma warning restore ASP0001
                 }
 
-                blazor.UseEndpoints(
-                    endpoints =>
-                    {
-                        endpoints.MapControllers();
-                        endpoints.MapBlazorHub();
-                        endpoints.MapFallbackToPage("/_Host");
-                    });
+                blazor.UseEndpoints(endpoints =>
+                {
+                    endpoints.MapControllers();
+                    endpoints.MapBlazorHub();
+                    endpoints.MapFallbackToPage("/_Host");
+                });
             });
 
         app.MapWhen(
-            ctx => ctx.Request.Path.StartsWithSegments("/iptv"),
+            ctx => IsIptvPath(ctx.Request.Path),
             iptv =>
             {
                 iptv.UseRouting();
                 iptv.UseEndpoints(endpoints => endpoints.MapControllers());
             });
+        return;
+
+        bool IsIptvPath(PathString path)
+        {
+            return path.StartsWithSegments("/iptv") ||
+                   path.StartsWithSegments("/discover.json") ||
+                   path.StartsWithSegments("/device.xml") ||
+                   path.StartsWithSegments("/lineup.json") ||
+                   path.StartsWithSegments("/lineup_status.json");
+        }
     }
 
     private static void CustomServices(IServiceCollection services)
@@ -608,6 +621,11 @@ public class Startup
         services.AddSingleton<ITraktApiClient, TraktApiClient>();
         services.AddSingleton<IEntityLocker, EntityLocker>();
         services.AddSingleton<ISearchTargets, SearchTargets>();
+        services.AddSingleton<ISmartCollectionCache, SmartCollectionCache>();
+        services.AddSingleton<SearchQueryParser>();
+        services.AddSingleton<ITroubleshootingNotifier, TroubleshootingNotifier>();
+        services.AddSingleton<CustomFontMapper>();
+        services.AddSingleton<GraphicsEngineFonts>();
 
         if (SearchHelper.IsElasticSearchEnabled)
         {
@@ -648,6 +666,7 @@ public class Startup
         services.AddScoped<IUnavailableHealthCheck, UnavailableHealthCheck>();
         services.AddScoped<IVaapiDriverHealthCheck, VaapiDriverHealthCheck>();
         services.AddScoped<IErrorReportsHealthCheck, ErrorReportsHealthCheck>();
+        services.AddScoped<IUnifiedDockerHealthCheck, UnifiedDockerHealthCheck>();
         services.AddScoped<IHealthCheckService, HealthCheckService>();
 
         services.AddScoped<IChannelRepository, ChannelRepository>();
@@ -666,6 +685,7 @@ public class Startup
         services.AddScoped<IFillerRepository, FillerRepository>();
         services.AddScoped<ISongRepository, SongRepository>();
         services.AddScoped<IImageRepository, ImageRepository>();
+        services.AddScoped<IRemoteStreamRepository, RemoteStreamRepository>();
         services.AddScoped<ILibraryRepository, LibraryRepository>();
         services.AddScoped<IMetadataRepository, MetadataRepository>();
         services.AddScoped<IArtworkRepository, ArtworkRepository>();
@@ -678,7 +698,9 @@ public class Startup
         services.AddScoped<IBlockPlayoutBuilder, BlockPlayoutBuilder>();
         services.AddScoped<IBlockPlayoutPreviewBuilder, BlockPlayoutPreviewBuilder>();
         services.AddScoped<IBlockPlayoutFillerBuilder, BlockPlayoutFillerBuilder>();
-        services.AddScoped<IYamlPlayoutBuilder, YamlPlayoutBuilder>();
+        services.AddScoped<ISequentialPlayoutBuilder, SequentialPlayoutBuilder>();
+        services.AddScoped<IScriptedPlayoutBuilder, ScriptedPlayoutBuilder>();
+        services.AddScoped<ISchedulingEngine, SchedulingEngine>();
         services.AddScoped<IExternalJsonPlayoutBuilder, ExternalJsonPlayoutBuilder>();
         services.AddScoped<IPlayoutTimeShifter, PlayoutTimeShifter>();
         services.AddScoped<IImageCache, ImageCache>();
@@ -699,12 +721,18 @@ public class Startup
         services.AddScoped<IEmbyMovieRepository, EmbyMovieRepository>();
         services.AddScoped<IRuntimeInfo, RuntimeInfo>();
         services.AddScoped<IPlexPathReplacementService, PlexPathReplacementService>();
+        services.AddScoped<ICustomStreamSelector, CustomStreamSelector>();
         services.AddScoped<IFFmpegStreamSelector, FFmpegStreamSelector>();
         services.AddScoped<IStreamSelectorRepository, StreamSelectorRepository>();
         services.AddScoped<IHardwareCapabilitiesFactory, HardwareCapabilitiesFactory>();
         services.AddScoped<IMultiEpisodeShuffleCollectionEnumeratorFactory,
             MultiEpisodeShuffleCollectionEnumeratorFactory>();
         services.AddScoped<IChannelLogoGenerator, ChannelLogoGenerator>();
+        services.AddScoped<IGraphicsEngine, GraphicsEngine>();
+        services.AddScoped<IGraphicsElementRepository, GraphicsElementRepository>();
+        services.AddScoped<ITemplateDataRepository, TemplateDataRepository>();
+        services.AddScoped<TemplateFunctions>();
+        services.AddScoped<IWatermarkSelector, WatermarkSelector>();
 
         services.AddScoped<IFFmpegProcessService, FFmpegLibraryProcessService>();
         services.AddScoped<IPipelineBuilderFactory, PipelineBuilderFactory>();
@@ -713,16 +741,16 @@ public class Startup
         services.AddScoped<ISongVideoGenerator, SongVideoGenerator>();
         services.AddScoped<IMusicVideoCreditsGenerator, MusicVideoCreditsGenerator>();
         services.AddScoped<IGitHubApiClient, GitHubApiClient>();
-        services.AddScoped<IHtmlSanitizer, HtmlSanitizer>(
-            _ =>
-            {
-                var sanitizer = new HtmlSanitizer();
-                sanitizer.AllowedAttributes.Add("class");
-                return sanitizer;
-            });
+        services.AddScoped<IHtmlSanitizer, HtmlSanitizer>(_ =>
+        {
+            var sanitizer = new HtmlSanitizer();
+            sanitizer.AllowedAttributes.Add("class");
+            return sanitizer;
+        });
         services.AddScoped<IJellyfinSecretStore, JellyfinSecretStore>();
         services.AddScoped<IEmbySecretStore, EmbySecretStore>();
         services.AddScoped<IScriptEngine, ScriptEngine>();
+        services.AddScoped<ISequentialScheduleValidator, SequentialScheduleValidator>();
 
         services.AddScoped<PlexEtag>();
 
@@ -737,6 +765,7 @@ public class Startup
         services.AddHostedService<ResourceExtractorService>();
         services.AddHostedService<PlatformSettingsService>();
         services.AddHostedService<RebuildSearchIndexService>();
+        services.AddHostedService<RunHealthChecksService>();
 
         // background services
 #if !DEBUG_NO_SYNC
@@ -756,10 +785,8 @@ public class Startup
     {
         services.AddSingleton(
             Channel.CreateUnbounded<TMessageType>(new UnboundedChannelOptions { SingleReader = true }));
-        services.AddSingleton(
-            provider => provider.GetRequiredService<Channel<TMessageType>>().Reader);
-        services.AddSingleton(
-            provider => provider.GetRequiredService<Channel<TMessageType>>().Writer);
+        services.AddSingleton(provider => provider.GetRequiredService<Channel<TMessageType>>().Reader);
+        services.AddSingleton(provider => provider.GetRequiredService<Channel<TMessageType>>().Writer);
     }
 
     private static void CopyMacOsConfigFolderIfNeeded()

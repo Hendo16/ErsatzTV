@@ -1,10 +1,10 @@
 ﻿using System.Threading.Channels;
 using ErsatzTV.Application.Playouts;
+using ErsatzTV.Application.Search;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Scheduling;
-using ErsatzTV.FFmpeg.OutputFormat;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +18,7 @@ public class AddItemsToCollectionHandler :
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
     private readonly IMovieRepository _movieRepository;
+    private readonly ChannelWriter<ISearchIndexBackgroundServiceRequest> _searchChannel;
     private readonly ITelevisionRepository _televisionRepository;
     private readonly IFillerRepository _fillerRepository;
 
@@ -27,7 +28,8 @@ public class AddItemsToCollectionHandler :
         IMovieRepository movieRepository,
         ITelevisionRepository televisionRepository,
         IFillerRepository fillerRepository,
-        ChannelWriter<IBackgroundServiceRequest> channel)
+        ChannelWriter<IBackgroundServiceRequest> channel,
+        ChannelWriter<ISearchIndexBackgroundServiceRequest> searchChannel)
     {
         _dbContextFactory = dbContextFactory;
         _mediaCollectionRepository = mediaCollectionRepository;
@@ -35,6 +37,7 @@ public class AddItemsToCollectionHandler :
         _televisionRepository = televisionRepository;
         _fillerRepository = fillerRepository;
         _channel = channel;
+        _searchChannel = searchChannel;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(
@@ -42,14 +45,15 @@ public class AddItemsToCollectionHandler :
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Collection> validation = await Validate(dbContext, request);
-        return await validation.Apply(c => ApplyAddItemsRequest(dbContext, c, request));
+        Validation<BaseError, Collection> validation = await Validate(dbContext, request, cancellationToken);
+        return await validation.Apply(c => ApplyAddItemsRequest(dbContext, c, request, cancellationToken));
     }
 
     private async Task<Unit> ApplyAddItemsRequest(
         TvContext dbContext,
         Collection collection,
-        AddItemsToCollection request)
+        AddItemsToCollection request,
+        CancellationToken cancellationToken)
     {
         var allItems = request.MovieIds
             .Append(request.ShowIds)
@@ -61,22 +65,25 @@ public class AddItemsToCollectionHandler :
             .Append(request.OtherVideoIds)
             .Append(request.SongIds)
             .Append(request.ImageIds)
+            .Append(request.RemoteStreamIds)
             .ToList();
 
         var toAddIds = allItems.Where(item => collection.MediaItems.All(mi => mi.Id != item)).ToList();
         List<MediaItem> toAdd = await dbContext.MediaItems
             .Filter(mi => toAddIds.Contains(mi.Id))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         collection.MediaItems.AddRange(toAdd);
 
-        if (await dbContext.SaveChangesAsync() > 0)
+        if (await dbContext.SaveChangesAsync(cancellationToken) > 0)
         {
+            await _searchChannel.WriteAsync(new ReindexMediaItems(toAddIds.ToArray()), cancellationToken);
+
             // refresh all playouts that use this collection
             foreach (int playoutId in await _mediaCollectionRepository
                          .PlayoutIdsUsingCollection(request.CollectionId))
             {
-                await _channel.WriteAsync(new BuildPlayout(playoutId, PlayoutBuildMode.Refresh));
+                await _channel.WriteAsync(new BuildPlayout(playoutId, PlayoutBuildMode.Refresh), cancellationToken);
             }
         }
 
@@ -85,8 +92,9 @@ public class AddItemsToCollectionHandler :
 
     private async Task<Validation<BaseError, Collection>> Validate(
         TvContext dbContext,
-        AddItemsToCollection request) =>
-        (await CollectionMustExist(dbContext, request),
+        AddItemsToCollection request,
+        CancellationToken cancellationToken) =>
+        (await CollectionMustExist(dbContext, request, cancellationToken),
             await ValidateMovies(request),
             await ValidateFiller(request),
             await ValidateShows(request),
@@ -96,10 +104,11 @@ public class AddItemsToCollectionHandler :
 
     private static Task<Validation<BaseError, Collection>> CollectionMustExist(
         TvContext dbContext,
-        AddItemsToCollection request) =>
+        AddItemsToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.Collections
             .Include(c => c.MediaItems)
-            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId)
+            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Collection does not exist."));
 
     private Task<Validation<BaseError, Unit>> ValidateMovies(AddItemsToCollection request) =>

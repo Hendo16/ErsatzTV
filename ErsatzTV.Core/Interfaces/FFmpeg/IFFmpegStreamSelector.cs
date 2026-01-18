@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Core.Domain;
+﻿using System.Collections.Immutable;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
 
 namespace ErsatzTV.Core.Interfaces.FFmpeg;
@@ -12,11 +13,13 @@ public interface IFFmpegStreamSelector
         StreamingMode streamingMode,
         Channel channel,
         string preferredAudioLanguage,
-        string preferredAudioTitle);
+        string preferredAudioTitle,
+        CancellationToken cancellationToken);
 
     Task<Option<Subtitle>> SelectSubtitleStream(
-        List<Subtitle> subtitles,
+        ImmutableList<Subtitle> subtitles,
         Channel channel,
         string preferredSubtitleLanguage,
-        ChannelSubtitleMode subtitleMode);
+        ChannelSubtitleMode subtitleMode,
+        CancellationToken cancellationToken);
 }

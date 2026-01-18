@@ -1,0 +1,86 @@
+@page "/settings/xmltv"
+@using ErsatzTV.Application.Configuration
+@implements IDisposable
+@inject IMediator Mediator
+@inject ISnackbar Snackbar
+@inject ILogger<XMLTVSettings> Logger
+
+<MudForm Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => SaveXmltvSettings())" Class="ml-6" StartIcon="@Icons.Material.Filled.Save">Save Settings</MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">XMLTV</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Days To Build</MudText>
+                </div>
+                <MudTextField @bind-Value="_xmltvSettings.DaysToBuild" Validation="@(new Func<int, string>(ValidateXmltvDaysToBuild))" Required="true" RequiredError="XMLTV days to build is required!" Adornment="Adornment.End" AdornmentText="days"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>XMLTV Time Zone</MudText>
+                </div>
+                <MudSelect @bind-Value="_xmltvSettings.TimeZone">
+                    <MudSelectItem Value="@XmltvTimeZone.Local">Local</MudSelectItem>
+                    <MudSelectItem Value="@XmltvTimeZone.Utc">UTC</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>XMLTV Block Behavior</MudText>
+                </div>
+                <MudSelect @bind-Value="_xmltvSettings.BlockBehavior">
+                    <MudSelectItem Value="@XmltvBlockBehavior.SplitTimeEvenly">Split Time Evenly</MudSelectItem>
+                    <MudSelectItem Value="@XmltvBlockBehavior.UseActualTimes">Use Actual Times</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+        </MudContainer>
+    </div>
+</MudForm>
+
+@code {
+    private CancellationTokenSource _cts;
+
+    private XmltvSettingsViewModel _xmltvSettings = new();
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        try
+        {
+            _xmltvSettings = await Mediator.Send(new GetXmltvSettings(), token);
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
+        }
+    }
+
+    private static string ValidateXmltvDaysToBuild(int daysToBuild) => daysToBuild <= 0 ? "XMLTV days to build must be greater than zero" : null;
+
+    private async Task SaveXmltvSettings()
+    {
+        Either<BaseError, Unit> result = await Mediator.Send(new UpdateXmltvSettings(_xmltvSettings), _cts.Token);
+        result.Match(
+            Left: error =>
+            {
+                Snackbar.Add(error.Value, Severity.Error);
+                Logger.LogError("Unexpected error saving xmltv settings: {Error}", error.Value);
+            },
+            Right: _ => Snackbar.Add("Successfully saved xmltv settings", Severity.Success));
+    }
+
+}

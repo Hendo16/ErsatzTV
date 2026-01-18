@@ -13,13 +13,7 @@ namespace ErsatzTV.Pages;
 
 public class MultiSelectBase<T> : FragmentNavigationBase
 {
-    private Option<MediaCardViewModel> _recentlySelected;
-
-    public MultiSelectBase()
-    {
-        _recentlySelected = None;
-        SelectedItems = [];
-    }
+    private Option<MediaCardViewModel> _recentlySelected = None;
 
     [Inject]
     protected IDialogService Dialog { get; set; }
@@ -33,7 +27,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
     [Inject]
     protected IMediator Mediator { get; set; }
 
-    protected System.Collections.Generic.HashSet<MediaCardViewModel> SelectedItems { get; }
+    protected System.Collections.Generic.HashSet<MediaCardViewModel> SelectedItems { get; } = [];
 
     protected bool IsSelected(MediaCardViewModel card) =>
         SelectedItems.Contains(card);
@@ -48,9 +42,10 @@ public class MultiSelectBase<T> : FragmentNavigationBase
     {
         SelectedItems.Clear();
         _recentlySelected = None;
+        StateHasChanged();
     }
 
-    protected virtual Task RefreshData() => Task.CompletedTask;
+    protected virtual Task RefreshData(CancellationToken cancellationToken) => Task.CompletedTask;
 
     protected void SelectClicked(
         Func<List<MediaCardViewModel>> getSortedItems,
@@ -91,7 +86,8 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         SelectedItems.OfType<OtherVideoCardViewModel>().Map(ov => ov.OtherVideoId).ToList(),
         SelectedItems.OfType<FillerCardViewModel>().Map(f => f.FillerId).ToList(),
         SelectedItems.OfType<SongCardViewModel>().Map(s => s.SongId).ToList(),
-        SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList());
+        SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList(),
+        SelectedItems.OfType<RemoteStreamCardViewModel>().Map(i => i.RemoteStreamId).ToList());
 
     protected Task AddSelectionToPlaylist() => AddItemsToPlaylist(
         SelectedItems.OfType<MovieCardViewModel>().Map(m => m.MovieId).ToList(),
@@ -103,7 +99,8 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         SelectedItems.OfType<OtherVideoCardViewModel>().Map(ov => ov.OtherVideoId).ToList(),
         SelectedItems.OfType<FillerCardViewModel>().Map(f => f.FillerId).ToList(),
         SelectedItems.OfType<SongCardViewModel>().Map(s => s.SongId).ToList(),
-        SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList());
+        SelectedItems.OfType<ImageCardViewModel>().Map(i => i.ImageId).ToList(),
+        SelectedItems.OfType<RemoteStreamCardViewModel>().Map(i => i.RemoteStreamId).ToList());
 
     protected async Task AddItemsToCollection(
         List<int> movieIds,
@@ -116,6 +113,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         List<int> fillerIds,
         List<int> songIds,
         List<int> imageIds,
+        List<int> remoteStreamIds,
         string entityName = "selected items")
     {
         int count = movieIds.Count + showIds.Count + seasonIds.Count + episodeIds.Count + artistIds.Count +
@@ -128,7 +126,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         IDialogReference dialog =
             await Dialog.ShowAsync<AddToCollectionDialog>("Add To Collection", parameters, options);
         DialogResult result = await dialog.Result;
-        if (!result.Canceled && result.Data is MediaCollectionViewModel collection)
+        if (result is { Canceled: false, Data: MediaCollectionViewModel collection })
         {
             var request = new AddItemsToCollection(
                 collection.Id,
@@ -141,7 +139,8 @@ public class MultiSelectBase<T> : FragmentNavigationBase
                 otherVideoIds,
                 fillerIds,
                 songIds,
-                imageIds);
+                imageIds,
+                remoteStreamIds);
 
             Either<BaseError, Unit> addResult = await Mediator.Send(request, CancellationToken);
             addResult.Match(
@@ -174,7 +173,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
             parameters,
             options);
         DialogResult result = await dialog.Result;
-        if (!result.Canceled)
+        if (result is { Canceled: false })
         {
             var itemIds = SelectedItems.Map(vm => vm.MediaItemId).ToList();
 
@@ -185,7 +184,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
                 },
                 CancellationToken);
 
-            await RefreshData();
+            await RefreshData(CancellationToken);
             ClearSelection();
         }
     }
@@ -201,6 +200,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         List<int> fillerIds,
         List<int> songIds,
         List<int> imageIds,
+        List<int> remoteStreamIds,
         string entityName = "selected items")
     {
         int count = movieIds.Count + showIds.Count + seasonIds.Count + episodeIds.Count + artistIds.Count +
@@ -213,7 +213,7 @@ public class MultiSelectBase<T> : FragmentNavigationBase
         IDialogReference dialog =
             await Dialog.ShowAsync<AddToPlaylistDialog>("Add To Playlist", parameters, options);
         DialogResult result = await dialog.Result;
-        if (!result.Canceled && result.Data is PlaylistViewModel playlist)
+        if (result is { Canceled: false, Data: PlaylistViewModel playlist })
         {
             var request = new AddItemsToPlaylist(
                 playlist.Id,
@@ -226,7 +226,8 @@ public class MultiSelectBase<T> : FragmentNavigationBase
                 otherVideoIds,
                 fillerIds,
                 songIds,
-                imageIds);
+                imageIds,
+                remoteStreamIds);
 
             Either<BaseError, Unit> addResult = await Mediator.Send(request, CancellationToken);
             addResult.Match(

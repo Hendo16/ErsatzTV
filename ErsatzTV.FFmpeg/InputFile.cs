@@ -6,8 +6,8 @@ namespace ErsatzTV.FFmpeg;
 
 public abstract record InputFile(string Path, IList<MediaStream> Streams)
 {
-    public List<IInputOption> InputOptions { get; } = new();
-    public List<IPipelineFilterStep> FilterSteps { get; } = new();
+    public List<IInputOption> InputOptions { get; } = [];
+    public List<IPipelineFilterStep> FilterSteps { get; } = [];
 }
 
 public record ConcatInputFile(string Url, FrameSize Resolution) : InputFile(
@@ -61,7 +61,10 @@ public record NullAudioInputFile : AudioInputFile
     public void Deconstruct(out AudioState DesiredState) => DesiredState = this.DesiredState;
 }
 
-public record VideoInputFile(string Path, IList<VideoStream> VideoStreams) : InputFile(
+public record VideoInputFile(
+    string Path,
+    IList<VideoStream> VideoStreams,
+    StreamInputKind StreamInputKind = StreamInputKind.Vod) : InputFile(
     Path,
     VideoStreams.Cast<MediaStream>().ToList())
 {
@@ -81,6 +84,17 @@ public record SubtitleInputFile(string Path, IList<MediaStream> SubtitleStreams,
     Path,
     SubtitleStreams)
 {
-    public bool IsImageBased => SubtitleStreams.All(
-        s => s.Codec is "hdmv_pgs_subtitle" or "dvd_subtitle" or "dvdsub" or "vobsub" or "pgssub" or "pgs");
+    public bool IsImageBased => SubtitleStreams.All(s =>
+        s.Codec is "hdmv_pgs_subtitle" or "dvd_subtitle" or "dvdsub" or "vobsub" or "pgssub" or "pgs");
+}
+
+public record GraphicsEngineInput() : InputFile("-", [])
+{
+    public void AddOption(IInputOption option)
+    {
+        if (option.AppliesTo(this))
+        {
+            InputOptions.Add(option);
+        }
+    }
 }

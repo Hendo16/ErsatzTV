@@ -10,7 +10,7 @@ namespace ErsatzTV.Core.FFmpeg;
 public class SongVideoGenerator : ISongVideoGenerator
 {
     private static readonly Random Random = new();
-    private static readonly object RandomLock = new();
+    private static readonly Lock RandomLock = new();
     private readonly IFFmpegProcessService _ffmpegProcessService;
     private readonly IImageCache _imageCache;
 
@@ -29,8 +29,6 @@ public class SongVideoGenerator : ISongVideoGenerator
     public async Task<Tuple<string, MediaVersion>> GenerateSongVideo(
         Song song,
         Channel channel,
-        Option<ChannelWatermark> maybePlayoutItemWatermark,
-        Option<ChannelWatermark> maybeGlobalWatermark,
         string ffmpegPath,
         string ffprobePath,
         CancellationToken cancellationToken)
@@ -165,7 +163,7 @@ public class SongVideoGenerator : ISongVideoGenerator
                     {
                         Id = 0,
                         ArtworkKind = ArtworkKind.Thumbnail,
-                        Path = Path.Combine(FileSystemLayout.ResourcesCacheFolder, "song_album_cover_512.png"),
+                        Path = Path.Combine(FileSystemLayout.ResourcesCacheFolder, "song_album_cover_512.png")
                     });
 
             // signal that we want to use cover art as watermark
@@ -219,18 +217,13 @@ public class SongVideoGenerator : ISongVideoGenerator
 
         string videoPath = backgroundPath;
 
-        videoVersion.MediaFiles = new List<MediaFile>
-        {
-            new() { Path = videoPath }
-        };
+        videoVersion.MediaFiles = [new MediaFile { Path = videoPath }];
 
         Either<BaseError, string> maybeSongImage = await _ffmpegProcessService.GenerateSongImage(
             ffmpegPath,
             ffprobePath,
             subtitleFile,
             channel,
-            maybePlayoutItemWatermark,
-            maybeGlobalWatermark,
             videoVersion,
             videoPath,
             boxBlur,
@@ -247,7 +240,7 @@ public class SongVideoGenerator : ISongVideoGenerator
             videoVersion = BackgroundImageMediaVersion.ForPath(
                 si,
                 channel.FFmpegProfile.Resolution,
-                isSongWithProgress: channel.SongVideoMode is ChannelSongVideoMode.WithProgress);
+                channel.SongVideoMode is ChannelSongVideoMode.WithProgress);
         }
 
         return Tuple(videoPath, videoVersion);

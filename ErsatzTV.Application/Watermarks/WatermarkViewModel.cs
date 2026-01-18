@@ -1,21 +1,23 @@
-﻿using ErsatzTV.Core.Domain;
+﻿using ErsatzTV.Application.Artworks;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.FFmpeg.State;
 
 namespace ErsatzTV.Application.Watermarks;
 
 public record WatermarkViewModel(
     int Id,
-    string Image,
+    ArtworkContentTypeModel Image,
     string Name,
     ChannelWatermarkMode Mode,
     ChannelWatermarkImageSource ImageSource,
     WatermarkLocation Location,
     WatermarkSize Size,
-    int Width,
-    int HorizontalMargin,
-    int VerticalMargin,
+    double Width,
+    double HorizontalMargin,
+    double VerticalMargin,
     int FrequencyMinutes,
     int DurationSeconds,
     int Opacity,
-    bool PlaceWithinSourceContent
-);
+    bool PlaceWithinSourceContent,
+    string OpacityExpression,
+    int ZIndex);

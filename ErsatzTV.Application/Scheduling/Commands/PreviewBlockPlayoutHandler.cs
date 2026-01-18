@@ -43,7 +43,7 @@ public class PreviewBlockPlayoutHandler(
                 Name = "Block Preview"
             },
             Items = [],
-            ProgramSchedulePlayoutType = ProgramSchedulePlayoutType.Block,
+            ScheduleKind = PlayoutScheduleKind.Block,
             PlayoutHistory = [],
             Templates =
             [
@@ -54,13 +54,30 @@ public class PreviewBlockPlayoutHandler(
                     MonthsOfYear = PlayoutTemplate.AllMonthsOfYear(),
                     Template = template
                 }
-            ]
+            ],
+            ProgramSchedule = new ProgramSchedule(),
+            ProgramScheduleAlternates = []
         };
 
-        await blockPlayoutBuilder.Build(playout, PlayoutBuildMode.Reset, cancellationToken);
+        var referenceData = new PlayoutReferenceData(
+            playout.Channel,
+            Option<Deco>.None,
+            playout.Items,
+            playout.Templates.ToList(),
+            playout.ProgramSchedule,
+            playout.ProgramScheduleAlternates,
+            playout.PlayoutHistory.ToList());
+
+        PlayoutBuildResult result =
+            await blockPlayoutBuilder.Build(
+                DateTimeOffset.Now,
+                playout,
+                referenceData,
+                PlayoutBuildMode.Reset,
+                cancellationToken);
 
         // load playout item details for title
-        foreach (PlayoutItem playoutItem in playout.Items)
+        foreach (PlayoutItem playoutItem in result.AddedItems)
         {
             Option<MediaItem> maybeMediaItem = await dbContext.MediaItems
                 .AsNoTracking()
@@ -84,7 +101,9 @@ public class PreviewBlockPlayoutHandler(
                 .Include(mi => (mi as Song).MediaVersions)
                 .Include(mi => (mi as Image).ImageMetadata)
                 .Include(mi => (mi as Image).MediaVersions)
-                .SelectOneAsync(mi => mi.Id, mi => mi.Id == playoutItem.MediaItemId);
+                .Include(mi => (mi as RemoteStream).RemoteStreamMetadata)
+                .Include(mi => (mi as RemoteStream).MediaVersions)
+                .SelectOneAsync(mi => mi.Id, mi => mi.Id == playoutItem.MediaItemId, cancellationToken);
 
             foreach (MediaItem mediaItem in maybeMediaItem)
             {
@@ -92,7 +111,7 @@ public class PreviewBlockPlayoutHandler(
             }
         }
 
-        return playout.Items.Map(Mapper.ProjectToViewModel).ToList();
+        return result.AddedItems.Map(Mapper.ProjectToViewModel).ToList();
     }
 
     private static Block MapToBlock(ReplaceBlockItems request) =>

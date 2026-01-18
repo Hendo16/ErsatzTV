@@ -38,7 +38,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
 
         IMediaCollectionEnumerator contentEnumerator =
             collectionEnumerators[CollectionKey.ForScheduleItem(scheduleItem)];
-        while (contentEnumerator.Current.IsSome && nextState.CurrentTime < hardStop && willFinishInTime &&
+        while (contentEnumerator.Current.IsSome && willFinishInTime &&
                nextState.CurrentTime < nextState.DurationFinish.IfNone(SystemTime.MaxValueUtc))
         {
             // Logger.LogDebug(
@@ -51,9 +51,11 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
             MediaItem mediaItem = contentEnumerator.Current.ValueUnsafe();
 
             // find when we should start this item, based on the current time
-            DateTimeOffset itemStartTime = GetStartTimeAfter(nextState, scheduleItem);
+            DateTimeOffset itemStartTime = GetStartTimeAfter(nextState, scheduleItem, Option<ILogger>.Some(Logger));
 
-            if (itemStartTime >= hardStop)
+            if (itemStartTime >= nextState.DurationFinish.IfNone(SystemTime.MaxValueUtc) ||
+                // don't start if the first item will already be after the hard stop
+                playoutItems.Count == 0 && itemStartTime >= hardStop)
             {
                 nextState = nextState with { CurrentTime = hardStop };
                 break;
@@ -144,6 +146,7 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
 
                 var playoutItem = new PlayoutItem
                 {
+                    PlayoutId = playoutBuilderState.PlayoutId,
                     MediaItemId = mediaItem.Id,
                     Start = itemStartTime.UtcDateTime,
                     Finish = itemStartTime.UtcDateTime + itemDuration,
@@ -155,12 +158,23 @@ public class PlayoutModeSchedulerDuration : PlayoutModeSchedulerBase<ProgramSche
                         ? FillerKind.GuideMode
                         : FillerKind.None,
                     CustomTitle = scheduleItem.CustomTitle,
-                    WatermarkId = scheduleItem.WatermarkId,
                     PreferredAudioLanguageCode = scheduleItem.PreferredAudioLanguageCode,
                     PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                     PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
-                    SubtitleMode = scheduleItem.SubtitleMode
+                    SubtitleMode = scheduleItem.SubtitleMode,
+                    PlayoutItemWatermarks = []
                 };
+
+                foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
+                             .ProgramScheduleItemWatermarks ?? [])
+                {
+                    playoutItem.PlayoutItemWatermarks.Add(
+                        new PlayoutItemWatermark
+                        {
+                            PlayoutItem = playoutItem,
+                            WatermarkId = programScheduleItemWatermark.WatermarkId
+                        });
+                }
 
                 durationUntil.Do(du => playoutItem.GuideFinish = du.UtcDateTime);
 

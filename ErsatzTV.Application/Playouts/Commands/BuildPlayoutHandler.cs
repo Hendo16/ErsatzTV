@@ -1,10 +1,11 @@
 ﻿using System.Threading.Channels;
 using Bugsnag;
-using Dapper;
+using EFCore.BulkExtensions;
 using ErsatzTV.Application.Channels;
 using ErsatzTV.Application.Subtitles;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Locking;
 using ErsatzTV.Core.Interfaces.Scheduling;
@@ -12,6 +13,7 @@ using ErsatzTV.Core.Scheduling;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
+using Channel = ErsatzTV.Core.Domain.Channel;
 
 namespace ErsatzTV.Application.Playouts;
 
@@ -19,14 +21,16 @@ public class BuildPlayoutHandler : IRequestHandler<BuildPlayout, Either<BaseErro
 {
     private readonly IBlockPlayoutBuilder _blockPlayoutBuilder;
     private readonly IBlockPlayoutFillerBuilder _blockPlayoutFillerBuilder;
-    private readonly IYamlPlayoutBuilder _yamlPlayoutBuilder;
     private readonly IClient _client;
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IEntityLocker _entityLocker;
     private readonly IExternalJsonPlayoutBuilder _externalJsonPlayoutBuilder;
     private readonly IFFmpegSegmenterService _ffmpegSegmenterService;
     private readonly IPlayoutBuilder _playoutBuilder;
+    private readonly IPlayoutTimeShifter _playoutTimeShifter;
     private readonly ChannelWriter<IBackgroundServiceRequest> _workerChannel;
+    private readonly ISequentialPlayoutBuilder _sequentialPlayoutBuilder;
+    private readonly IScriptedPlayoutBuilder _scriptedPlayoutBuilder;
 
     public BuildPlayoutHandler(
         IClient client,
@@ -34,10 +38,12 @@ public class BuildPlayoutHandler : IRequestHandler<BuildPlayout, Either<BaseErro
         IPlayoutBuilder playoutBuilder,
         IBlockPlayoutBuilder blockPlayoutBuilder,
         IBlockPlayoutFillerBuilder blockPlayoutFillerBuilder,
-        IYamlPlayoutBuilder yamlPlayoutBuilder,
+        ISequentialPlayoutBuilder sequentialPlayoutBuilder,
+        IScriptedPlayoutBuilder scriptedPlayoutBuilder,
         IExternalJsonPlayoutBuilder externalJsonPlayoutBuilder,
         IFFmpegSegmenterService ffmpegSegmenterService,
         IEntityLocker entityLocker,
+        IPlayoutTimeShifter playoutTimeShifter,
         ChannelWriter<IBackgroundServiceRequest> workerChannel)
     {
         _client = client;
@@ -45,85 +51,208 @@ public class BuildPlayoutHandler : IRequestHandler<BuildPlayout, Either<BaseErro
         _playoutBuilder = playoutBuilder;
         _blockPlayoutBuilder = blockPlayoutBuilder;
         _blockPlayoutFillerBuilder = blockPlayoutFillerBuilder;
-        _yamlPlayoutBuilder = yamlPlayoutBuilder;
+        _sequentialPlayoutBuilder = sequentialPlayoutBuilder;
+        _scriptedPlayoutBuilder = scriptedPlayoutBuilder;
         _externalJsonPlayoutBuilder = externalJsonPlayoutBuilder;
         _ffmpegSegmenterService = ffmpegSegmenterService;
         _entityLocker = entityLocker;
+        _playoutTimeShifter = playoutTimeShifter;
         _workerChannel = workerChannel;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(BuildPlayout request, CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Playout> validation = await Validate(dbContext, request);
-        return await validation.Match(
-            playout => ApplyUpdateRequest(dbContext, request, playout, cancellationToken),
-            error => Task.FromResult<Either<BaseError, Unit>>(error.Join()));
+        try
+        {
+            await _entityLocker.LockPlayout(request.PlayoutId);
+            if (request.Mode is not PlayoutBuildMode.Reset)
+            {
+                // this needs to happen before we load the playout in this handler because it modifies items, etc
+                await _playoutTimeShifter.TimeShift(request.PlayoutId, DateTimeOffset.Now, false, cancellationToken);
+            }
+
+            Either<BaseError, PlayoutBuildResult> result;
+
+            {
+                await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+                Validation<BaseError, Playout> validation = await Validate(dbContext, request, cancellationToken);
+                result = await validation.Match(
+                    playout => ApplyUpdateRequest(dbContext, request, playout, cancellationToken),
+                    error => Task.FromResult<Either<BaseError, PlayoutBuildResult>>(error.Join()));
+            }
+
+            // after dbcontext is closed
+            foreach (PlayoutBuildResult playoutBuildResult in result.RightToSeq())
+            {
+                foreach (DateTimeOffset timeShiftTo in playoutBuildResult.TimeShiftTo)
+                {
+                    await _playoutTimeShifter.TimeShift(request.PlayoutId, timeShiftTo, false, cancellationToken);
+                }
+            }
+
+            return result.Map(_ => Unit.Default);
+        }
+        finally
+        {
+            await _entityLocker.UnlockPlayout(request.PlayoutId);
+        }
     }
 
-    private async Task<Either<BaseError, Unit>> ApplyUpdateRequest(
+    private async Task<Either<BaseError, PlayoutBuildResult>> ApplyUpdateRequest(
         TvContext dbContext,
         BuildPlayout request,
         Playout playout,
         CancellationToken cancellationToken)
     {
+        var channelName = "[unknown]";
+
         try
         {
-            _entityLocker.LockPlayout(playout.Id);
+            PlayoutReferenceData referenceData = await GetReferenceData(
+                dbContext,
+                playout.Id,
+                playout.ScheduleKind);
+            string channelNumber = referenceData.Channel.Number;
+            channelName = referenceData.Channel.Name;
+            PlayoutBuildResult result = PlayoutBuildResult.Empty;
 
-            switch (playout.ProgramSchedulePlayoutType)
+            switch (playout.ScheduleKind)
             {
-                case ProgramSchedulePlayoutType.Block:
-                    await _blockPlayoutBuilder.Build(playout, request.Mode, cancellationToken);
-                    await _blockPlayoutFillerBuilder.Build(playout, request.Mode, cancellationToken);
+                case PlayoutScheduleKind.Block:
+                    result = await _blockPlayoutBuilder.Build(
+                        request.Start,
+                        playout,
+                        referenceData,
+                        request.Mode,
+                        cancellationToken);
+                    result = await _blockPlayoutFillerBuilder.Build(
+                        playout,
+                        referenceData,
+                        result,
+                        request.Mode,
+                        cancellationToken);
                     break;
-                case ProgramSchedulePlayoutType.Yaml:
-                    await _yamlPlayoutBuilder.Build(playout, request.Mode, cancellationToken);
+                case PlayoutScheduleKind.Sequential:
+                    result = await _sequentialPlayoutBuilder.Build(
+                        request.Start,
+                        playout,
+                        referenceData,
+                        request.Mode,
+                        cancellationToken);
                     break;
-                case ProgramSchedulePlayoutType.ExternalJson:
+                case PlayoutScheduleKind.Scripted:
+                    result = await _scriptedPlayoutBuilder.Build(
+                        request.Start,
+                        playout,
+                        referenceData,
+                        request.Mode,
+                        cancellationToken);
+                    break;
+                case PlayoutScheduleKind.ExternalJson:
                     await _externalJsonPlayoutBuilder.Build(playout, request.Mode, cancellationToken);
                     break;
-                case ProgramSchedulePlayoutType.None:
-                case ProgramSchedulePlayoutType.Flood:
+                case PlayoutScheduleKind.None:
+                case PlayoutScheduleKind.Classic:
                 default:
-                    await _playoutBuilder.Build(playout, request.Mode, cancellationToken);
+                    result = await _playoutBuilder.Build(playout, referenceData, request.Mode, cancellationToken);
                     break;
+            }
+
+            var changeCount = 0;
+
+            if (result.ClearItems)
+            {
+                changeCount += await dbContext.PlayoutItems
+                    .Where(pi => pi.PlayoutId == playout.Id)
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            foreach (DateTimeOffset removeBefore in result.RemoveBefore)
+            {
+                changeCount += await dbContext.PlayoutItems
+                    .Where(pi => pi.PlayoutId == playout.Id)
+                    .Where(pi => pi.Finish < removeBefore.UtcDateTime)
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            foreach (DateTimeOffset removeAfter in result.RemoveAfter)
+            {
+                changeCount += await dbContext.PlayoutItems
+                    .Where(pi => pi.PlayoutId == playout.Id)
+                    .Where(pi => pi.Start >= removeAfter.UtcDateTime)
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            if (result.ItemsToRemove.Count > 0)
+            {
+                changeCount += await dbContext.PlayoutItems
+                    .Where(pi => result.ItemsToRemove.Contains(pi.Id))
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            if (result.AddedItems.Count > 0)
+            {
+                changeCount += 1;
+                bool anyWatermarks = result.AddedItems.Any(i =>
+                    i.PlayoutItemWatermarks is not null && i.PlayoutItemWatermarks.Count > 0);
+                bool anyGraphicsElements = result.AddedItems.Any(i =>
+                    i.PlayoutItemGraphicsElements is not null && i.PlayoutItemGraphicsElements.Count > 0);
+                if (anyWatermarks || anyGraphicsElements)
+                {
+                    // need to use slow ef core to also insert watermarks and graphics elements properly
+                    await dbContext.AddRangeAsync(result.AddedItems, cancellationToken);
+                }
+                else
+                {
+                    // no watermarks or graphics, bulk insert is ok
+                    await dbContext.BulkInsertAsync(result.AddedItems, cancellationToken: cancellationToken);
+                }
+            }
+
+            if (result.HistoryToRemove.Count > 0)
+            {
+                changeCount += await dbContext.PlayoutHistory
+                    .Where(ph => result.HistoryToRemove.Contains(ph.Id))
+                    .ExecuteDeleteAsync(cancellationToken);
+            }
+
+            if (result.AddedHistory.Count > 0)
+            {
+                changeCount += 1;
+                await dbContext.BulkInsertAsync(result.AddedHistory, cancellationToken: cancellationToken);
             }
 
             // let any active segmenter processes know that the playout has been modified
             // and therefore the segmenter may need to seek into the next item instead of
             // starting at the beginning (if already working ahead)
-            bool hasChanges = await dbContext.SaveChangesAsync(cancellationToken) > 0;
+            changeCount += await dbContext.SaveChangesAsync(cancellationToken);
+            bool hasChanges = changeCount > 0;
+
             if (request.Mode != PlayoutBuildMode.Continue && hasChanges)
             {
-                _ffmpegSegmenterService.PlayoutUpdated(playout.Channel.Number);
+                _ffmpegSegmenterService.PlayoutUpdated(referenceData.Channel.Number);
             }
 
-            Option<string> maybeChannelNumber = await dbContext.Connection
-                .QuerySingleOrDefaultAsync<string>(
-                    @"select C.Number from Channel C
-                         inner join Playout P on C.Id = P.ChannelId
-                         where P.Id = @PlayoutId",
-                    new { request.PlayoutId })
-                .Map(Optional);
+            await _workerChannel.WriteAsync(
+                new CheckForOverlappingPlayoutItems(request.PlayoutId),
+                cancellationToken);
 
-            foreach (string channelNumber in maybeChannelNumber)
+            string fileName = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{channelNumber}.xml");
+            if (hasChanges || !File.Exists(fileName) ||
+                playout.ScheduleKind is PlayoutScheduleKind.ExternalJson)
             {
-                string fileName = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{channelNumber}.xml");
-                if (hasChanges || !File.Exists(fileName) ||
-                    playout.ProgramSchedulePlayoutType is ProgramSchedulePlayoutType.ExternalJson)
-                {
-                    await _workerChannel.WriteAsync(new RefreshChannelData(channelNumber), cancellationToken);
-                }
+                await _workerChannel.WriteAsync(new RefreshChannelData(channelNumber), cancellationToken);
             }
 
             await _workerChannel.WriteAsync(new ExtractEmbeddedSubtitles(playout.Id), cancellationToken);
+
+            return result;
         }
         catch (Exception ex) when (ex is TaskCanceledException or OperationCanceledException)
         {
             _client.Notify(ex);
             return BaseError.New(
-                $"Timeout building playout for channel {playout.Channel.Name}; this may be a bug!");
+                $"Timeout building playout for channel {channelName}; this may be a bug!");
         }
         catch (Exception ex)
         {
@@ -131,18 +260,15 @@ public class BuildPlayoutHandler : IRequestHandler<BuildPlayout, Either<BaseErro
 
             _client.Notify(ex);
             return BaseError.New(
-                $"Unexpected error building playout for channel {playout.Channel.Name}: {ex.Message}");
+                $"Unexpected error building playout for channel {channelName}: {ex.Message}");
         }
-        finally
-        {
-            _entityLocker.UnlockPlayout(playout.Id);
-        }
-
-        return Unit.Default;
     }
 
-    private static Task<Validation<BaseError, Playout>> Validate(TvContext dbContext, BuildPlayout request) =>
-        PlayoutMustExist(dbContext, request).BindT(DiscardAttemptsMustBeValid);
+    private static Task<Validation<BaseError, Playout>> Validate(
+        TvContext dbContext,
+        BuildPlayout request,
+        CancellationToken cancellationToken) =>
+        PlayoutMustExist(dbContext, request, cancellationToken).BindT(DiscardAttemptsMustBeValid);
 
     private static Validation<BaseError, Playout> DiscardAttemptsMustBeValid(Playout playout)
     {
@@ -159,78 +285,153 @@ public class BuildPlayoutHandler : IRequestHandler<BuildPlayout, Either<BaseErro
         return playout;
     }
 
-    private static Task<Validation<BaseError, Playout>> PlayoutMustExist(
+    private static async Task<Validation<BaseError, Playout>> PlayoutMustExist(
         TvContext dbContext,
-        BuildPlayout buildPlayout) =>
-        dbContext.Playouts
-            .Include(p => p.Channel)
-            .Include(p => p.Deco)
-            .Include(p => p.Items)
-            .Include(p => p.PlayoutHistory)
-            .Include(p => p.Templates)
-            .ThenInclude(t => t.Template)
-            .ThenInclude(t => t.Items)
-            .ThenInclude(i => i.Block)
-            .ThenInclude(b => b.Items)
-            .Include(p => p.Templates)
-            .ThenInclude(t => t.DecoTemplate)
-            .ThenInclude(t => t.Items)
-            .ThenInclude(i => i.Deco)
-            .Include(p => p.FillGroupIndices)
-            .ThenInclude(fgi => fgi.EnumeratorState)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+        BuildPlayout buildPlayout,
+        CancellationToken cancellationToken)
+    {
+        Option<Playout> maybePlayout = await dbContext.Playouts
+            .Include(p => p.Anchor)
+            .SelectOneAsync(p => p.Id, p => p.Id == buildPlayout.PlayoutId, cancellationToken);
+
+        foreach (Playout playout in maybePlayout)
+        {
+            switch (playout.ScheduleKind)
+            {
+                case PlayoutScheduleKind.Classic:
+                    await dbContext.Entry(playout)
+                        .Collection(p => p.FillGroupIndices)
+                        .LoadAsync(cancellationToken);
+
+                    foreach (PlayoutScheduleItemFillGroupIndex fillGroupIndex in playout.FillGroupIndices)
+                    {
+                        await dbContext.Entry(fillGroupIndex)
+                            .Reference(fgi => fgi.EnumeratorState)
+                            .LoadAsync(cancellationToken);
+                    }
+
+                    await dbContext.Entry(playout)
+                        .Collection(p => p.ProgramScheduleAnchors)
+                        .LoadAsync(cancellationToken);
+
+                    foreach (PlayoutProgramScheduleAnchor anchor in playout.ProgramScheduleAnchors)
+                    {
+                        await dbContext.Entry(anchor)
+                            .Reference(a => a.EnumeratorState)
+                            .LoadAsync(cancellationToken);
+                    }
+
+                    break;
+            }
+        }
+
+        return maybePlayout.ToValidation<BaseError>("Playout does not exist.");
+    }
+
+    private static async Task<PlayoutReferenceData> GetReferenceData(
+        TvContext dbContext,
+        int playoutId,
+        PlayoutScheduleKind scheduleKind)
+    {
+        Channel channel = await dbContext.Channels
+            .AsNoTracking()
+            .Where(c => c.Playouts.Any(p => p.Id == playoutId))
+            .FirstOrDefaultAsync();
+
+        Option<Deco> deco = Option<Deco>.None;
+        List<PlayoutItem> existingItems = [];
+        List<PlayoutTemplate> playoutTemplates = [];
+
+        if (scheduleKind is PlayoutScheduleKind.Block)
+        {
+            deco = await dbContext.Decos
+                .AsNoTracking()
+                .Where(d => d.Playouts.Any(p => p.Id == playoutId))
+                .FirstOrDefaultAsync()
+                .Map(Optional);
+
+            existingItems = await dbContext.PlayoutItems
+                .AsNoTracking()
+                .Where(pi => pi.PlayoutId == playoutId)
+                .ToListAsync();
+
+            playoutTemplates = await dbContext.PlayoutTemplates
+                .AsNoTracking()
+                .Where(pt => pt.PlayoutId == playoutId)
+                .Include(t => t.Template)
+                .ThenInclude(t => t.Items)
+                .ThenInclude(i => i.Block)
+                .ThenInclude(b => b.Items)
+                .Include(t => t.DecoTemplate)
+                .ThenInclude(t => t.Items)
+                .ThenInclude(i => i.Deco)
+                .ToListAsync();
+        }
+
+        ProgramSchedule programSchedule = await dbContext.ProgramSchedules
+            .AsNoTracking()
+            .Where(ps => ps.Playouts.Any(p => p.Id == playoutId))
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
+            .ThenInclude(psi => psi.Watermark)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.Collection)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.MediaItem)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.PreRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.MidRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.PostRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.TailFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.FallbackFiller)
+            .FirstOrDefaultAsync();
+
+        List<ProgramScheduleAlternate> programScheduleAlternates = await dbContext.ProgramScheduleAlternates
+            .AsNoTracking()
+            .Where(pt => pt.PlayoutId == playoutId)
+            .Include(a => a.ProgramSchedule)
+            .ThenInclude(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
+            .ThenInclude(psi => psi.Watermark)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.Collection)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.MediaItem)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.PreRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.MidRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.PostRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.TailFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.FallbackFiller)
-            .Include(p => p.ProgramScheduleAnchors)
-            .ThenInclude(psa => psa.EnumeratorState)
-            .Include(p => p.ProgramScheduleAnchors)
-            .ThenInclude(a => a.MediaItem)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.Collection)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.MediaItem)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.PreRollFiller)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.MidRollFiller)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.PostRollFiller)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.TailFiller)
-            .Include(p => p.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.FallbackFiller)
-            .SelectOneAsync(p => p.Id, p => p.Id == buildPlayout.PlayoutId)
-            .Map(o => o.ToValidation<BaseError>("Playout does not exist."));
+            .ToListAsync();
+
+        List<PlayoutHistory> playoutHistory = await dbContext.PlayoutHistory
+            .AsNoTracking()
+            .Where(h => h.PlayoutId == playoutId)
+            .ToListAsync();
+
+        return new PlayoutReferenceData(
+            channel,
+            deco,
+            existingItems,
+            playoutTemplates,
+            programSchedule,
+            programScheduleAlternates,
+            playoutHistory);
+    }
 }

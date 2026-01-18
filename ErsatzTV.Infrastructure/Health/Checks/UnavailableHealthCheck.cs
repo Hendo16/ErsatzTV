@@ -76,6 +76,7 @@ public class UnavailableHealthCheck : BaseHealthCheck, IUnavailableHealthCheck
                         _plexPathReplacementService,
                         _jellyfinPathReplacementService,
                         _embyPathReplacementService,
+                        cancellationToken,
                         false)
                 };
 
@@ -88,7 +89,8 @@ public class UnavailableHealthCheck : BaseHealthCheck, IUnavailableHealthCheck
 
             return WarningResult(
                 $"There are {count} items that are unavailable because ErsatzTV cannot find them on disk, including the following: {files}",
-                "search?query=state%3aUnavailable");
+                $"There are {count} items that are unavailable",
+                new HealthCheckLink("search?query=state%3aUnavailable"));
         }
 
         return OkResult();

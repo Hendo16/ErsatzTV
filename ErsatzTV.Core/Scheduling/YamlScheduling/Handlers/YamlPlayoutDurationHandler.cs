@@ -14,7 +14,8 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutDurationInstruction duration)
@@ -25,6 +26,12 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
         // TODO: move to up-front validation somewhere
         if (!TimeSpanParser.TryParse(duration.Duration, out TimeSpan timeSpan))
         {
+            return false;
+        }
+
+        if (!duration.StopBeforeEnd && duration.OfflineTail)
+        {
+            logger.LogError("offline_tail must be false when stop_before_end is false");
             return false;
         }
 
@@ -44,18 +51,22 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
 
         foreach (IMediaCollectionEnumerator enumerator in maybeEnumerator)
         {
-            context.CurrentTime = Schedule(
+            context.CurrentTime = await Schedule(
                 context,
                 instruction.Content,
                 duration.Fallback,
                 targetTime,
+                duration.StopBeforeEnd,
                 duration.DiscardAttempts,
                 duration.Trim,
                 duration.OfflineTail,
-                GetFillerKind(duration),
+                GetFillerKind(duration, context),
                 duration.CustomTitle,
+                duration.DisableWatermarks,
                 enumerator,
-                fallbackEnumerator);
+                fallbackEnumerator,
+                executeSequence,
+                logger);
 
             return true;
         }
@@ -63,29 +74,47 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
         return false;
     }
 
-    protected static DateTimeOffset Schedule(
+    protected static async Task<DateTimeOffset> Schedule(
         YamlPlayoutContext context,
         string contentKey,
         string fallbackContentKey,
         DateTimeOffset targetTime,
+        bool stopBeforeEnd,
         int discardAttempts,
         bool trim,
         bool offlineTail,
         FillerKind fillerKind,
         string customTitle,
+        bool disableWatermarks,
         IMediaCollectionEnumerator enumerator,
-        Option<IMediaCollectionEnumerator> fallbackEnumerator)
+        Option<IMediaCollectionEnumerator> fallbackEnumerator,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger)
     {
-        bool done = false;
+        var done = false;
         TimeSpan remainingToFill = targetTime - context.CurrentTime;
         while (!done && enumerator.Current.IsSome && remainingToFill > TimeSpan.Zero)
         {
+            foreach (string preRollSequence in context.GetPreRollSequence())
+            {
+                context.PushFillerKind(FillerKind.PreRoll);
+                await executeSequence(preRollSequence);
+                context.PopFillerKind();
+
+                remainingToFill = targetTime - context.CurrentTime;
+                if (remainingToFill <= TimeSpan.Zero)
+                {
+                    break;
+                }
+            }
+
             foreach (MediaItem mediaItem in enumerator.Current)
             {
                 TimeSpan itemDuration = DurationForMediaItem(mediaItem);
 
                 var playoutItem = new PlayoutItem
                 {
+                    PlayoutId = context.Playout.Id,
                     MediaItemId = mediaItem.Id,
                     Start = context.CurrentTime.UtcDateTime,
                     Finish = context.CurrentTime.UtcDateTime + itemDuration,
@@ -93,26 +122,50 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                     OutPoint = itemDuration,
                     GuideGroup = context.PeekNextGuideGroup(),
                     FillerKind = fillerKind,
-                    CustomTitle = string.IsNullOrWhiteSpace(customTitle) ? null : customTitle
-                    //DisableWatermarks = !allowWatermarks
+                    CustomTitle = string.IsNullOrWhiteSpace(customTitle) ? null : customTitle,
+                    DisableWatermarks = disableWatermarks,
+                    PlayoutItemWatermarks = [],
+                    PlayoutItemGraphicsElements = []
                 };
 
-                if (remainingToFill - itemDuration >= TimeSpan.Zero)
+                foreach (int watermarkId in context.GetChannelWatermarkIds())
                 {
-                    context.Playout.Items.Add(playoutItem);
+                    playoutItem.PlayoutItemWatermarks.Add(
+                        new PlayoutItemWatermark
+                        {
+                            PlayoutItem = playoutItem,
+                            WatermarkId = watermarkId
+                        });
+                }
+
+                foreach ((int graphicsElementId, string variablesJson) in context.GetGraphicsElements())
+                {
+                    playoutItem.PlayoutItemGraphicsElements.Add(
+                        new PlayoutItemGraphicsElement
+                        {
+                            PlayoutItem = playoutItem,
+                            GraphicsElementId = graphicsElementId,
+                            Variables = variablesJson
+                        });
+                }
+
+                if (remainingToFill - itemDuration >= TimeSpan.Zero || !stopBeforeEnd)
+                {
+                    context.AddedItems.Add(playoutItem);
                     context.AdvanceGuideGroup();
 
                     // create history record
-                    Option<PlayoutHistory> maybeHistory = GetHistoryForItem(
+                    List<PlayoutHistory> maybeHistory = GetHistoryForItem(
                         context,
                         contentKey,
                         enumerator,
                         playoutItem,
-                        mediaItem);
+                        mediaItem,
+                        logger);
 
                     foreach (PlayoutHistory history in maybeHistory)
                     {
-                        context.Playout.PlayoutHistory.Add(history);
+                        context.AddedHistory.Add(history);
                     }
 
                     remainingToFill -= itemDuration;
@@ -132,20 +185,21 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                     playoutItem.Finish = targetTime.UtcDateTime;
                     playoutItem.OutPoint = playoutItem.Finish - playoutItem.Start;
 
-                    context.Playout.Items.Add(playoutItem);
+                    context.AddedItems.Add(playoutItem);
                     context.AdvanceGuideGroup();
 
                     // create history record
-                    Option<PlayoutHistory> maybeHistory = GetHistoryForItem(
+                    List<PlayoutHistory> maybeHistory = GetHistoryForItem(
                         context,
                         contentKey,
                         enumerator,
                         playoutItem,
-                        mediaItem);
+                        mediaItem,
+                        logger);
 
                     foreach (PlayoutHistory history in maybeHistory)
                     {
-                        context.Playout.PlayoutHistory.Add(history);
+                        context.AddedHistory.Add(history);
                     }
 
                     remainingToFill = TimeSpan.Zero;
@@ -168,19 +222,20 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                             playoutItem.Finish = targetTime.UtcDateTime;
                             playoutItem.FillerKind = FillerKind.Fallback;
 
-                            context.Playout.Items.Add(playoutItem);
+                            context.AddedItems.Add(playoutItem);
 
                             // create history record
-                            Option<PlayoutHistory> maybeHistory = GetHistoryForItem(
+                            List<PlayoutHistory> maybeHistory = GetHistoryForItem(
                                 context,
                                 fallbackContentKey,
                                 fallback,
                                 playoutItem,
-                                mediaItem);
+                                mediaItem,
+                                logger);
 
                             foreach (PlayoutHistory history in maybeHistory)
                             {
-                                context.Playout.PlayoutHistory.Add(history);
+                                context.AddedHistory.Add(history);
                             }
 
                             fallback.MoveNext();
@@ -193,6 +248,18 @@ public class YamlPlayoutDurationHandler(EnumeratorCache enumeratorCache) : YamlP
                     done = true;
                 }
             }
+
+            foreach (string postRollSequence in context.GetPostRollSequence())
+            {
+                context.PushFillerKind(FillerKind.PostRoll);
+                await executeSequence(postRollSequence);
+                context.PopFillerKind();
+            }
+        }
+
+        if (!stopBeforeEnd)
+        {
+            return context.CurrentTime;
         }
 
         return offlineTail ? targetTime : context.CurrentTime;

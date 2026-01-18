@@ -3,6 +3,7 @@ using System.Net;
 using System.Xml;
 using Dapper;
 using ErsatzTV.Core;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Iptv;
 using ErsatzTV.Infrastructure.Data;
@@ -77,6 +78,9 @@ public class RefreshChannelListHandler : IRequestHandler<RefreshChannelList>
 
         await foreach (ChannelResult channel in GetChannels(dbContext).WithCancellation(cancellationToken))
         {
+            bool hasLogo = !string.IsNullOrWhiteSpace(channel.ArtworkPath);
+            bool hasExternalLogo = hasLogo && Artwork.IsExternalUrl(channel.ArtworkPath);
+
             var data = new
             {
                 ChannelId = ChannelIdentifier.FromNumber(channel.Number),
@@ -84,7 +88,8 @@ public class RefreshChannelListHandler : IRequestHandler<RefreshChannelList>
                 ChannelNumber = channel.Number,
                 ChannelName = channel.Name,
                 ChannelCategories = GetCategories(channel.Categories),
-                ChannelHasArtwork = !string.IsNullOrWhiteSpace(channel.ArtworkPath),
+                ChannelHasExternalArtwork = hasExternalLogo,
+                ChannelHasArtwork = hasLogo,
                 ChannelArtworkPath = channel.ArtworkPath,
                 ChannelNameEncoded = WebUtility.UrlEncode(channel.Name)
             };
@@ -113,7 +118,7 @@ public class RefreshChannelListHandler : IRequestHandler<RefreshChannelList>
         const string QUERY = @"select C.Number, C.Name, C.Categories, A.Path as ArtworkPath
                                from Channel C
                                left outer join Artwork A on C.Id = A.ChannelId and A.ArtworkKind = 2
-                               where C.Id in (select ChannelId from Playout)
+                               where C.Id in (select ChannelId from Playout) and C.IsEnabled = 1 and C.ShowInEPG = 1
                                order by CAST(C.Number as double)";
         // TODO: this needs to be fixed for sqlite/mariadb
 

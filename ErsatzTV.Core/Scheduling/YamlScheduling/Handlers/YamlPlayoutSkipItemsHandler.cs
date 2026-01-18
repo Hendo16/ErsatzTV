@@ -1,6 +1,7 @@
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
 using Microsoft.Extensions.Logging;
+using NCalc;
 
 namespace ErsatzTV.Core.Scheduling.YamlScheduling.Handlers;
 
@@ -12,17 +13,12 @@ public class YamlPlayoutSkipItemsHandler(EnumeratorCache enumeratorCache) : IYam
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutSkipItemsInstruction skipItems)
         {
-            return false;
-        }
-
-        if (skipItems.SkipItems < 0)
-        {
-            logger.LogWarning("Unable to skip invalid number: {Skip}", skipItems.SkipItems);
             return false;
         }
 
@@ -33,7 +29,39 @@ public class YamlPlayoutSkipItemsHandler(EnumeratorCache enumeratorCache) : IYam
 
         foreach (IMediaCollectionEnumerator enumerator in maybeEnumerator)
         {
-            for (var i = 0; i < skipItems.SkipItems; i++)
+            int seed = context.Playout.Seed + context.InstructionIndex + context.CurrentTime.DayOfYear;
+            var random = new Random(seed);
+            int enumeratorCount = enumerator is PlaylistEnumerator playlistEnumerator
+                ? playlistEnumerator.CountForRandom
+                : enumerator.Count;
+            var expression = new Expression(skipItems.SkipItems);
+            expression.EvaluateParameter += (name, e) =>
+            {
+                e.Result = name switch
+                {
+                    "count" => enumeratorCount,
+                    "random" => random.Next() % enumeratorCount,
+                    _ => e.Result
+                };
+            };
+
+            object expressionResult = expression.Evaluate();
+            int skipCount = expressionResult switch
+            {
+                double doubleResult => (int)Math.Floor(doubleResult),
+                int intResult => intResult,
+                _ => 0
+            };
+
+            skipCount %= enumerator.Count;
+
+            if (skipCount < 0)
+            {
+                logger.LogWarning("Unable to skip invalid number: {Skip}", skipItems.SkipItems);
+                return false;
+            }
+
+            for (var i = 0; i < skipCount; i++)
             {
                 enumerator.MoveNext();
             }

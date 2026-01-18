@@ -8,7 +8,7 @@ public class CustomOrderCollectionEnumerator : IMediaCollectionEnumerator
 {
     private readonly Lazy<Option<TimeSpan>> _lazyMinimumDuration;
 
-    private readonly IList<MediaItem> _sortedMediaItems;
+    private readonly List<MediaItem> _sortedMediaItems;
 
     public CustomOrderCollectionEnumerator(
         Collection collection,
@@ -22,8 +22,8 @@ public class CustomOrderCollectionEnumerator : IMediaCollectionEnumerator
             .OrderBy(ci => ci.CustomIndex)
             .Map(ci => mediaItems.First(mi => mi.Id == ci.MediaItemId))
             .ToList();
-        _lazyMinimumDuration = new Lazy<Option<TimeSpan>>(
-            () => _sortedMediaItems.Bind(i => i.GetNonZeroDuration()).OrderBy(identity).HeadOrNone());
+        _lazyMinimumDuration = new Lazy<Option<TimeSpan>>(() =>
+            _sortedMediaItems.Bind(i => i.GetNonZeroDuration()).OrderBy(identity).HeadOrNone());
 
         State = new CollectionEnumeratorState { Seed = state.Seed };
         while (State.Index < state.Index)
@@ -38,7 +38,7 @@ public class CustomOrderCollectionEnumerator : IMediaCollectionEnumerator
 
     public CollectionEnumeratorState State { get; }
 
-    public Option<MediaItem> Current => _sortedMediaItems.Any() ? _sortedMediaItems[State.Index] : None;
+    public Option<MediaItem> Current => _sortedMediaItems.Count != 0 ? _sortedMediaItems[State.Index] : None;
     public Option<bool> CurrentIncludeInProgramGuide { get; }
 
     public void MoveNext() => State.Index = (State.Index + 1) % _sortedMediaItems.Count;

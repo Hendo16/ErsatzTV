@@ -37,6 +37,9 @@ public class ElasticSearchItem : MinimalElasticSearchItem
     [JsonPropertyName(LuceneSearchIndex.SubLanguageTagField)]
     public List<string> SubLanguageTag { get; set; }
 
+    [JsonPropertyName(LuceneSearchIndex.ChaptersField)]
+    public int Chapters { get; set; }
+
     [JsonPropertyName(LuceneSearchIndex.MinutesField)]
     public int Minutes { get; set; }
 
@@ -55,8 +58,11 @@ public class ElasticSearchItem : MinimalElasticSearchItem
     [JsonPropertyName(LuceneSearchIndex.VideoBitDepthField)]
     public int VideoBitDepth { get; set; }
 
-    [JsonPropertyName(LuceneSearchIndex.VideoDynamicRange)]
+    [JsonPropertyName(LuceneSearchIndex.VideoDynamicRangeField)]
     public string VideoDynamicRange { get; set; }
+
+    [JsonPropertyName(LuceneSearchIndex.CollectionField)]
+    public List<string> Collection { get; set; }
 
     [JsonPropertyName(LuceneSearchIndex.ContentRatingField)]
     public List<string> ContentRating { get; set; }
@@ -85,8 +91,14 @@ public class ElasticSearchItem : MinimalElasticSearchItem
     [JsonPropertyName(LuceneSearchIndex.TagFullField)]
     public List<string> TagFull { get; set; }
 
+    [JsonPropertyName(LuceneSearchIndex.CountryField)]
+    public List<string> Country { get; set; }
+
     [JsonPropertyName(LuceneSearchIndex.StudioField)]
     public List<string> Studio { get; set; }
+
+    [JsonPropertyName(LuceneSearchIndex.NetworkField)]
+    public List<string> Network { get; set; }
 
     [JsonPropertyName(LuceneSearchIndex.ArtistField)]
     public List<string> Artist { get; set; }
@@ -120,6 +132,9 @@ public class ElasticSearchItem : MinimalElasticSearchItem
 
     [JsonPropertyName(LuceneSearchIndex.ShowStudioField)]
     public List<string> ShowStudio { get; set; }
+
+    [JsonPropertyName(LuceneSearchIndex.ShowNetworkField)]
+    public List<string> ShowNetwork { get; set; }
 
     [JsonPropertyName(LuceneSearchIndex.ShowContentRatingField)]
     public List<string> ShowContentRating { get; set; }

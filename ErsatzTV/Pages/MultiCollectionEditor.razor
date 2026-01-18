@@ -7,106 +7,111 @@
 @inject ISnackbar Snackbar
 @inject ILogger<MultiCollectionEditor> Logger
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-    <div style="max-width: 400px;">
-        <MudText Typo="Typo.h4" Class="mb-4">@(IsEdit ? "Edit Multi Collection" : "Add Multi Collection")</MudText>
-
-        @if (_editContext is not null)
-        {
-            <EditForm EditContext="_editContext" OnSubmit="@HandleSubmitAsync">
-                <FluentValidationValidator/>
-                <MudCard>
-                    <MudCardContent>
-                        <MudTextField Class="mt-3" Label="Name" @bind-Value="_model.Name" For="@(() => _model.Name)"/>
-                        <MudSelect @ref="_collectionSelect"
-                                   Class="mt-4"
-                                   T="MediaCollectionViewModel"
-                                   Label="Collection"
-                                   @bind-value="_selectedCollection"
-                                   HelperText="Disabled collections are already present in this multi collection">
-                            @foreach (MediaCollectionViewModel collection in _collections)
-                            {
-                                <MudSelectItem Disabled="@(_model.Items.Any(i => i.Collection.CollectionType == collection.CollectionType && i.Collection.Id == collection.Id))"
-                                               Value="@collection">
-                                    @collection.Name
-                                </MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="@(_ => AddCollection())" Class="mt-4 mr-auto">
-                            Add Collection
-                        </MudButton>
-                        <MudSelect @ref="_smartCollectionSelect"
-                                   Class="mt-4"
-                                   T="SmartCollectionViewModel"
-                                   Label="Smart Collection"
-                                   @bind-value="_selectedSmartCollection"
-                                   HelperText="Disabled collections are already present in this multi collection">
-                            @foreach (SmartCollectionViewModel collection in _smartCollections)
-                            {
-                                <MudSelectItem Disabled="@(_model.Items.Any(i => i.Collection.CollectionType == ProgramScheduleItemCollectionType.SmartCollection && i.Collection.Id == collection.Id))"
-                                               Value="@collection">
-                                    @collection.Name
-                                </MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="@(_ => AddSmartCollection())" Class="mt-4 mr-auto">
-                            Add Smart Collection
-                        </MudButton>
-                    </MudCardContent>
-                    <MudCardActions>
-                        <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary" Class="mr-2 ml-auto">
-                            @(IsEdit ? "Save Changes" : "Add Multi Collection")
-                        </MudButton>
-                    </MudCardActions>
-                </MudCard>
-            </EditForm>
-        }
+<MudForm @ref="_form" @bind-IsValid="@_success" Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => HandleSubmitAsync())" Class="ml-6" StartIcon="@Icons.Material.Filled.Save">
+            @(IsEdit ? "Save Multi Collection" : "Add Multi Collection")
+        </MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">Multi Collection</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Name</MudText>
+                </div>
+                <MudTextField @bind-Value="_model.Name" For="@(() => _model.Name)" Required="true" RequiredError="Multi-collection name is required!"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Collections</MudText>
+                </div>
+                <MudSelect @ref="_collectionSelect"
+                           T="MediaCollectionViewModel"
+                           @bind-value="_selectedCollection"
+                           HelperText="Disabled collections are already present in this multi collection">
+                    @foreach (MediaCollectionViewModel collection in _collections)
+                    {
+                        <MudSelectItem Disabled="@(_model.Items.Any(i => i.Collection.CollectionType == collection.CollectionType && i.Collection.Id == collection.Id))"
+                                       Value="@collection">
+                            @collection.Name
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex"></div>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="@(_ => AddCollection())" StartIcon="@Icons.Material.Filled.Add">
+                    Add Collection
+                </MudButton>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Smart Collections</MudText>
+                </div>
+                <MudSelect @ref="_smartCollectionSelect"
+                           T="SmartCollectionViewModel"
+                           @bind-value="_selectedSmartCollection"
+                           HelperText="Disabled collections are already present in this multi collection">
+                    @foreach (SmartCollectionViewModel collection in _smartCollections)
+                    {
+                        <MudSelectItem Disabled="@(_model.Items.Any(i => i.Collection.CollectionType == ProgramScheduleItemCollectionType.SmartCollection && i.Collection.Id == collection.Id))"
+                                       Value="@collection">
+                            @collection.Name
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex"></div>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="@(_ => AddSmartCollection())" StartIcon="@Icons.Material.Filled.Add">
+                    Add Smart Collection
+                </MudButton>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">@_model.Name Items</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudTable Hover="true" Items="_model.Items.OrderBy(i => i.Collection.Name, StringComparer.CurrentCultureIgnoreCase)" Dense="true">
+                <ColGroup>
+                    <MudHidden Breakpoint="Breakpoint.Xs">
+                        <col/>
+                        <col style="width: 20%"/>
+                        <col style="width: 30%"/>
+                        <col style="width: 60px;"/>
+                    </MudHidden>
+                </ColGroup>
+                <HeaderContent>
+                    <MudTh>Collection</MudTh>
+                    <MudTh>Schedule As Group</MudTh>
+                    <MudTh>Playback Order</MudTh>
+                    <MudTh/>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        @context.Collection.Name
+                    </MudTd>
+                    <MudTd>
+                        <MudCheckBox @bind-Value="@context.ScheduleAsGroup" For="@(() => context.ScheduleAsGroup)"/>
+                    </MudTd>
+                    <MudTd>
+                        @if (context.ScheduleAsGroup)
+                        {
+                            @(context.Collection.UseCustomPlaybackOrder ? "Custom" : "Chronological")
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       OnClick="@(_ => RemoveCollection(context))">
+                        </MudIconButton>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudContainer>
     </div>
-
-    <MudTable Hover="true" Items="_model.Items.OrderBy(i => i.Collection.Name, StringComparer.CurrentCultureIgnoreCase)" Dense="true" Class="mt-6">
-        <ToolBarContent>
-            <MudText Typo="Typo.h6">@_model.Name Items</MudText>
-        </ToolBarContent>
-        <ColGroup>
-            <col/>
-            <col style="width: 20%"/>
-            <col style="width: 30%"/>
-            <col style="width: 60px;"/>
-        </ColGroup>
-        <HeaderContent>
-            <MudTh>Collection</MudTh>
-            <MudTh>Schedule As Group</MudTh>
-            <MudTh>Playback Order</MudTh>
-            <MudTh/>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd DataLabel="Collection">
-                <MudText Typo="Typo.body2">
-                    @context.Collection.Name
-                </MudText>
-            </MudTd>
-            <MudTd DataLabel="Schedule As Group">
-                <MudCheckBox @bind-Value="@context.ScheduleAsGroup" For="@(() => context.ScheduleAsGroup)"/>
-            </MudTd>
-            <MudTd DataLabel="Playback Order">
-                @if (context.ScheduleAsGroup)
-                {
-                    <MudText Typo="Typo.body2">
-                        @(context.Collection.UseCustomPlaybackOrder ? "Custom" : "Chronological")
-                    </MudText>
-                }
-            </MudTd>
-            <MudTd>
-                <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                               OnClick="@(_ => RemoveCollection(context))">
-                </MudIconButton>
-            </MudTd>
-        </RowTemplate>
-    </MudTable>
-</MudContainer>
+</MudForm>
 
 @code {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts;
 
     [Parameter]
     public int Id { get; set; }
@@ -114,8 +119,8 @@
     private readonly MultiCollectionEditViewModel _model =
         new() { Items = new List<MultiCollectionItemEditViewModel>() };
 
-    private EditContext _editContext;
-    private ValidationMessageStore _messageStore;
+    private MudForm _form;
+    private bool _success;
     private List<MediaCollectionViewModel> _collections = new();
     private List<SmartCollectionViewModel> _smartCollections = new();
     private MediaCollectionViewModel _selectedCollection;
@@ -125,65 +130,68 @@
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _cts.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        _collections = await Mediator.Send(new GetAllCollections(), _cts.Token)
-            .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
 
-        _smartCollections = await Mediator.Send(new GetAllSmartCollections(), _cts.Token)
-            .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
-
-        if (IsEdit)
+        try
         {
-            Option<MultiCollectionViewModel> maybeCollection = await Mediator.Send(new GetMultiCollectionById(Id), _cts.Token);
-            maybeCollection.IfSome(
-                collection =>
+            _collections = await Mediator.Send(new GetAllCollections(), token)
+                .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
+
+            _smartCollections = await Mediator.Send(new GetAllSmartCollections(), token)
+                .Map(list => list.OrderBy(vm => vm.Name, StringComparer.CurrentCultureIgnoreCase).ToList());
+
+            if (IsEdit)
+            {
+                Option<MultiCollectionViewModel> maybeCollection = await Mediator.Send(new GetMultiCollectionById(Id), token);
+                maybeCollection.IfSome(collection =>
                 {
                     _model.Id = collection.Id;
                     _model.Name = collection.Name;
                     _model.Items = collection.Items
-                        .Map(
-                            item =>
-                                new MultiCollectionItemEditViewModel
+                        .Map(item =>
+                            new MultiCollectionItemEditViewModel
+                            {
+                                Collection = item.Collection,
+                                ScheduleAsGroup = item.ScheduleAsGroup,
+                                PlaybackOrder = item.PlaybackOrder
+                            })
+                        .Append(
+                            collection.SmartItems.Map(item =>
+                                new MultiCollectionSmartItemEditViewModel
                                 {
-                                    Collection = item.Collection,
+                                    SmartCollection = item.SmartCollection,
                                     ScheduleAsGroup = item.ScheduleAsGroup,
                                     PlaybackOrder = item.PlaybackOrder
-                                })
-                        .Append(
-                            collection.SmartItems.Map(
-                                item =>
-                                    new MultiCollectionSmartItemEditViewModel
-                                    {
-                                        SmartCollection = item.SmartCollection,
-                                        ScheduleAsGroup = item.ScheduleAsGroup,
-                                        PlaybackOrder = item.PlaybackOrder
-                                    })).ToList();
+                                })).ToList();
                 });
+            }
+            else
+            {
+                _model.Name = "New Multi Collection";
+                _model.Items = new List<MultiCollectionItemEditViewModel>();
+            }
         }
-        else
+        catch (OperationCanceledException)
         {
-            _model.Name = "New Multi Collection";
-            _model.Items = new List<MultiCollectionItemEditViewModel>();
+            // do nothing
         }
-    }
-
-    protected override void OnInitialized()
-    {
-        _editContext = new EditContext(_model);
-        _messageStore = new ValidationMessageStore(_editContext);
     }
 
     private bool IsEdit => Id != 0;
 
     private async Task HandleSubmitAsync()
     {
-        _messageStore.Clear();
-        if (_editContext.Validate())
+        await _form.Validate();
+        if (_success)
         {
             Seq<BaseError> errorMessage = IsEdit ? (await Mediator.Send(new UpdateMultiCollection(Id, _model.Name, GetUpdateItems()), _cts.Token)).LeftToSeq() : (await Mediator.Send(new CreateMultiCollection(_model.Name, GetCreateItems()), _cts.Token)).LeftToSeq();
 
@@ -198,32 +206,30 @@
     }
 
     private List<UpdateMultiCollectionItem> GetUpdateItems() =>
-        _model.Items.Map(
-            i =>
-                i switch
-                {
-                    MultiCollectionSmartItemEditViewModel smartVm =>
-                        new UpdateMultiCollectionItem(
-                            null,
-                            smartVm.SmartCollection.Id,
-                            smartVm.ScheduleAsGroup,
-                            smartVm.PlaybackOrder),
-                    _ => new UpdateMultiCollectionItem(i.Collection.Id, null, i.ScheduleAsGroup, i.PlaybackOrder)
-                }).ToList();
+        _model.Items.Map(i =>
+            i switch
+            {
+                MultiCollectionSmartItemEditViewModel smartVm =>
+                    new UpdateMultiCollectionItem(
+                        null,
+                        smartVm.SmartCollection.Id,
+                        smartVm.ScheduleAsGroup,
+                        smartVm.PlaybackOrder),
+                _ => new UpdateMultiCollectionItem(i.Collection.Id, null, i.ScheduleAsGroup, i.PlaybackOrder)
+            }).ToList();
 
     private List<CreateMultiCollectionItem> GetCreateItems() =>
-        _model.Items.Map(
-            i =>
-                i switch
-                {
-                    MultiCollectionSmartItemEditViewModel smartVm =>
-                        new CreateMultiCollectionItem(
-                            null,
-                            smartVm.SmartCollection.Id,
-                            smartVm.ScheduleAsGroup,
-                            smartVm.PlaybackOrder),
-                    _ => new CreateMultiCollectionItem(i.Collection.Id, null, i.ScheduleAsGroup, i.PlaybackOrder)
-                }).ToList();
+        _model.Items.Map(i =>
+            i switch
+            {
+                MultiCollectionSmartItemEditViewModel smartVm =>
+                    new CreateMultiCollectionItem(
+                        null,
+                        smartVm.SmartCollection.Id,
+                        smartVm.ScheduleAsGroup,
+                        smartVm.PlaybackOrder),
+                _ => new CreateMultiCollectionItem(i.Collection.Id, null, i.ScheduleAsGroup, i.PlaybackOrder)
+            }).ToList();
 
     private void RemoveCollection(MultiCollectionItemEditViewModel item) => _model.Items.Remove(item);
 

@@ -14,14 +14,15 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Template> validation = await Validate(dbContext, request);
-        return await validation.Apply(ps => Persist(dbContext, request, ps));
+        Validation<BaseError, Template> validation = await Validate(dbContext, request, cancellationToken);
+        return await validation.Apply(ps => Persist(dbContext, request, ps, cancellationToken));
     }
 
     private static async Task<List<TemplateItemViewModel>> Persist(
         TvContext dbContext,
         ReplaceTemplateItems request,
-        Template template)
+        Template template,
+        CancellationToken cancellationToken)
     {
         template.Name = request.Name;
         template.DateUpdated = DateTime.UtcNow;
@@ -29,7 +30,7 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
         dbContext.RemoveRange(template.Items);
         template.Items = request.Items.Map(i => BuildItem(template, i)).ToList();
 
-        await dbContext.SaveChangesAsync();
+        await dbContext.SaveChangesAsync(cancellationToken);
 
         // TODO: refresh any playouts that use this schedule
         // foreach (Playout playout in programSchedule.Playouts)
@@ -41,7 +42,7 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
             .Collection(t => t.Items)
             .Query()
             .Include(i => i.Block)
-            .LoadAsync();
+            .LoadAsync(cancellationToken);
 
         return template.Items.Map(Mapper.ProjectToViewModel).ToList();
     }
@@ -54,9 +55,13 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
             StartTime = item.StartTime
         };
 
-    private static Task<Validation<BaseError, Template>> Validate(TvContext dbContext, ReplaceTemplateItems request) =>
-        TemplateMustExist(dbContext, request.TemplateId)
-            .BindT(template => TemplateItemsMustBeValid(dbContext, template, request));
+    private static Task<Validation<BaseError, Template>> Validate(
+        TvContext dbContext,
+        ReplaceTemplateItems request,
+        CancellationToken cancellationToken) =>
+        TemplateMustExist(dbContext, request.TemplateId, cancellationToken)
+            .BindT(template => TemplateItemsMustBeValid(dbContext, template, request))
+            .BindT(template => ValidateTemplateName(dbContext, template, request));
 
     private static async Task<Validation<BaseError, Template>> TemplateItemsMustBeValid(
         TvContext dbContext,
@@ -71,15 +76,14 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
             .ToListAsync()
             .Map(list => list.ToDictionary(b => b.Id, b => b));
 
-        var allTemplateItems = request.Items.Map(
-                i =>
-                {
-                    Block block = allBlocks[i.BlockId];
-                    return new BlockTemplateItem(
-                        i.BlockId,
-                        i.StartTime,
-                        i.StartTime + TimeSpan.FromMinutes(block.Minutes));
-                })
+        var allTemplateItems = request.Items.Map(i =>
+            {
+                Block block = allBlocks[i.BlockId];
+                return new BlockTemplateItem(
+                    i.BlockId,
+                    i.StartTime,
+                    i.StartTime + TimeSpan.FromMinutes(block.Minutes));
+            })
             .ToList();
 
         foreach (BlockTemplateItem item in allTemplateItems)
@@ -102,11 +106,35 @@ public class ReplaceTemplateItemsHandler(IDbContextFactory<TvContext> dbContextF
         return template;
     }
 
-    private static Task<Validation<BaseError, Template>> TemplateMustExist(TvContext dbContext, int templateId) =>
+    private static Task<Validation<BaseError, Template>> TemplateMustExist(
+        TvContext dbContext,
+        int templateId,
+        CancellationToken cancellationToken) =>
         dbContext.Templates
             .Include(b => b.Items)
-            .SelectOneAsync(b => b.Id, b => b.Id == templateId)
+            .SelectOneAsync(b => b.Id, b => b.Id == templateId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("[TemplateId] does not exist."));
+
+    private static async Task<Validation<BaseError, Template>> ValidateTemplateName(
+        TvContext dbContext,
+        Template template,
+        ReplaceTemplateItems request)
+    {
+        if (request.Name.Length > 50)
+        {
+            return BaseError.New($"Template name \"{request.Name}\" is invalid");
+        }
+
+        Option<Template> maybeExisting = await dbContext.Templates
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d =>
+                d.Id != request.TemplateId && d.TemplateGroupId == request.TemplateGroupId && d.Name == request.Name)
+            .Map(Optional);
+
+        return maybeExisting.IsSome
+            ? BaseError.New($"A template named \"{request.Name}\" already exists in that template group")
+            : Success<BaseError, Template>(template);
+    }
 
     private sealed record BlockTemplateItem(int BlockId, TimeSpan StartTime, TimeSpan EndTime);
 }

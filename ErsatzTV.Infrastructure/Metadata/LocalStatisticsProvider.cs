@@ -51,7 +51,7 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
     {
         try
         {
-            string filePath = mediaItem.GetHeadVersion().MediaFiles.Head().Path;
+            string filePath = await PathForMediaItem(mediaItem);
             return await RefreshStatistics(ffmpegPath, ffprobePath, mediaItem, filePath);
         }
         catch (Exception ex)
@@ -126,7 +126,7 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
                 async ffprobe =>
                 {
                     MediaVersion version = ProjectToMediaVersion(mediaItemPath, ffprobe);
-                    if (mediaItem is not Image && version.Duration.TotalSeconds < 1)
+                    if (mediaItem is not Image and not RemoteStream && version.Duration.TotalSeconds < 1)
                     {
                         await AnalyzeDuration(ffmpegPath, mediaItemPath, version);
                     }
@@ -158,14 +158,16 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
     private static async Task<Either<BaseError, FFprobe>> GetProbeOutput(string ffprobePath, string filePath)
     {
         string[] arguments =
-        {
+        [
             "-hide_banner",
             "-print_format", "json",
             "-show_format",
             "-show_streams",
             "-show_chapters",
             "-i", filePath
-        };
+        ];
+
+        //_logger.LogDebug("ffprobe arguments {FFProbeArguments}", arguments.ToList());
 
         BufferedCommandResult probe = await Cli.Wrap(ffprobePath)
             .WithArguments(arguments)
@@ -333,7 +335,10 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
                         version.Streams.Add(stream);
                     }
 
-                    FFprobeStreamData videoStream = json.streams?.FirstOrDefault(s => s.codec_type == "video");
+                    FFprobeStreamData videoStream = json.streams?
+                        .Where(s => s.codec_type == "video")
+                        .OrderByDescending(ParseBitRate)
+                        .FirstOrDefault();
                     if (videoStream != null)
                     {
                         version.SampleAspectRatio = string.IsNullOrWhiteSpace(videoStream.sample_aspect_ratio)
@@ -399,8 +404,8 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
                         version.Streams.Add(stream);
                     }
 
-                    foreach (FFprobeStreamData attachmentStream in json.streams.Filter(
-                                 s => s.codec_type == "attachment"))
+                    foreach (FFprobeStreamData attachmentStream in
+                             json.streams.Filter(s => s.codec_type == "attachment"))
                     {
                         var stream = new MediaStream
                         {
@@ -478,6 +483,38 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
             _ => VideoScanKind.Unknown
         };
 
+    private static Task<string> PathForMediaItem(MediaItem mediaItem)
+    {
+        string path = mediaItem.GetHeadVersion().MediaFiles.Head().Path;
+
+        if (mediaItem is RemoteStream remoteStream)
+        {
+            path = !string.IsNullOrWhiteSpace(remoteStream.Url)
+                ? remoteStream.Url
+                : $"http://localhost:{Settings.StreamingPort}/ffmpeg/remote-stream/{remoteStream.Id}";
+        }
+
+        return Task.FromResult(path);
+    }
+
+    private static long ParseBitRate(FFprobeStreamData stream)
+    {
+        if (long.TryParse(stream.bit_rate, out long result))
+        {
+            return result;
+        }
+
+        if (stream.tags?.variantBitrate is not null)
+        {
+            if (long.TryParse(stream.tags.variantBitrate, out result))
+            {
+                return result;
+            }
+        }
+
+        return 0;
+    }
+
     // ReSharper disable InconsistentNaming
     public record FFprobe(FFprobeFormat format, List<FFprobeStreamData> streams, List<FFprobeChapter> chapters);
 
@@ -504,6 +541,7 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         string color_primaries,
         string field_order,
         string r_frame_rate,
+        string bit_rate,
         string bits_per_raw_sample,
         FFprobeDisposition disposition,
         FFprobeTags tags);
@@ -526,9 +564,22 @@ public class LocalStatisticsProvider : ILocalStatisticsProvider
         string album,
         string track,
         string genre,
-        string date)
+        string date,
+        [property: JsonProperty(PropertyName = "variant_bitrate")]
+        string variantBitrate)
     {
-        public static readonly FFprobeTags Empty = new(null, null, null, null, null, null, null, null, null, null);
+        public static readonly FFprobeTags Empty = new(
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
     }
     // ReSharper restore InconsistentNaming
 }

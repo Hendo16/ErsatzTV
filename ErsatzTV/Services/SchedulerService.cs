@@ -4,6 +4,7 @@ using Bugsnag;
 using ErsatzTV.Application;
 using ErsatzTV.Application.Channels;
 using ErsatzTV.Application.Emby;
+using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.Jellyfin;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Application.MediaCollections;
@@ -125,7 +126,10 @@ public class SchedulerService : BackgroundService
             await ScanJellyfinMediaSources(cancellationToken);
             await ScanEmbyMediaSources(cancellationToken);
 #endif
+            await RefreshTraktLists(cancellationToken);
             await MatchTraktLists(cancellationToken);
+
+            await RefreshGraphicsElements(cancellationToken);
 
             await ReleaseMemory(cancellationToken);
         }
@@ -160,12 +164,14 @@ public class SchedulerService : BackgroundService
             TvContext dbContext = scope.ServiceProvider.GetRequiredService<TvContext>();
 
             List<Playout> playouts = await dbContext.Playouts
+                .AsNoTracking()
                 .Filter(p => p.DailyRebuildTime != null)
                 .Include(p => p.Channel)
                 .ToListAsync(cancellationToken);
 
-            foreach (Playout playout in playouts.OrderBy(
-                         p => decimal.Parse(p.Channel.Number, CultureInfo.InvariantCulture)))
+            foreach (Playout playout in playouts.OrderBy(p => decimal.Parse(
+                         p.Channel.Number,
+                         CultureInfo.InvariantCulture)))
             {
                 DateTime now = DateTime.Now;
                 DateTime target = DateTime.Today.Add(playout.DailyRebuildTime ?? TimeSpan.FromDays(7));
@@ -203,8 +209,10 @@ public class SchedulerService : BackgroundService
         TvContext dbContext = scope.ServiceProvider.GetRequiredService<TvContext>();
 
         List<Playout> playouts = await dbContext.Playouts
+            .AsNoTracking()
             .Include(p => p.Channel)
             .ToListAsync(cancellationToken);
+
         foreach (int playoutId in playouts.OrderBy(p => decimal.Parse(p.Channel.Number, CultureInfo.InvariantCulture))
                      .Map(p => p.Id))
         {
@@ -238,7 +246,7 @@ public class SchedulerService : BackgroundService
 
         var mediaSourceIds = new System.Collections.Generic.HashSet<int>();
 
-        foreach (PlexLibrary library in dbContext.PlexLibraries.Filter(l => l.ShouldSyncItems))
+        foreach (PlexLibrary library in dbContext.PlexLibraries.AsNoTracking().Filter(l => l.ShouldSyncItems))
         {
             mediaSourceIds.Add(library.MediaSourceId);
 
@@ -247,6 +255,13 @@ public class SchedulerService : BackgroundService
                 await _scannerWorkerChannel.WriteAsync(
                     new SynchronizePlexLibraryByIdIfNeeded(library.Id),
                     cancellationToken);
+
+                if (library.MediaKind is LibraryMediaKind.Shows)
+                {
+                    await _scannerWorkerChannel.WriteAsync(
+                        new SynchronizePlexNetworks(library.Id, false),
+                        cancellationToken);
+                }
             }
         }
 
@@ -265,7 +280,7 @@ public class SchedulerService : BackgroundService
 
         var mediaSourceIds = new System.Collections.Generic.HashSet<int>();
 
-        foreach (JellyfinLibrary library in dbContext.JellyfinLibraries.Filter(l => l.ShouldSyncItems))
+        foreach (JellyfinLibrary library in dbContext.JellyfinLibraries.AsNoTracking().Filter(l => l.ShouldSyncItems))
         {
             mediaSourceIds.Add(library.MediaSourceId);
 
@@ -292,7 +307,7 @@ public class SchedulerService : BackgroundService
 
         var mediaSourceIds = new System.Collections.Generic.HashSet<int>();
 
-        foreach (EmbyLibrary library in dbContext.EmbyLibraries.Filter(l => l.ShouldSyncItems))
+        foreach (EmbyLibrary library in dbContext.EmbyLibraries.AsNoTracking().Filter(l => l.ShouldSyncItems))
         {
             mediaSourceIds.Add(library.MediaSourceId);
 
@@ -312,12 +327,40 @@ public class SchedulerService : BackgroundService
         }
     }
 
+    private async Task RefreshTraktLists(CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        TvContext dbContext = scope.ServiceProvider.GetRequiredService<TvContext>();
+
+        DateTime target = DateTime.UtcNow.AddDays(-1);
+
+        List<TraktList> traktLists = await dbContext.TraktLists
+            .AsNoTracking()
+            .Filter(tl => tl.AutoRefresh && (tl.LastUpdate == null || tl.LastUpdate <= target))
+            .ToListAsync(cancellationToken);
+
+        if (traktLists.Count != 0 && _entityLocker.LockTrakt())
+        {
+            TraktList last = traktLists.Last();
+            foreach (TraktList list in traktLists)
+            {
+                await _workerChannel.WriteAsync(
+                    AddTraktList.Existing(list.User, list.List, list == last),
+                    cancellationToken);
+            }
+        }
+    }
+
     private async Task MatchTraktLists(CancellationToken cancellationToken)
     {
         using IServiceScope scope = _serviceScopeFactory.CreateScope();
         TvContext dbContext = scope.ServiceProvider.GetRequiredService<TvContext>();
 
+        DateTime target = DateTime.UtcNow.AddHours(-1);
+
         List<TraktList> traktLists = await dbContext.TraktLists
+            .AsNoTracking()
+            .Filter(tl => tl.LastMatch == null || tl.LastMatch <= target)
             .ToListAsync(cancellationToken);
 
         if (traktLists.Count != 0 && _entityLocker.LockTrakt())
@@ -331,6 +374,9 @@ public class SchedulerService : BackgroundService
             }
         }
     }
+
+    private ValueTask RefreshGraphicsElements(CancellationToken cancellationToken) =>
+        _workerChannel.WriteAsync(new RefreshGraphicsElements(), cancellationToken);
 
     private ValueTask DeleteOrphanedArtwork(CancellationToken cancellationToken) =>
         _workerChannel.WriteAsync(new DeleteOrphanedArtwork(), cancellationToken);

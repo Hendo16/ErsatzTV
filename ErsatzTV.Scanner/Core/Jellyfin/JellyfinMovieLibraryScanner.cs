@@ -6,6 +6,7 @@ using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Jellyfin;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
 
@@ -28,10 +29,12 @@ public class JellyfinMovieLibraryScanner :
         IJellyfinPathReplacementService pathReplacementService,
         IMediaSourceRepository mediaSourceRepository,
         ILocalFileSystem localFileSystem,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         ILogger<JellyfinMovieLibraryScanner> logger)
         : base(
             localFileSystem,
+            localChaptersProvider,
             metadataRepository,
             mediator,
             logger)
@@ -129,6 +132,7 @@ public class JellyfinMovieLibraryScanner :
 
     protected override Task<Either<BaseError, MediaItemScanResult<JellyfinMovie>>> UpdateMetadata(
         MediaItemScanResult<JellyfinMovie> result,
-        MovieMetadata fullMetadata) =>
+        MovieMetadata fullMetadata,
+        CancellationToken cancellationToken) =>
         Task.FromResult<Either<BaseError, MediaItemScanResult<JellyfinMovie>>>(result);
 }

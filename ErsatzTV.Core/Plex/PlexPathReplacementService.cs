@@ -24,10 +24,14 @@ public class PlexPathReplacementService : IPlexPathReplacementService
         _logger = logger;
     }
 
-    public async Task<string> GetReplacementPlexPath(int libraryPathId, string path, bool log = true)
+    public async Task<string> GetReplacementPlexPath(
+        int libraryPathId,
+        string path,
+        CancellationToken cancellationToken,
+        bool log = true)
     {
         List<PlexPathReplacement> replacements =
-            await _mediaSourceRepository.GetPlexPathReplacementsByLibraryId(libraryPathId);
+            await _mediaSourceRepository.GetPlexPathReplacementsByLibraryId(libraryPathId, cancellationToken);
 
         return GetReplacementPlexPath(replacements, path, log);
     }
@@ -35,20 +39,19 @@ public class PlexPathReplacementService : IPlexPathReplacementService
     public string GetReplacementPlexPath(List<PlexPathReplacement> pathReplacements, string path, bool log = true)
     {
         Option<PlexPathReplacement> maybeReplacement = pathReplacements
-            .SingleOrDefault(
-                r =>
+            .SingleOrDefault(r =>
+            {
+                if (string.IsNullOrWhiteSpace(r.PlexPath))
                 {
-                    if (string.IsNullOrWhiteSpace(r.PlexPath))
-                    {
-                        return false;
-                    }
+                    return false;
+                }
 
-                    string separatorChar = IsWindows(r.PlexMediaSource) ? @"\" : @"/";
-                    string prefix = r.PlexPath.EndsWith(separatorChar, StringComparison.OrdinalIgnoreCase)
-                        ? r.PlexPath
-                        : r.PlexPath + separatorChar;
-                    return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-                });
+                string separatorChar = IsWindows(r.PlexMediaSource) ? @"\" : @"/";
+                string prefix = r.PlexPath.EndsWith(separatorChar, StringComparison.OrdinalIgnoreCase)
+                    ? r.PlexPath
+                    : r.PlexPath + separatorChar;
+                return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            });
 
         foreach (PlexPathReplacement replacement in maybeReplacement)
         {

@@ -15,14 +15,15 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Block> validation = await Validate(dbContext, request);
-        return await validation.Apply(ps => Persist(dbContext, request, ps));
+        Validation<BaseError, Block> validation = await Validate(dbContext, request, cancellationToken);
+        return await validation.Apply(ps => Persist(dbContext, request, ps, cancellationToken));
     }
 
     private static async Task<List<BlockItemViewModel>> Persist(
         TvContext dbContext,
         ReplaceBlockItems request,
-        Block block)
+        Block block,
+        CancellationToken cancellationToken)
     {
         block.Name = request.Name;
         block.Minutes = request.Minutes;
@@ -32,7 +33,7 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         dbContext.RemoveRange(block.Items);
         block.Items = request.Items.Map(i => BuildItem(block, i.Index, i)).ToList();
 
-        await dbContext.SaveChangesAsync();
+        await dbContext.SaveChangesAsync(cancellationToken);
 
         // TODO: refresh any playouts that use this schedule
         // foreach (Playout playout in programSchedule.Playouts)
@@ -54,18 +55,26 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
             SmartCollectionId = item.SmartCollectionId,
             MediaItemId = item.MediaItemId,
             PlaybackOrder = item.PlaybackOrder,
-            IncludeInProgramGuide = item.IncludeInProgramGuide
+            IncludeInProgramGuide = item.IncludeInProgramGuide,
+            DisableWatermarks = item.DisableWatermarks
         };
 
-    private static Task<Validation<BaseError, Block>> Validate(TvContext dbContext, ReplaceBlockItems request) =>
-        BlockMustExist(dbContext, request.BlockId)
+    private static Task<Validation<BaseError, Block>> Validate(
+        TvContext dbContext,
+        ReplaceBlockItems request,
+        CancellationToken cancellationToken) =>
+        BlockMustExist(dbContext, request.BlockId, cancellationToken)
             .BindT(block => MinutesMustBeValid(request, block))
+            .BindT(block => BlockNameMustBeValid(dbContext, block, request))
             .BindT(block => CollectionTypesMustBeValid(request, block));
 
-    private static Task<Validation<BaseError, Block>> BlockMustExist(TvContext dbContext, int blockId) =>
+    private static Task<Validation<BaseError, Block>> BlockMustExist(
+        TvContext dbContext,
+        int blockId,
+        CancellationToken cancellationToken) =>
         dbContext.Blocks
             .Include(b => b.Items)
-            .SelectOneAsync(b => b.Id, b => b.Id == blockId)
+            .SelectOneAsync(b => b.Id, b => b.Id == blockId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("[BlockId] does not exist."));
 
     private static Validation<BaseError, Block> MinutesMustBeValid(ReplaceBlockItems request, Block block) =>
@@ -128,5 +137,26 @@ public class ReplaceBlockItemsHandler(IDbContextFactory<TvContext> dbContextFact
         }
 
         return block;
+    }
+
+    private static async Task<Validation<BaseError, Block>> BlockNameMustBeValid(
+        TvContext dbContext,
+        Block block,
+        ReplaceBlockItems request)
+    {
+        if (request.Name.Length > 50)
+        {
+            return BaseError.New($"Block name \"{request.Name}\" is invalid");
+        }
+
+        Option<Block> maybeExisting = await dbContext.Blocks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d =>
+                d.Id != request.BlockId && d.BlockGroupId == request.BlockGroupId && d.Name == request.Name)
+            .Map(Optional);
+
+        return maybeExisting.IsSome
+            ? BaseError.New($"A block named \"{request.Name}\" already exists in that block group")
+            : Success<BaseError, Block>(block);
     }
 }

@@ -7,18 +7,18 @@ namespace ErsatzTV.Infrastructure.Emby;
 public interface IEmbyApi
 {
     [Get("/System/Info")]
-    public Task<EmbySystemInformationResponse> GetSystemInformation(
+    Task<EmbySystemInformationResponse> GetSystemInformation(
         [Header("X-Emby-Token")]
         string apiKey,
         CancellationToken cancellationToken);
 
     [Get("/Library/VirtualFolders")]
-    public Task<List<EmbyLibraryResponse>> GetLibraries(
+    Task<List<EmbyLibraryResponse>> GetLibraries(
         [Header("X-Emby-Token")]
         string apiKey);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetMovieLibraryItems(
+    Task<EmbyLibraryItemsResponse> GetMovieLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
         [Query]
@@ -36,7 +36,7 @@ public interface IEmbyApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetShowLibraryItems(
+    Task<EmbyLibraryItemsResponse> GetShowLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
         [Query]
@@ -51,10 +51,12 @@ public interface IEmbyApi
         [Query]
         int startIndex = 0,
         [Query]
-        int limit = 0);
+        int limit = 0,
+        [Query]
+        string ids = null);
 
     [Get("/Shows/{parentId}/Seasons?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetSeasonLibraryItems(
+    Task<EmbyLibraryItemsResponse> GetSeasonLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
         string parentId,
@@ -66,7 +68,7 @@ public interface IEmbyApi
         int limit = 0);
 
     [Get("/Shows/{showId}/Episodes?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetEpisodeLibraryItems(
+    Task<EmbyLibraryItemsResponse> GetEpisodeLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
         string showId,
@@ -81,7 +83,7 @@ public interface IEmbyApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetCollectionLibraryItems(
+    Task<EmbyLibraryItemsResponse> GetCollectionLibraryItems(
         [Header("X-Emby-Token")]
         string apiKey,
         [Query]
@@ -98,7 +100,7 @@ public interface IEmbyApi
         int limit = 0);
 
     [Get("/Items?sortOrder=Ascending&sortBy=SortName")]
-    public Task<EmbyLibraryItemsResponse> GetCollectionItems(
+    Task<EmbyLibraryItemsResponse> GetCollectionItems(
         [Header("X-Emby-Token")]
         string apiKey,
         [Query]
@@ -118,8 +120,21 @@ public interface IEmbyApi
 
 
     [Get("/Items/{itemId}/PlaybackInfo")]
-    public Task<EmbyPlaybackInfoResponse> GetPlaybackInfo(
+    Task<EmbyPlaybackInfoResponse> GetPlaybackInfo(
         [Header("X-Emby-Token")]
         string apiKey,
         string itemId);
+
+    [Get("/Search/Hints")]
+    Task<EmbySearchHintsResponse> SearchHints(
+        [Header("X-Emby-Token")]
+        string apiKey,
+        [Query]
+        string searchTerm,
+        [Query]
+        string includeItemTypes = "Series",
+        [Query]
+        string parentId = null,
+        [Query]
+        int limit = 20);
 }

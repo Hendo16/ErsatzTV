@@ -1,7 +1,9 @@
-﻿using System.Threading.Channels;
+﻿using System.Diagnostics;
+using System.Threading.Channels;
 using Bugsnag;
 using ErsatzTV.Application;
 using ErsatzTV.Application.Channels;
+using ErsatzTV.Application.Graphics;
 using ErsatzTV.Application.Maintenance;
 using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.Playouts;
@@ -57,7 +59,11 @@ public class WorkerService : BackgroundService
                             await mediator.Send(refreshChannelData, stoppingToken);
                             break;
                         case BuildPlayout buildPlayout:
-                            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                        {
+                            CancellationTokenSource cts = Debugger.IsAttached
+                                ? new CancellationTokenSource(TimeSpan.FromMinutes(10))
+                                : new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
                             var linkedTokenSource =
                                 CancellationTokenSource.CreateLinkedTokenSource(cts.Token, stoppingToken);
 
@@ -70,6 +76,10 @@ public class WorkerService : BackgroundService
                                     "Unable to build playout {PlayoutId}: {Error}",
                                     buildPlayout.PlayoutId,
                                     error.Value));
+                            break;
+                        }
+                        case CheckForOverlappingPlayoutItems checkForOverlappingPlayoutItems:
+                            await mediator.Send(checkForOverlappingPlayoutItems, stoppingToken);
                             break;
                         case TimeShiftOnDemandPlayout timeShiftOnDemandPlayout:
                             await mediator.Send(timeShiftOnDemandPlayout, stoppingToken);
@@ -89,12 +99,16 @@ public class WorkerService : BackgroundService
                                     addTraktList.TraktListUrl,
                                     error.Value);
                             }
+
                             break;
                         case DeleteTraktList deleteTraktList:
                             await mediator.Send(deleteTraktList, stoppingToken);
                             break;
                         case MatchTraktListItems matchTraktListItems:
                             await mediator.Send(matchTraktListItems, stoppingToken);
+                            break;
+                        case RefreshGraphicsElements refreshGraphicsElements:
+                            await mediator.Send(refreshGraphicsElements, stoppingToken);
                             break;
 #if !DEBUG_NO_SYNC
                         case ExtractEmbeddedSubtitles extractEmbeddedSubtitles:

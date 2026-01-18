@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Application.Channels;
+﻿using ErsatzTV.Application.Artworks;
+using ErsatzTV.Application.Channels;
 using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.ViewModels;
@@ -12,16 +13,20 @@ public class ChannelEditViewModel
     public string Categories { get; set; }
     public string Number { get; set; }
     public int FFmpegProfileId { get; set; }
+    public ChannelStreamSelectorMode StreamSelectorMode { get; set; }
+    public string StreamSelector { get; set; }
     public string PreferredAudioLanguageCode { get; set; }
     public string PreferredAudioTitle { get; set; }
-    public string Logo { get; set; }
-    public ChannelProgressMode ProgressMode { get; set; }
+    public ArtworkContentTypeModel Logo { get; set; }
+    public string ExternalLogoUrl { get; set; }
+    public ChannelPlayoutMode PlayoutMode { get; set; }
     public StreamingMode StreamingMode { get; set; }
     public int? WatermarkId { get; set; }
     public int? FallbackFillerId { get; set; }
     public string PreferredSubtitleLanguageCode { get; set; }
     public ChannelSubtitleMode SubtitleMode { get; set; }
     public ChannelMusicVideoCreditsMode MusicVideoCreditsMode { get; set; }
+
     public string MusicVideoCreditsTemplate
     {
         get => MusicVideoCreditsMode == ChannelMusicVideoCreditsMode.GenerateSubtitles
@@ -29,7 +34,12 @@ public class ChannelEditViewModel
             : null;
         set => _musicVideoCreditsTemplate = value;
     }
+
     public ChannelSongVideoMode SongVideoMode { get; set; }
+    public ChannelTranscodeMode TranscodeMode { get; set; }
+    public ChannelIdleBehavior IdleBehavior { get; set; }
+    public bool IsEnabled { get; set; }
+    public bool ShowInEpg { get; set; }
 
     public UpdateChannel ToUpdate() =>
         new(
@@ -39,10 +49,14 @@ public class ChannelEditViewModel
             Group,
             Categories,
             FFmpegProfileId,
-            Logo,
+            string.IsNullOrWhiteSpace(ExternalLogoUrl)
+                ? Logo
+                : new ArtworkContentTypeModel(ExternalLogoUrl, string.Empty),
+            StreamSelectorMode,
+            StreamSelector,
             PreferredAudioLanguageCode,
             PreferredAudioTitle,
-            ProgressMode,
+            PlayoutMode,
             StreamingMode,
             WatermarkId,
             FallbackFillerId,
@@ -50,7 +64,11 @@ public class ChannelEditViewModel
             SubtitleMode,
             MusicVideoCreditsMode,
             MusicVideoCreditsTemplate,
-            SongVideoMode);
+            SongVideoMode,
+            TranscodeMode,
+            IdleBehavior,
+            IsEnabled,
+            ShowInEpg);
 
     public CreateChannel ToCreate() =>
         new(
@@ -59,10 +77,14 @@ public class ChannelEditViewModel
             Group,
             Categories,
             FFmpegProfileId,
-            Logo,
+            string.IsNullOrWhiteSpace(ExternalLogoUrl)
+                ? Logo
+                : new ArtworkContentTypeModel(ExternalLogoUrl, string.Empty),
+            StreamSelectorMode,
+            StreamSelector,
             PreferredAudioLanguageCode,
             PreferredAudioTitle,
-            ProgressMode,
+            PlayoutMode,
             StreamingMode,
             WatermarkId,
             FallbackFillerId,
@@ -70,5 +92,9 @@ public class ChannelEditViewModel
             SubtitleMode,
             MusicVideoCreditsMode,
             MusicVideoCreditsTemplate,
-            SongVideoMode);
+            SongVideoMode,
+            TranscodeMode,
+            IdleBehavior,
+            IsEnabled,
+            ShowInEpg);
 }

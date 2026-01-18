@@ -2,6 +2,7 @@ using Bugsnag;
 using Dapper;
 using Destructurama;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Repositories.Caching;
@@ -70,14 +71,13 @@ public class ScheduleIntegrationTests
             ServiceLifetime.Scoped,
             ServiceLifetime.Singleton);
 
-        services.AddDbContextFactory<TvContext>(
-            options => options.UseSqlite(
-                connectionString,
-                o =>
-                {
-                    o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
-                    o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
-                }));
+        services.AddDbContextFactory<TvContext>(options => options.UseSqlite(
+            connectionString,
+            o =>
+            {
+                o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+                o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
+            }));
 
         SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
         SqlMapper.AddTypeHandler(new GuidHandler());
@@ -110,14 +110,15 @@ public class ScheduleIntegrationTests
             new LocalFileSystem(
                 provider.GetRequiredService<IClient>(),
                 provider.GetRequiredService<ILogger<LocalFileSystem>>()),
-            provider.GetRequiredService<IConfigElementRepository>());
+            provider.GetRequiredService<IConfigElementRepository>(),
+            _cancellationToken);
 
         await searchIndex.Rebuild(
             provider.GetRequiredService<ICachingSearchRepository>(),
-            provider.GetRequiredService<IFallbackMetadataProvider>());
+            provider.GetRequiredService<IFallbackMetadataProvider>(),
+            _cancellationToken);
 
         var builder = new PlayoutBuilder(
-            Substitute.For<IPlayoutTimeShifter>(),
             new ConfigElementRepository(factory),
             new MediaCollectionRepository(Substitute.For<IClient>(), searchIndex, factory),
             new TelevisionRepository(factory, provider.GetRequiredService<ILogger<TelevisionRepository>>()),
@@ -129,11 +130,23 @@ public class ScheduleIntegrationTests
         {
             await using TvContext context = await factory.CreateDbContextAsync(_cancellationToken);
 
-            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID);
+            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID, _cancellationToken);
             Playout playout = maybePlayout.ValueUnsafe();
+            PlayoutReferenceData referenceData = await GetReferenceData(
+                context,
+                PLAYOUT_ID,
+                PlayoutScheduleKind.Classic);
 
-            await builder.Build(playout, PlayoutBuildMode.Reset, start, finish, _cancellationToken);
+            await builder.Build(
+                playout,
+                referenceData,
+                PlayoutBuildResult.Empty,
+                PlayoutBuildMode.Reset,
+                start,
+                finish,
+                _cancellationToken);
 
+            // TODO: would need to apply changes from build result
             await context.SaveChangesAsync(_cancellationToken);
         }
 
@@ -141,16 +154,23 @@ public class ScheduleIntegrationTests
         {
             await using TvContext context = await factory.CreateDbContextAsync(_cancellationToken);
 
-            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID);
+            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID, _cancellationToken);
             Playout playout = maybePlayout.ValueUnsafe();
+            PlayoutReferenceData referenceData = await GetReferenceData(
+                context,
+                PLAYOUT_ID,
+                PlayoutScheduleKind.Classic);
 
             await builder.Build(
                 playout,
+                referenceData,
+                PlayoutBuildResult.Empty,
                 PlayoutBuildMode.Continue,
                 start.AddHours(i),
                 finish.AddHours(i),
                 _cancellationToken);
 
+            // TODO: would need to apply changes from build result
             await context.SaveChangesAsync(_cancellationToken);
         }
 
@@ -158,16 +178,23 @@ public class ScheduleIntegrationTests
         {
             await using TvContext context = await factory.CreateDbContextAsync(_cancellationToken);
 
-            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID);
+            Option<Playout> maybePlayout = await GetPlayout(context, PLAYOUT_ID, _cancellationToken);
             Playout playout = maybePlayout.ValueUnsafe();
+            PlayoutReferenceData referenceData = await GetReferenceData(
+                context,
+                PLAYOUT_ID,
+                PlayoutScheduleKind.Classic);
 
             await builder.Build(
                 playout,
+                referenceData,
+                PlayoutBuildResult.Empty,
                 PlayoutBuildMode.Continue,
                 start.AddHours(i),
                 finish.AddHours(i),
                 _cancellationToken);
 
+            // TODO: would need to apply changes from build result
             await context.SaveChangesAsync(_cancellationToken);
         }
     }
@@ -193,14 +220,13 @@ public class ScheduleIntegrationTests
             ServiceLifetime.Scoped,
             ServiceLifetime.Singleton);
 
-        services.AddDbContextFactory<TvContext>(
-            options => options.UseSqlite(
-                connectionString,
-                o =>
-                {
-                    o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
-                    o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
-                }));
+        services.AddDbContextFactory<TvContext>(options => options.UseSqlite(
+            connectionString,
+            o =>
+            {
+                o.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+                o.MigrationsAssembly("ErsatzTV.Infrastructure.Sqlite");
+            }));
 
         SqlMapper.AddTypeHandler(new DateTimeOffsetHandler());
         SqlMapper.AddTypeHandler(new GuidHandler());
@@ -288,7 +314,6 @@ public class ScheduleIntegrationTests
         DateTimeOffset finish = start.AddDays(2);
 
         var builder = new PlayoutBuilder(
-            Substitute.For<IPlayoutTimeShifter>(),
             new ConfigElementRepository(factory),
             new MediaCollectionRepository(Substitute.For<IClient>(), Substitute.For<ISearchIndex>(), factory),
             new TelevisionRepository(factory, provider.GetRequiredService<ILogger<TelevisionRepository>>()),
@@ -301,16 +326,23 @@ public class ScheduleIntegrationTests
         {
             await using TvContext context = await factory.CreateDbContextAsync(_cancellationToken);
 
-            Option<Playout> maybePlayout = await GetPlayout(context, playoutId);
+            Option<Playout> maybePlayout = await GetPlayout(context, playoutId, _cancellationToken);
             Playout playout = maybePlayout.ValueUnsafe();
+            PlayoutReferenceData referenceData = await GetReferenceData(
+                context,
+                playoutId,
+                PlayoutScheduleKind.Classic);
 
             await builder.Build(
                 playout,
+                referenceData,
+                PlayoutBuildResult.Empty,
                 PlayoutBuildMode.Continue,
                 start.AddHours(i),
                 finish.AddHours(i),
                 _cancellationToken);
 
+            // TODO: would need to apply changes from build result
             await context.SaveChangesAsync(_cancellationToken);
         }
     }
@@ -358,62 +390,112 @@ public class ScheduleIntegrationTests
         return playout.Id;
     }
 
-    private static async Task<Option<Playout>> GetPlayout(TvContext dbContext, int playoutId) =>
+    private static async Task<Option<Playout>> GetPlayout(
+        TvContext dbContext,
+        int playoutId,
+        CancellationToken cancellationToken) =>
         await dbContext.Playouts
-            .Include(p => p.Channel)
-            .Include(p => p.Items)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.Collection)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.MediaItem)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.PreRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.MidRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.PostRollFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.TailFiller)
-            .Include(p => p.ProgramScheduleAlternates)
-            .ThenInclude(a => a.ProgramSchedule)
-            .ThenInclude(ps => ps.Items)
-            .ThenInclude(psi => psi.FallbackFiller)
             .Include(p => p.ProgramScheduleAnchors)
             .ThenInclude(a => a.EnumeratorState)
-            .Include(p => p.ProgramScheduleAnchors)
-            .ThenInclude(a => a.MediaItem)
-            .Include(p => p.ProgramSchedule)
+            .SelectOneAsync(p => p.Id, p => p.Id == playoutId, cancellationToken);
+
+    private static async Task<PlayoutReferenceData> GetReferenceData(
+        TvContext dbContext,
+        int playoutId,
+        PlayoutScheduleKind scheduleKind)
+    {
+        Channel channel = await dbContext.Channels
+            .AsNoTracking()
+            .Where(c => c.Playouts.Any(p => p.Id == playoutId))
+            .FirstOrDefaultAsync();
+
+        List<PlayoutItem> existingItems = [];
+        List<PlayoutTemplate> playoutTemplates = [];
+
+        if (scheduleKind is PlayoutScheduleKind.Block)
+        {
+            existingItems = await dbContext.PlayoutItems
+                .AsNoTracking()
+                .Where(pi => pi.PlayoutId == playoutId)
+                .ToListAsync();
+
+            playoutTemplates = await dbContext.PlayoutTemplates
+                .AsNoTracking()
+                .Where(pt => pt.PlayoutId == playoutId)
+                .Include(t => t.Template)
+                .ThenInclude(t => t.Items)
+                .ThenInclude(i => i.Block)
+                .ThenInclude(b => b.Items)
+                .Include(t => t.DecoTemplate)
+                .ThenInclude(t => t.Items)
+                .ThenInclude(i => i.Deco)
+                .ToListAsync();
+        }
+
+        ProgramSchedule programSchedule = await dbContext.ProgramSchedules
+            .AsNoTracking()
+            .Where(ps => ps.Playouts.Any(p => p.Id == playoutId))
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
+            .ThenInclude(psi => psi.Watermark)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.Collection)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.MediaItem)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.PreRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.MidRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.PostRollFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.TailFiller)
+            .Include(ps => ps.Items)
+            .ThenInclude(psi => psi.FallbackFiller)
+            .FirstOrDefaultAsync();
+
+        List<ProgramScheduleAlternate> programScheduleAlternates = await dbContext.ProgramScheduleAlternates
+            .AsNoTracking()
+            .Where(pt => pt.PlayoutId == playoutId)
+            .Include(a => a.ProgramSchedule)
+            .ThenInclude(ps => ps.Items)
+            .ThenInclude(psi => psi.ProgramScheduleItemWatermarks)
+            .ThenInclude(psi => psi.Watermark)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.Collection)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.MediaItem)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.PreRollFiller)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.MidRollFiller)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.PostRollFiller)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.TailFiller)
-            .Include(p => p.ProgramSchedule)
+            .Include(a => a.ProgramSchedule)
             .ThenInclude(ps => ps.Items)
             .ThenInclude(psi => psi.FallbackFiller)
-            .SelectOneAsync(p => p.Id, p => p.Id == playoutId);
+            .ToListAsync();
+
+        List<PlayoutHistory> playoutHistory = await dbContext.PlayoutHistory
+            .AsNoTracking()
+            .Where(h => h.PlayoutId == playoutId)
+            .ToListAsync();
+
+        return new PlayoutReferenceData(
+            channel,
+            Option<Deco>.None,
+            existingItems,
+            playoutTemplates,
+            programSchedule,
+            programScheduleAlternates,
+            playoutHistory);
+    }
 }

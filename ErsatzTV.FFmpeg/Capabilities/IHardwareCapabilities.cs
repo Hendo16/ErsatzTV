@@ -4,17 +4,18 @@ namespace ErsatzTV.FFmpeg.Capabilities;
 
 public interface IHardwareCapabilities
 {
-    public FFmpegCapability CanDecode(
+    FFmpegCapability CanDecode(
+        string videoFormat,
+        Option<string> videoProfile,
+        Option<IPixelFormat> maybePixelFormat,
+        bool isHdr);
+
+    FFmpegCapability CanEncode(
         string videoFormat,
         Option<string> videoProfile,
         Option<IPixelFormat> maybePixelFormat);
 
-    public FFmpegCapability CanEncode(
-        string videoFormat,
-        Option<string> videoProfile,
-        Option<IPixelFormat> maybePixelFormat);
-
-    public Option<RateControlMode> GetRateControlMode(
+    Option<RateControlMode> GetRateControlMode(
         string videoFormat,
         Option<IPixelFormat> maybePixelFormat);
 }

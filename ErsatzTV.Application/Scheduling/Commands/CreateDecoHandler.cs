@@ -21,16 +21,17 @@ public class CreateDecoHandler(IDbContextFactory<TvContext> dbContextFactory)
     {
         await dbContext.Decos.AddAsync(deco);
         await dbContext.SaveChangesAsync();
+        await dbContext.Entry(deco).Reference(d => d.DecoGroup).LoadAsync();
         return Mapper.ProjectToViewModel(deco);
     }
 
     private static async Task<Validation<BaseError, Deco>> Validate(TvContext dbContext, CreateDeco request) =>
-        await ValidateDecoName(dbContext, request).MapT(
-            name => new Deco
-            {
-                DecoGroupId = request.DecoGroupId,
-                Name = name
-            });
+        await ValidateDecoName(dbContext, request).MapT(name => new Deco
+        {
+            DecoGroupId = request.DecoGroupId,
+            Name = name,
+            DecoWatermarks = []
+        });
 
     private static async Task<Validation<BaseError, string>> ValidateDecoName(
         TvContext dbContext,

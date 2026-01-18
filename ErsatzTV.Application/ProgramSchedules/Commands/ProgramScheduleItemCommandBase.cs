@@ -11,11 +11,12 @@ public abstract class ProgramScheduleItemCommandBase
 {
     protected static Task<Validation<BaseError, ProgramSchedule>> ProgramScheduleMustExist(
         TvContext dbContext,
-        int programScheduleId) =>
+        int programScheduleId,
+        CancellationToken cancellationToken) =>
         dbContext.ProgramSchedules
             .Include(ps => ps.Items)
             .Include(ps => ps.Playouts)
-            .SelectOneAsync(ps => ps.Id, ps => ps.Id == programScheduleId)
+            .SelectOneAsync(ps => ps.Id, ps => ps.Id == programScheduleId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("[ProgramScheduleId] does not exist."));
 
     protected static async Task<Either<BaseError, ProgramSchedule>> FillerConfigurationMustBeValid(
@@ -71,10 +72,17 @@ public abstract class ProgramScheduleItemCommandBase
             case PlayoutMode.One:
                 break;
             case PlayoutMode.Multiple:
-                if (item.MultipleCount.GetValueOrDefault() < 0)
+                if (item.MultipleMode is MultipleMode.PlaylistItemSize &&
+                    item.CollectionType is not ProgramScheduleItemCollectionType.Playlist)
                 {
                     return BaseError.New(
-                        "[MultipleCount] must be greater than or equal to 0 for playout mode 'multiple'");
+                        "[MultipleMode] cannot be [PlaylistItemSize] when collection is not a playlist");
+                }
+
+                if (item.MultipleMode is MultipleMode.Count && item.MultipleCount.GetValueOrDefault() < 1)
+                {
+                    return BaseError.New(
+                        "[MultipleCount] must be greater than 0 for playout mode 'multiple / count'");
                 }
 
                 break;
@@ -177,14 +185,16 @@ public abstract class ProgramScheduleItemCommandBase
     protected static ProgramScheduleItem BuildItem(
         ProgramSchedule programSchedule,
         int index,
-        IProgramScheduleItemRequest item) =>
-        item.PlayoutMode switch
+        IProgramScheduleItemRequest item)
+    {
+        ProgramScheduleItem result = item.PlayoutMode switch
         {
             PlayoutMode.Flood => new ProgramScheduleItemFlood
             {
                 ProgramScheduleId = programSchedule.Id,
                 Index = index,
                 StartTime = FixStartTime(item.StartTime),
+                FixedStartTimeBehavior = item.FixedStartTimeBehavior,
                 CollectionType = item.CollectionType,
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
@@ -200,7 +210,6 @@ public abstract class ProgramScheduleItemCommandBase
                 PostRollFillerId = item.PostRollFillerId,
                 TailFillerId = item.TailFillerId,
                 FallbackFillerId = item.FallbackFillerId,
-                WatermarkId = item.WatermarkId,
                 PreferredAudioLanguageCode = item.PreferredAudioLanguageCode,
                 PreferredAudioTitle = item.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = item.PreferredSubtitleLanguageCode,
@@ -211,6 +220,7 @@ public abstract class ProgramScheduleItemCommandBase
                 ProgramScheduleId = programSchedule.Id,
                 Index = index,
                 StartTime = FixStartTime(item.StartTime),
+                FixedStartTimeBehavior = item.FixedStartTimeBehavior,
                 CollectionType = item.CollectionType,
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
@@ -226,7 +236,6 @@ public abstract class ProgramScheduleItemCommandBase
                 PostRollFillerId = item.PostRollFillerId,
                 TailFillerId = item.TailFillerId,
                 FallbackFillerId = item.FallbackFillerId,
-                WatermarkId = item.WatermarkId,
                 PreferredAudioLanguageCode = item.PreferredAudioLanguageCode,
                 PreferredAudioTitle = item.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = item.PreferredSubtitleLanguageCode,
@@ -237,6 +246,7 @@ public abstract class ProgramScheduleItemCommandBase
                 ProgramScheduleId = programSchedule.Id,
                 Index = index,
                 StartTime = FixStartTime(item.StartTime),
+                FixedStartTimeBehavior = item.FixedStartTimeBehavior,
                 CollectionType = item.CollectionType,
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
@@ -245,7 +255,8 @@ public abstract class ProgramScheduleItemCommandBase
                 PlaylistId = item.PlaylistId,
                 PlaybackOrder = item.PlaybackOrder,
                 FillWithGroupMode = item.FillWithGroupMode,
-                Count = item.MultipleCount.GetValueOrDefault(),
+                MultipleMode = item.MultipleMode,
+                Count = item.MultipleMode is MultipleMode.Count ? item.MultipleCount.GetValueOrDefault() : 0,
                 CustomTitle = item.CustomTitle,
                 GuideMode = item.GuideMode,
                 PreRollFillerId = item.PreRollFillerId,
@@ -253,7 +264,6 @@ public abstract class ProgramScheduleItemCommandBase
                 PostRollFillerId = item.PostRollFillerId,
                 TailFillerId = item.TailFillerId,
                 FallbackFillerId = item.FallbackFillerId,
-                WatermarkId = item.WatermarkId,
                 PreferredAudioLanguageCode = item.PreferredAudioLanguageCode,
                 PreferredAudioTitle = item.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = item.PreferredSubtitleLanguageCode,
@@ -264,6 +274,7 @@ public abstract class ProgramScheduleItemCommandBase
                 ProgramScheduleId = programSchedule.Id,
                 Index = index,
                 StartTime = FixStartTime(item.StartTime),
+                FixedStartTimeBehavior = item.FixedStartTimeBehavior,
                 CollectionType = item.CollectionType,
                 CollectionId = item.CollectionId,
                 MultiCollectionId = item.MultiCollectionId,
@@ -284,7 +295,6 @@ public abstract class ProgramScheduleItemCommandBase
                 PostRollFillerId = item.PostRollFillerId,
                 TailFillerId = item.TailFillerId,
                 FallbackFillerId = item.FallbackFillerId,
-                WatermarkId = item.WatermarkId,
                 PreferredAudioLanguageCode = item.PreferredAudioLanguageCode,
                 PreferredAudioTitle = item.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = item.PreferredSubtitleLanguageCode,
@@ -292,6 +302,20 @@ public abstract class ProgramScheduleItemCommandBase
             },
             _ => throw new NotSupportedException($"Unsupported playout mode {item.PlayoutMode}")
         };
+
+        foreach (int watermarkId in item.WatermarkIds)
+        {
+            result.ProgramScheduleItemWatermarks ??= [];
+            result.ProgramScheduleItemWatermarks.Add(
+                new ProgramScheduleItemWatermark
+                {
+                    ProgramScheduleItem = result,
+                    WatermarkId = watermarkId
+                });
+        }
+
+        return result;
+    }
 
     private static TimeSpan? FixStartTime(TimeSpan? startTime) =>
         startTime.HasValue && startTime.Value >= TimeSpan.FromDays(1)

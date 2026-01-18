@@ -16,4 +16,5 @@ public interface IFallbackMetadataProvider
     Task<Option<FillerMetadata>> GetFallbackMetadata(FillerMediaItem filler, IMovieRepository movieRepository);
     Option<SongMetadata> GetFallbackMetadata(Song song);
     Option<ImageMetadata> GetFallbackMetadata(Image image);
+    Option<RemoteStreamMetadata> GetFallbackMetadata(RemoteStream remoteStream);
 }

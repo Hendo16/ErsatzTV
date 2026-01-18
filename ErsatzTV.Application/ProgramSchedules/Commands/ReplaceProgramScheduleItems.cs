@@ -1,5 +1,6 @@
 ﻿using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
@@ -7,6 +8,7 @@ public record ReplaceProgramScheduleItem(
     int Index,
     StartType StartType,
     TimeSpan? StartTime,
+    FixedStartTimeBehavior? FixedStartTimeBehavior,
     PlayoutMode PlayoutMode,
     ProgramScheduleItemCollectionType CollectionType,
     int? CollectionId,
@@ -16,6 +18,7 @@ public record ReplaceProgramScheduleItem(
     int? PlaylistId,
     PlaybackOrder PlaybackOrder,
     FillWithGroupMode FillWithGroupMode,
+    MultipleMode MultipleMode,
     int? MultipleCount,
     TimeSpan? PlayoutDuration,
     TailMode TailMode,
@@ -27,7 +30,7 @@ public record ReplaceProgramScheduleItem(
     int? PostRollFillerId,
     int? TailFillerId,
     int? FallbackFillerId,
-    int? WatermarkId,
+    List<int> WatermarkIds,
     string PreferredAudioLanguageCode,
     string PreferredAudioTitle,
     string PreferredSubtitleLanguageCode,

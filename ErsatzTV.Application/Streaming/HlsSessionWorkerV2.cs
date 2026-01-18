@@ -24,10 +24,11 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
     private readonly IMediator _mediator;
     private readonly string _scheme;
     private readonly SemaphoreSlim _slim = new(1, 1);
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly Option<int> _targetFramerate;
     private CancellationTokenSource _cancellationTokenSource;
     private string _channelNumber;
+    private DateTimeOffset _channelStart;
     private bool _disposedValue;
     private DateTimeOffset _lastAccess;
     private Option<PlayoutItemProcessModel> _lastProcessModel;
@@ -98,7 +99,10 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
         GC.SuppressFinalize(this);
     }
 
-    public async Task Run(string channelNumber, TimeSpan idleTimeout, CancellationToken incomingCancellationToken)
+    public async Task Run(
+        string channelNumber,
+        Option<TimeSpan> idleTimeout,
+        CancellationToken incomingCancellationToken)
     {
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(incomingCancellationToken);
 
@@ -106,10 +110,13 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
         {
             _channelNumber = channelNumber;
 
-            lock (_sync)
+            foreach (TimeSpan timeout in idleTimeout)
             {
-                _timer = new Timer(idleTimeout.TotalMilliseconds) { AutoReset = false };
-                _timer.Elapsed += CancelRun;
+                lock (_sync)
+                {
+                    _timer = new Timer(timeout.TotalMilliseconds) { AutoReset = false };
+                    _timer.Elapsed += CancelRun;
+                }
             }
 
             CancellationToken cancellationToken = _cancellationTokenSource.Token;
@@ -124,9 +131,19 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
             Touch();
             _transcodedUntil = DateTimeOffset.Now;
             PlaylistStart = _transcodedUntil;
+            _channelStart = _transcodedUntil;
+
+            Option<int> maybePlayoutId = await _mediator.Send(
+                new GetPlayoutIdByChannelNumber(_channelNumber),
+                cancellationToken);
 
             // time shift on-demand playout if needed
-            await _mediator.Send(new TimeShiftOnDemandPlayout(_channelNumber, _transcodedUntil, true), cancellationToken);
+            foreach (int playoutId in maybePlayoutId)
+            {
+                await _mediator.Send(
+                    new TimeShiftOnDemandPlayout(playoutId, _transcodedUntil, true),
+                    cancellationToken);
+            }
 
             // start concat/segmenter process
             // other transcode processes will be started by incoming requests from concat/segmenter process
@@ -170,9 +187,12 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
         }
         finally
         {
-            lock (_sync)
+            if (_timer is not null)
             {
-                _timer.Elapsed -= CancelRun;
+                lock (_sync)
+                {
+                    _timer.Elapsed -= CancelRun;
+                }
             }
 
             try
@@ -299,6 +319,7 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
             _transcodedUntil,
             startAtZero,
             realtime,
+            _channelStart,
             0,
             _targetFramerate);
 
@@ -326,8 +347,11 @@ public class HlsSessionWorkerV2 : IHlsSessionWorker
         {
             if (disposing)
             {
-                _timer.Dispose();
-                _timer = null;
+                if (_timer is not null)
+                {
+                    _timer.Dispose();
+                    _timer = null;
+                }
 
                 _serviceScope.Dispose();
                 _serviceScope = null;

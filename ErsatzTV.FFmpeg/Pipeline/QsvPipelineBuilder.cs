@@ -3,6 +3,7 @@ using ErsatzTV.FFmpeg.Decoder;
 using ErsatzTV.FFmpeg.Decoder.Qsv;
 using ErsatzTV.FFmpeg.Encoder;
 using ErsatzTV.FFmpeg.Encoder.Qsv;
+using ErsatzTV.FFmpeg.Environment;
 using ErsatzTV.FFmpeg.Filter;
 using ErsatzTV.FFmpeg.Filter.Qsv;
 using ErsatzTV.FFmpeg.Format;
@@ -29,6 +30,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         string reportsFolder,
         string fontsFolder,
         ILogger logger) : base(
@@ -39,6 +41,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         watermarkInputFile,
         subtitleInputFile,
         concatInputFile,
+        graphicsEngineInput,
         reportsFolder,
         fontsFolder,
         logger)
@@ -61,7 +64,8 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         FFmpegCapability decodeCapability = _hardwareCapabilities.CanDecode(
             videoStream.Codec,
             videoStream.Profile,
-            videoStream.PixelFormat);
+            videoStream.PixelFormat,
+            videoStream.ColorParams.IsHdr);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
@@ -73,9 +77,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             encodeCapability = FFmpegCapability.Software;
         }
 
-        pipelineSteps.Add(new QsvHardwareAccelerationOption(ffmpegState.VaapiDevice));
-
-        bool isHevcOrH264 = videoStream.Codec is VideoFormat.Hevc or VideoFormat.H264;
+        bool isHevcOrH264 = videoStream.Codec is /*VideoFormat.Hevc or*/ VideoFormat.H264;
         bool is10Bit = videoStream.PixelFormat.Map(pf => pf.BitDepth).IfNone(8) == 10;
 
         // 10-bit hevc/h264 qsv decoders have issues, so use software
@@ -83,6 +85,17 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         {
             decodeCapability = FFmpegCapability.Software;
         }
+
+        // QSV cannot always decode properly when seeking, so use software
+        if (decodeCapability == FFmpegCapability.Hardware && ffmpegState.Start.Filter(s => s > TimeSpan.Zero).IsSome)
+        {
+            decodeCapability = FFmpegCapability.Software;
+        }
+
+        // give a bogus value so no cuda devices are visible to ffmpeg
+        pipelineSteps.Add(new CudaVisibleDevicesVariable("999"));
+
+        pipelineSteps.Add(new QsvHardwareAccelerationOption(ffmpegState.VaapiDevice, decodeCapability));
 
         // disable hw accel if decoder/encoder isn't supported
         return ffmpegState with
@@ -128,6 +141,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         VideoStream videoStream,
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         PipelineContext context,
         Option<IDecoder> maybeDecoder,
         FFmpegState ffmpegState,
@@ -137,6 +151,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
     {
         var watermarkOverlayFilterSteps = new List<IPipelineFilterStep>();
         var subtitleOverlayFilterSteps = new List<IPipelineFilterStep>();
+        var graphicsEngineOverlayFilterSteps = new List<IPipelineFilterStep>();
 
         FrameState currentState = desiredState with
         {
@@ -157,7 +172,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         }
 
         // easier to use nv12 for overlay
-        if (context.HasSubtitleOverlay || context.HasWatermark)
+        if (context.HasSubtitleOverlay || context.HasWatermark || context.HasGraphicsEngine)
         {
             IPixelFormat pixelFormat = desiredState.PixelFormat.IfNone(
                 context.Is10BitOutput ? new PixelFormatYuv420P10Le() : new PixelFormatYuv420P());
@@ -172,6 +187,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         // _logger.LogDebug("After deinterlace: {PixelFormat}", currentState.PixelFormat);
         currentState = SetScale(videoInputFile, videoStream, context, ffmpegState, desiredState, currentState);
         // _logger.LogDebug("After scale: {PixelFormat}", currentState.PixelFormat);
+        currentState = SetTonemap(videoInputFile, videoStream, ffmpegState, desiredState, currentState);
         currentState = SetPad(videoInputFile, videoStream, desiredState, currentState);
         // _logger.LogDebug("After pad: {PixelFormat}", currentState.PixelFormat);
         currentState = SetCrop(videoInputFile, desiredState, currentState);
@@ -179,7 +195,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
 
         // need to download for any sort of overlay
         if (currentState.FrameDataLocation == FrameDataLocation.Hardware &&
-            (context.HasSubtitleOverlay || context.HasWatermark))
+            (context.HasSubtitleOverlay || context.HasWatermark || context.HasGraphicsEngine))
         {
             var hardwareDownload = new HardwareDownloadFilter(currentState);
             currentState = hardwareDownload.NextState(currentState);
@@ -204,6 +220,8 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             desiredState,
             currentState,
             watermarkOverlayFilterSteps);
+
+        SetGraphicsEngine(graphicsEngineInput, currentState, graphicsEngineOverlayFilterSteps);
 
         // after everything else is done, apply the encoder
         if (pipelineSteps.OfType<IEncoder>().All(e => e.Kind != StreamKind.Video))
@@ -238,10 +256,12 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
 
         return new FilterChain(
             videoInputFile.FilterSteps,
-            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
-            subtitleInputFile.Map(st => st.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
+            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone([]),
+            subtitleInputFile.Map(st => st.FilterSteps).IfNone([]),
+            graphicsEngineInput.Map(ge => ge.FilterSteps).IfNone([]),
             watermarkOverlayFilterSteps,
             subtitleOverlayFilterSteps,
+            graphicsEngineOverlayFilterSteps,
             pixelFormatFilterSteps);
     }
 
@@ -271,7 +291,8 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             IPixelFormat formatForDownload = pixelFormat;
 
             bool usesVppQsv =
-                videoInputFile.FilterSteps.Any(f => f is QsvFormatFilter or ScaleQsvFilter or DeinterlaceQsvFilter);
+                videoInputFile.FilterSteps.Any(f =>
+                    f is QsvFormatFilter or ScaleQsvFilter or DeinterlaceQsvFilter or TonemapQsvFilter);
 
             // if we have no filters, check whether we need to convert pixel format
             // since qsv doesn't seem to like doing that at the encoder
@@ -347,7 +368,8 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
                     currentState,
                     videoStream,
                     format,
-                    usesVppQsv);
+                    forceInputOverrides: usesVppQsv,
+                    isQsv: true);
 
                 currentState = colorspace.NextState(currentState);
                 result.Add(colorspace);
@@ -376,16 +398,6 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
                     "Format {A} doesn't equal {B}",
                     currentState.PixelFormat.Map(f => f.FFmpegName),
                     format.FFmpegName);
-
-                // remind qsv that it uses qsv
-                if (currentState.FrameDataLocation == FrameDataLocation.Hardware &&
-                    result is [ColorspaceFilter colorspace])
-                {
-                    if (colorspace.Filter.StartsWith("setparams=", StringComparison.OrdinalIgnoreCase))
-                    {
-                        result.Insert(0, new QsvFormatFilter(new PixelFormatQsv(format.Name)));
-                    }
-                }
 
                 pipelineSteps.Add(new PixelFormatOutputOption(format));
             }
@@ -421,7 +433,7 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
 
             foreach (VideoStream watermarkStream in watermark.VideoStreams)
             {
-                if (watermarkStream.StillImage == false)
+                if (!watermarkStream.StillImage)
                 {
                     watermark.AddOption(new DoNotIgnoreLoopInputOption());
                 }
@@ -494,8 +506,6 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         {
             if (context.HasSubtitleText)
             {
-                videoInputFile.AddOption(new CopyTimestampInputOption());
-
                 var downloadFilter = new HardwareDownloadFilter(currentState);
                 currentState = downloadFilter.NextState(currentState);
                 videoInputFile.FilterSteps.Add(downloadFilter);
@@ -546,6 +556,29 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         return currentState;
     }
 
+    private static void SetGraphicsEngine(
+        Option<GraphicsEngineInput> graphicsEngineInput,
+        FrameState desiredState,
+        List<IPipelineFilterStep> graphicsEngineOverlayFilterSteps)
+    {
+        foreach (GraphicsEngineInput _ in graphicsEngineInput)
+        {
+            foreach (IPixelFormat desiredPixelFormat in desiredState.PixelFormat)
+            {
+                IPixelFormat pf = desiredPixelFormat;
+                if (desiredPixelFormat is PixelFormatNv12 nv12)
+                {
+                    foreach (IPixelFormat availablePixelFormat in AvailablePixelFormats.ForPixelFormat(nv12.Name, null))
+                    {
+                        pf = availablePixelFormat;
+                    }
+                }
+
+                graphicsEngineOverlayFilterSteps.Add(new OverlayGraphicsEngineFilter(pf));
+            }
+        }
+    }
+
     private static FrameState SetPad(
         VideoInputFile videoInputFile,
         VideoStream videoStream,
@@ -576,12 +609,13 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
         {
             DecoderHardwareAccelerationMode: HardwareAccelerationMode.None,
             EncoderHardwareAccelerationMode: HardwareAccelerationMode.None
-        } && context is { HasWatermark: false, HasSubtitleOverlay: false, ShouldDeinterlace: false };
+        } && context is
+            { HasGraphicsEngine: false, HasWatermark: false, HasSubtitleOverlay: false, ShouldDeinterlace: false };
 
         // auto_scale filter seems to muck up 10-bit software decode => hardware scale, so use software scale in that case
         useSoftwareFilter = useSoftwareFilter ||
-                            (ffmpegState is { DecoderHardwareAccelerationMode: HardwareAccelerationMode.None } &&
-                             OperatingSystem.IsWindows() && currentState.BitDepth == 10);
+                            ffmpegState is { DecoderHardwareAccelerationMode: HardwareAccelerationMode.None } &&
+                            OperatingSystem.IsWindows() && currentState.BitDepth == 10;
 
         if (currentState.ScaledSize != desiredState.ScaledSize && useSoftwareFilter)
         {
@@ -633,6 +667,37 @@ public class QsvPipelineBuilder : SoftwarePipelineBuilder
             var filter = new DeinterlaceQsvFilter(currentState, ffmpegState.QsvExtraHardwareFrames);
             currentState = filter.NextState(currentState);
             videoInputFile.FilterSteps.Add(filter);
+        }
+
+        return currentState;
+    }
+
+    private static FrameState SetTonemap(
+        VideoInputFile videoInputFile,
+        VideoStream videoStream,
+        FFmpegState ffmpegState,
+        FrameState desiredState,
+        FrameState currentState)
+    {
+        if (videoStream.ColorParams.IsHdr)
+        {
+            foreach (IPixelFormat pixelFormat in desiredState.PixelFormat)
+            {
+                if (ffmpegState.DecoderHardwareAccelerationMode == HardwareAccelerationMode.Qsv)
+                {
+                    var filter = new TonemapQsvFilter();
+                    currentState = filter.NextState(currentState);
+                    videoStream.ResetColorParams(ColorParams.Default);
+                    videoInputFile.FilterSteps.Add(filter);
+                }
+                else
+                {
+                    var filter = new TonemapFilter(ffmpegState, currentState, pixelFormat);
+                    currentState = filter.NextState(currentState);
+                    videoStream.ResetColorParams(ColorParams.Default);
+                    videoInputFile.FilterSteps.Add(filter);
+                }
+            }
         }
 
         return currentState;

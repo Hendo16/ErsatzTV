@@ -17,6 +17,7 @@ namespace ErsatzTV.FFmpeg.Pipeline;
 
 public class VaapiPipelineBuilder : SoftwarePipelineBuilder
 {
+    private readonly IFFmpegCapabilities _ffmpegCapabilities;
     private readonly IHardwareCapabilities _hardwareCapabilities;
     private readonly ILogger _logger;
 
@@ -29,6 +30,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         string reportsFolder,
         string fontsFolder,
         ILogger logger) : base(
@@ -39,10 +41,12 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         watermarkInputFile,
         subtitleInputFile,
         concatInputFile,
+        graphicsEngineInput,
         reportsFolder,
         fontsFolder,
         logger)
     {
+        _ffmpegCapabilities = ffmpegCapabilities;
         _hardwareCapabilities = hardwareCapabilities;
         _logger = logger;
     }
@@ -63,7 +67,8 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         FFmpegCapability decodeCapability = _hardwareCapabilities.CanDecode(
             videoStream.Codec,
             videoStream.Profile,
-            videoStream.PixelFormat);
+            videoStream.PixelFormat,
+            videoStream.ColorParams.IsHdr);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
@@ -135,6 +140,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         VideoStream videoStream,
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         PipelineContext context,
         Option<IDecoder> maybeDecoder,
         FFmpegState ffmpegState,
@@ -144,6 +150,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
     {
         var watermarkOverlayFilterSteps = new List<IPipelineFilterStep>();
         var subtitleOverlayFilterSteps = new List<IPipelineFilterStep>();
+        var graphicsEngineOverlayFilterSteps = new List<IPipelineFilterStep>();
 
         FrameState currentState = desiredState with
         {
@@ -159,7 +166,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         }
 
         // easier to use nv12 for overlay
-        if (context.HasSubtitleOverlay || context.HasWatermark)
+        if (context.HasSubtitleOverlay || context.HasWatermark || context.HasGraphicsEngine)
         {
             IPixelFormat pixelFormat = desiredState.PixelFormat.IfNone(
                 context.Is10BitOutput ? new PixelFormatYuv420P10Le() : new PixelFormatYuv420P());
@@ -174,7 +181,10 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         currentState = SetScale(videoInputFile, videoStream, context, ffmpegState, desiredState, currentState);
         // _logger.LogDebug("After scale: {PixelFormat}", currentState.PixelFormat);
 
-        currentState = SetPad(videoInputFile, desiredState, currentState);
+        bool isHdrTonemap = videoStream.ColorParams.IsHdr;
+        currentState = SetTonemap(videoInputFile, videoStream, ffmpegState, desiredState, currentState);
+
+        currentState = SetPad(videoInputFile, ffmpegState, desiredState, currentState, isHdrTonemap);
         // _logger.LogDebug("After pad: {PixelFormat}", currentState.PixelFormat);
 
         currentState = SetCrop(videoInputFile, desiredState, currentState);
@@ -194,7 +204,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         }
         else if (currentState.FrameDataLocation == FrameDataLocation.Hardware &&
                  (!context.HasSubtitleOverlay || forceSoftwareOverlay) &&
-                 context.HasWatermark)
+                 (context.HasWatermark || context.HasGraphicsEngine))
         {
             // download for watermark (or forced software subtitle)
             var hardwareDownload = new HardwareDownloadFilter(currentState);
@@ -219,6 +229,8 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
             desiredState,
             currentState,
             watermarkOverlayFilterSteps);
+
+        SetGraphicsEngine(graphicsEngineInput, currentState, desiredState, graphicsEngineOverlayFilterSteps);
 
         // after everything else is done, apply the encoder
         if (pipelineSteps.OfType<IEncoder>().All(e => e.Kind != StreamKind.Video))
@@ -256,10 +268,12 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
 
         return new FilterChain(
             videoInputFile.FilterSteps,
-            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
-            subtitleInputFile.Map(st => st.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
+            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone([]),
+            subtitleInputFile.Map(st => st.FilterSteps).IfNone([]),
+            graphicsEngineInput.Map(ge => ge.FilterSteps).IfNone([]),
             watermarkOverlayFilterSteps,
             subtitleOverlayFilterSteps,
+            graphicsEngineOverlayFilterSteps,
             pixelFormatFilterSteps);
     }
 
@@ -374,7 +388,7 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
 
             foreach (VideoStream watermarkStream in watermark.VideoStreams)
             {
-                if (watermarkStream.StillImage == false)
+                if (!watermarkStream.StillImage)
                 {
                     watermark.AddOption(new DoNotIgnoreLoopInputOption());
                 }
@@ -441,8 +455,6 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         {
             if (context.HasSubtitleText)
             {
-                videoInputFile.AddOption(new CopyTimestampInputOption());
-
                 // if (videoInputFile.FilterSteps.Count == 0 && videoInputFile.InputOptions.OfType<CuvidDecoder>().Any())
                 // {
                 //     // change the hw accel output to software so the explicit download isn't needed
@@ -524,16 +536,63 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
         return currentState;
     }
 
+    private static void SetGraphicsEngine(
+        Option<GraphicsEngineInput> graphicsEngineInput,
+        FrameState currentState,
+        FrameState desiredState,
+        List<IPipelineFilterStep> graphicsEngineOverlayFilterSteps)
+    {
+        foreach (GraphicsEngineInput graphicsEngine in graphicsEngineInput)
+        {
+            foreach (IPixelFormat desiredPixelFormat in desiredState.PixelFormat)
+            {
+                IPixelFormat pf = desiredPixelFormat;
+                if (desiredPixelFormat is PixelFormatNv12 nv12)
+                {
+                    foreach (IPixelFormat availablePixelFormat in AvailablePixelFormats.ForPixelFormat(nv12.Name, null))
+                    {
+                        pf = availablePixelFormat;
+                    }
+                }
+
+                if (currentState.FrameDataLocation is FrameDataLocation.Hardware)
+                {
+                    graphicsEngine.FilterSteps.Add(new HardwareUploadVaapiFilter(false));
+                }
+
+                graphicsEngineOverlayFilterSteps.Add(new OverlayGraphicsEngineVaapiFilter(currentState, pf));
+            }
+        }
+    }
+
     private static FrameState SetPad(
         VideoInputFile videoInputFile,
+        FFmpegState ffmpegState,
         FrameState desiredState,
-        FrameState currentState)
+        FrameState currentState,
+        bool isHdrTonemap)
     {
         if (desiredState.CroppedSize.IsNone && currentState.PaddedSize != desiredState.PaddedSize)
         {
-            var padStep = new PadFilter(currentState, desiredState.PaddedSize);
-            currentState = padStep.NextState(currentState);
-            videoInputFile.FilterSteps.Add(padStep);
+            // pad_vaapi seems to pad with green when input is HDR
+            // also green with i965 driver
+            // so use software pad in these cases
+            bool is965 = ffmpegState.VaapiDriver
+                .IfNone(string.Empty)
+                .Contains("i965", StringComparison.OrdinalIgnoreCase);
+
+            if (isHdrTonemap || is965)
+            {
+                var padStep = new PadFilter(currentState, desiredState.PaddedSize);
+                currentState = padStep.NextState(currentState);
+                videoInputFile.FilterSteps.Add(padStep);
+            }
+            else
+            {
+                var padStep = new PadVaapiFilter(currentState, desiredState.PaddedSize);
+                currentState = padStep.NextState(currentState);
+                videoInputFile.FilterSteps.Add(padStep);
+            }
         }
 
         return currentState;
@@ -614,6 +673,39 @@ public class VaapiPipelineBuilder : SoftwarePipelineBuilder
                 var filter = new YadifFilter(currentState);
                 currentState = filter.NextState(currentState);
                 videoInputFile.FilterSteps.Add(filter);
+            }
+        }
+
+        return currentState;
+    }
+
+    private FrameState SetTonemap(
+        VideoInputFile videoInputFile,
+        VideoStream videoStream,
+        FFmpegState ffmpegState,
+        FrameState desiredState,
+        FrameState currentState)
+    {
+        if (videoStream.ColorParams.IsHdr)
+        {
+            foreach (IPixelFormat pixelFormat in desiredState.PixelFormat)
+            {
+                if (ffmpegState.DecoderHardwareAccelerationMode == HardwareAccelerationMode.Vaapi
+                    && ffmpegState.VaapiDriver == "iHD"
+                    && _ffmpegCapabilities.HasFilter(FFmpegKnownFilter.TonemapOpenCL))
+                {
+                    var filter = new TonemapVaapiFilter(ffmpegState);
+                    currentState = filter.NextState(currentState);
+                    videoStream.ResetColorParams(ColorParams.Default);
+                    videoInputFile.FilterSteps.Add(filter);
+                }
+                else
+                {
+                    var filter = new TonemapFilter(ffmpegState, currentState, pixelFormat);
+                    currentState = filter.NextState(currentState);
+                    videoStream.ResetColorParams(ColorParams.Default);
+                    videoInputFile.FilterSteps.Add(filter);
+                }
             }
         }
 

@@ -6,6 +6,7 @@ using ErsatzTV.Core.Interfaces.Emby;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
 
@@ -28,10 +29,12 @@ public class EmbyMovieLibraryScanner :
         IEmbyMovieRepository embyMovieRepository,
         IEmbyPathReplacementService pathReplacementService,
         ILocalFileSystem localFileSystem,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         ILogger<EmbyMovieLibraryScanner> logger)
         : base(
             localFileSystem,
+            localChaptersProvider,
             metadataRepository,
             mediator,
             logger)
@@ -128,6 +131,7 @@ public class EmbyMovieLibraryScanner :
 
     protected override Task<Either<BaseError, MediaItemScanResult<EmbyMovie>>> UpdateMetadata(
         MediaItemScanResult<EmbyMovie> result,
-        MovieMetadata fullMetadata) =>
+        MovieMetadata fullMetadata,
+        CancellationToken cancellationToken) =>
         Task.FromResult<Either<BaseError, MediaItemScanResult<EmbyMovie>>>(result);
 }

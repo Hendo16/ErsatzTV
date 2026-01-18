@@ -18,6 +18,7 @@ public static class MediaItemExtensions
             OtherVideo ov => ov.MediaVersions.HeadOrNone().Map(v => v.Duration),
             FillerMediaItem fv => fv.MediaVersions.HeadOrNone().Map(v => v.Duration),
             Song s => s.MediaVersions.HeadOrNone().Map(v => v.Duration),
+            ChapterMediaItem c => c.MediaVersion.Duration,
             _ => None
         };
 
@@ -35,6 +36,8 @@ public static class MediaItemExtensions
             FillerMediaItem fv => fv.MediaVersions.Head(),
             Song s => s.MediaVersions.Head(),
             Image i => i.MediaVersions.Head(),
+            RemoteStream rs => rs.MediaVersions.Head(),
+            ChapterMediaItem c => c.MediaVersion,
             _ => throw new ArgumentOutOfRangeException(nameof(mediaItem))
         };
 
@@ -43,6 +46,7 @@ public static class MediaItemExtensions
         IPlexPathReplacementService plexPathReplacementService,
         IJellyfinPathReplacementService jellyfinPathReplacementService,
         IEmbyPathReplacementService embyPathReplacementService,
+        CancellationToken cancellationToken,
         bool log = true)
     {
         MediaVersion version = mediaItem.GetHeadVersion();
@@ -54,26 +58,32 @@ public static class MediaItemExtensions
             PlexMovie plexMovie => await plexPathReplacementService.GetReplacementPlexPath(
                 plexMovie.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             PlexEpisode plexEpisode => await plexPathReplacementService.GetReplacementPlexPath(
                 plexEpisode.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             JellyfinMovie jellyfinMovie => await jellyfinPathReplacementService.GetReplacementJellyfinPath(
                 jellyfinMovie.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             JellyfinEpisode jellyfinEpisode => await jellyfinPathReplacementService.GetReplacementJellyfinPath(
                 jellyfinEpisode.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             EmbyMovie embyMovie => await embyPathReplacementService.GetReplacementEmbyPath(
                 embyMovie.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             EmbyEpisode embyEpisode => await embyPathReplacementService.GetReplacementEmbyPath(
                 embyEpisode.LibraryPathId,
                 path,
+                cancellationToken,
                 log),
             _ => path
         };

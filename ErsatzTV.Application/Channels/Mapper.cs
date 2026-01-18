@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Core.Api.Channels;
+﻿using ErsatzTV.Application.Artworks;
+using ErsatzTV.Core.Api.Channels;
 using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.Application.Channels;
@@ -14,9 +15,11 @@ internal static class Mapper
             channel.Categories,
             channel.FFmpegProfileId,
             GetLogo(channel),
+            channel.StreamSelectorMode,
+            channel.StreamSelector,
             channel.PreferredAudioLanguageCode,
             channel.PreferredAudioTitle,
-            channel.ProgressMode,
+            channel.PlayoutMode,
             channel.StreamingMode,
             channel.WatermarkId,
             channel.FallbackFillerId,
@@ -25,7 +28,11 @@ internal static class Mapper
             channel.SubtitleMode,
             channel.MusicVideoCreditsMode,
             channel.MusicVideoCreditsTemplate,
-            channel.SongVideoMode);
+            channel.SongVideoMode,
+            channel.TranscodeMode,
+            channel.IdleBehavior,
+            channel.IsEnabled,
+            channel.ShowInEpg);
 
     internal static ChannelResponseModel ProjectToResponseModel(Channel channel) =>
         new(
@@ -39,9 +46,24 @@ internal static class Mapper
     internal static ResolutionViewModel ProjectToViewModel(Resolution resolution) =>
         new(resolution.Height, resolution.Width);
 
-    private static string GetLogo(Channel channel) =>
-        Optional(channel.Artwork.FirstOrDefault(a => a.ArtworkKind == ArtworkKind.Logo))
-            .Match(a => a.Path, string.Empty);
+    internal static ResolutionAndBitrateViewModel ProjectToViewModel(Resolution resolution, int bitrate) =>
+        new(resolution.Height, resolution.Width, bitrate);
+
+    private static ArtworkContentTypeModel GetLogo(Channel channel)
+    {
+        Option<Artwork> maybeArtwork = channel.Artwork
+            .Where(a => a.ArtworkKind == ArtworkKind.Logo)
+            .HeadOrNone();
+
+        foreach (Artwork artwork in maybeArtwork)
+        {
+            return artwork.IsExternalUrl()
+                ? new ArtworkContentTypeModel(artwork.Path, string.Empty)
+                : new ArtworkContentTypeModel($"iptv/logos/{artwork.Path}", artwork.OriginalContentType);
+        }
+
+        return ArtworkContentTypeModel.None;
+    }
 
     private static string GetStreamingMode(Channel channel) =>
         channel.StreamingMode switch

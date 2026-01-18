@@ -24,7 +24,7 @@ public class CreateFFmpegProfileHandler :
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, FFmpegProfile> validation = await Validate(dbContext, request);
+        Validation<BaseError, FFmpegProfile> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(profile => PersistFFmpegProfile(dbContext, profile));
     }
 
@@ -40,35 +40,42 @@ public class CreateFFmpegProfileHandler :
 
     private static async Task<Validation<BaseError, FFmpegProfile>> Validate(
         TvContext dbContext,
-        CreateFFmpegProfile request) =>
-        (ValidateName(request), ValidateThreadCount(request), await ResolutionMustExist(dbContext, request))
-        .Apply(
-            (name, threadCount, resolutionId) => new FFmpegProfile
-            {
-                Name = name,
-                ThreadCount = threadCount,
-                HardwareAcceleration = request.HardwareAcceleration,
-                VaapiDriver = request.VaapiDriver,
-                VaapiDevice = request.VaapiDevice,
-                QsvExtraHardwareFrames = request.QsvExtraHardwareFrames,
-                ResolutionId = resolutionId,
-                ScalingBehavior = request.ScalingBehavior,
-                VideoFormat = request.VideoFormat,
-                VideoProfile = request.VideoProfile,
-                VideoPreset = request.VideoPreset,
-                AllowBFrames = request.AllowBFrames,
-                BitDepth = request.BitDepth,
-                VideoBitrate = request.VideoBitrate,
-                VideoBufferSize = request.VideoBufferSize,
-                AudioFormat = request.AudioFormat,
-                AudioBitrate = request.AudioBitrate,
-                AudioBufferSize = request.AudioBufferSize,
-                NormalizeLoudnessMode = request.NormalizeLoudnessMode,
-                AudioChannels = request.AudioChannels,
-                AudioSampleRate = request.AudioSampleRate,
-                NormalizeFramerate = request.NormalizeFramerate,
-                DeinterlaceVideo = request.DeinterlaceVideo
-            });
+        CreateFFmpegProfile request,
+        CancellationToken cancellationToken) =>
+        (ValidateName(request), ValidateThreadCount(request),
+            await ResolutionMustExist(dbContext, request, cancellationToken))
+        .Apply((name, threadCount, resolutionId) => new FFmpegProfile
+        {
+            Name = name,
+            ThreadCount = threadCount,
+            HardwareAcceleration = request.HardwareAcceleration,
+            VaapiDriver = request.VaapiDriver,
+            VaapiDevice = request.VaapiDevice,
+            QsvExtraHardwareFrames = request.QsvExtraHardwareFrames,
+            ResolutionId = resolutionId,
+            ScalingBehavior = request.ScalingBehavior,
+            VideoFormat = request.VideoFormat,
+            VideoProfile = request.VideoProfile,
+            VideoPreset = request.VideoPreset,
+            AllowBFrames = request.AllowBFrames,
+
+            // mpeg2video only supports 8-bit content
+            BitDepth = request.VideoFormat is FFmpegProfileVideoFormat.Mpeg2Video
+                ? FFmpegProfileBitDepth.EightBit
+                : request.BitDepth,
+
+            VideoBitrate = request.VideoBitrate,
+            VideoBufferSize = request.VideoBufferSize,
+            TonemapAlgorithm = request.TonemapAlgorithm,
+            AudioFormat = request.AudioFormat,
+            AudioBitrate = request.AudioBitrate,
+            AudioBufferSize = request.AudioBufferSize,
+            NormalizeLoudnessMode = request.NormalizeLoudnessMode,
+            AudioChannels = request.AudioChannels,
+            AudioSampleRate = request.AudioSampleRate,
+            NormalizeFramerate = request.NormalizeFramerate,
+            DeinterlaceVideo = request.DeinterlaceVideo
+        });
 
     private static Validation<BaseError, string> ValidateName(CreateFFmpegProfile createFFmpegProfile) =>
         createFFmpegProfile.NotEmpty(x => x.Name)
@@ -79,9 +86,10 @@ public class CreateFFmpegProfileHandler :
 
     private static Task<Validation<BaseError, int>> ResolutionMustExist(
         TvContext dbContext,
-        CreateFFmpegProfile createFFmpegProfile) =>
+        CreateFFmpegProfile createFFmpegProfile,
+        CancellationToken cancellationToken) =>
         dbContext.Resolutions
-            .SelectOneAsync(r => r.Id, r => r.Id == createFFmpegProfile.ResolutionId)
+            .SelectOneAsync(r => r.Id, r => r.Id == createFFmpegProfile.ResolutionId, cancellationToken)
             .MapT(r => r.Id)
             .Map(o => o.ToValidation<BaseError>($"[Resolution] {createFFmpegProfile.ResolutionId} does not exist"));
 }

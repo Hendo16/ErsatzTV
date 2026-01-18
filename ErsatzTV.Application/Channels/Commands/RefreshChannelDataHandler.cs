@@ -49,6 +49,18 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
 
         _localFileSystem.EnsureFolderExists(FileSystemLayout.ChannelGuideCacheFolder);
 
+        string targetFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{request.ChannelNumber}.xml");
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        int hiddenCount = await dbContext.Channels
+            .Where(c => c.Number == request.ChannelNumber && c.ShowInEpg == false)
+            .CountAsync(cancellationToken);
+        if (hiddenCount > 0)
+        {
+            File.Delete(targetFile);
+            return;
+        }
+
         string movieTemplateFileName = GetMovieTemplateFileName();
         string episodeTemplateFileName = GetEpisodeTemplateFileName();
         string musicVideoTemplateFileName = GetMusicVideoTemplateFileName();
@@ -181,17 +193,18 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             new XmlWriterSettings { Async = true, ConformanceLevel = ConformanceLevel.Fragment });
 
         int daysToBuild = await _configElementRepository
-            .GetValue<int>(ConfigElementKey.XmltvDaysToBuild)
+            .GetValue<int>(ConfigElementKey.XmltvDaysToBuild, cancellationToken)
             .IfNoneAsync(2);
 
         DateTimeOffset finish = DateTimeOffset.UtcNow.AddDays(daysToBuild);
 
         foreach (Playout playout in playouts)
         {
-            switch (playout.ProgramSchedulePlayoutType)
+            switch (playout.ScheduleKind)
             {
-                case ProgramSchedulePlayoutType.Flood:
-                case ProgramSchedulePlayoutType.Yaml:
+                case PlayoutScheduleKind.Classic:
+                case PlayoutScheduleKind.Sequential:
+                case PlayoutScheduleKind.Scripted:
                     var floodSorted = playouts
                         .Collect(p => p.Items)
                         .OrderBy(pi => pi.Start)
@@ -208,9 +221,10 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         otherVideoTemplate,
                         fillerTemplate,
                         minifier,
-                        xml);
+                        xml,
+                        cancellationToken);
                     break;
-                case ProgramSchedulePlayoutType.Block:
+                case PlayoutScheduleKind.Block:
                     var blockSorted = playouts
                         .Collect(p => p.Items)
                         .OrderBy(pi => pi.Start)
@@ -227,10 +241,11 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         otherVideoTemplate,
                         fillerTemplate,
                         minifier,
-                        xml);
+                        xml,
+                        cancellationToken);
                     break;
-                case ProgramSchedulePlayoutType.ExternalJson:
-                    var externalJsonSorted = (await CollectExternalJsonItems(playout.ExternalJsonFile))
+                case PlayoutScheduleKind.ExternalJson:
+                    var externalJsonSorted = (await CollectExternalJsonItems(playout.ScheduleFile))
                         .Filter(pi => pi.StartOffset <= finish)
                         .ToList();
 
@@ -245,7 +260,8 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
                         otherVideoTemplate,
                         fillerTemplate,
                         minifier,
-                        xml);
+                        xml,
+                        cancellationToken);
                     break;
             }
         }
@@ -255,7 +271,6 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         string tempFile = Path.GetTempFileName();
         await File.WriteAllBytesAsync(tempFile, ms.ToArray(), cancellationToken);
 
-        string targetFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{request.ChannelNumber}.xml");
         File.Move(tempFile, targetFile, true);
     }
 
@@ -270,10 +285,11 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template otherVideoTemplate,
         Template fillerTemplate,
         XmlMinifier minifier,
-        XmlWriter xml)
+        XmlWriter xml,
+        CancellationToken cancellationToken)
     {
         XmltvTimeZone xmltvTimeZone = await _configElementRepository
-            .GetValue<XmltvTimeZone>(ConfigElementKey.XmltvTimeZone)
+            .GetValue<XmltvTimeZone>(ConfigElementKey.XmltvTimeZone, cancellationToken)
             .IfNoneAsync(XmltvTimeZone.Local);
 
         // skip all filler that isn't pre-roll
@@ -299,22 +315,10 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
             int finishIndex = j;
             while (finishIndex + 1 < sorted.Count && (sorted[finishIndex + 1].GuideGroup == startItem.GuideGroup
                                                       || sorted[finishIndex + 1].FillerKind is FillerKind.GuideMode
-                                                          or FillerKind.Tail or FillerKind.Fallback or FillerKind.DecoDefault))
+                                                          or FillerKind.PostRoll or FillerKind.Tail
+                                                          or FillerKind.Fallback or FillerKind.DecoDefault))
             {
                 finishIndex++;
-            }
-
-            int customShowId = -1;
-            if (displayItem.MediaItem is Episode ep)
-            {
-                customShowId = ep.Season.ShowId;
-            }
-
-            bool isSameCustomShow = hasCustomTitle;
-            for (int x = j; x <= finishIndex; x++)
-            {
-                isSameCustomShow = isSameCustomShow && sorted[x].MediaItem is Episode e &&
-                                   customShowId == e.Season.ShowId;
             }
 
             PlayoutItem finishItem = sorted[finishIndex];
@@ -362,7 +366,7 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         }
     }
 
-    private static async Task WriteBlockPlayoutXml(
+    private async Task WriteBlockPlayoutXml(
         RefreshChannelData request,
         List<PlayoutItem> sorted,
         XmlTemplateContext templateContext,
@@ -373,51 +377,107 @@ public class RefreshChannelDataHandler : IRequestHandler<RefreshChannelData>
         Template otherVideoTemplate,
         Template fillerTemplate,
         XmlMinifier minifier,
-        XmlWriter xml)
+        XmlWriter xml,
+        CancellationToken cancellationToken)
     {
+        XmltvTimeZone xmltvTimeZone = await _configElementRepository
+            .GetValue<XmltvTimeZone>(ConfigElementKey.XmltvTimeZone, cancellationToken)
+            .IfNoneAsync(XmltvTimeZone.Local);
+
+        XmltvBlockBehavior xmltvBlockBehavior = await _configElementRepository
+            .GetValue<XmltvBlockBehavior>(ConfigElementKey.XmltvBlockBehavior, cancellationToken)
+            .IfNoneAsync(XmltvBlockBehavior.SplitTimeEvenly);
+
         var groups = sorted.GroupBy(s => new { s.GuideStart, s.GuideFinish, s.GuideGroup });
         foreach (var group in groups)
         {
-            DateTime groupStart = group.Key.GuideStart!.Value;
-            DateTime groupFinish = group.Key.GuideFinish!.Value;
-            TimeSpan groupDuration = groupFinish - groupStart;
-
             var itemsToInclude = group.Filter(g => g.FillerKind is FillerKind.None).ToList();
             if (itemsToInclude.Count == 0)
             {
                 continue;
             }
 
-            TimeSpan perItem = groupDuration / itemsToInclude.Count;
-
-            DateTimeOffset currentStart = new DateTimeOffset(groupStart, TimeSpan.Zero).ToLocalTime();
-            DateTimeOffset currentFinish = currentStart + perItem;
-
-            foreach (PlayoutItem item in itemsToInclude)
+            switch (xmltvBlockBehavior)
             {
-                string start = currentStart.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
-                    .Replace(":", string.Empty);
-                string stop = currentFinish.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
-                    .Replace(":", string.Empty);
+                case XmltvBlockBehavior.UseActualTimes:
+                    foreach (PlayoutItem item in itemsToInclude)
+                    {
+                        DateTimeOffset actualStart = xmltvTimeZone switch
+                        {
+                            XmltvTimeZone.Utc => new DateTimeOffset(item.Start, TimeSpan.Zero),
+                            _ => new DateTimeOffset(item.Start, TimeSpan.Zero).ToLocalTime()
+                        };
 
-                await WriteItemToXml(
-                    request,
-                    item,
-                    start,
-                    stop,
-                    false,
-                    templateContext,
-                    movieTemplate,
-                    episodeTemplate,
-                    musicVideoTemplate,
-                    songTemplate,
-                    otherVideoTemplate,
-                    fillerTemplate,
-                    minifier,
-                    xml);
+                        DateTimeOffset actualFinish = xmltvTimeZone switch
+                        {
+                            XmltvTimeZone.Utc => new DateTimeOffset(item.Finish, TimeSpan.Zero),
+                            _ => new DateTimeOffset(item.Finish, TimeSpan.Zero).ToLocalTime()
+                        };
 
-                currentStart = currentFinish;
-                currentFinish += perItem;
+                        string start = actualStart.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
+                            .Replace(":", string.Empty);
+                        string stop = actualFinish.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
+                            .Replace(":", string.Empty);
+
+                        await WriteItemToXml(
+                            request,
+                            item,
+                            start,
+                            stop,
+                            false,
+                            templateContext,
+                            movieTemplate,
+                            episodeTemplate,
+                            musicVideoTemplate,
+                            songTemplate,
+                            otherVideoTemplate,
+                            minifier,
+                            xml);
+                    }
+                    break;
+                case XmltvBlockBehavior.SplitTimeEvenly:
+                default:
+                    DateTime groupStart = group.Key.GuideStart!.Value;
+                    DateTime groupFinish = group.Key.GuideFinish!.Value;
+                    TimeSpan groupDuration = groupFinish - groupStart;
+
+                    TimeSpan perItem = groupDuration / itemsToInclude.Count;
+
+                    DateTimeOffset currentStart = xmltvTimeZone switch
+                    {
+                        XmltvTimeZone.Utc => new DateTimeOffset(groupStart, TimeSpan.Zero),
+                        _ => new DateTimeOffset(groupStart, TimeSpan.Zero).ToLocalTime()
+                    };
+
+                    DateTimeOffset currentFinish = currentStart + perItem;
+
+                    foreach (PlayoutItem item in itemsToInclude)
+                    {
+                        string start = currentStart.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
+                            .Replace(":", string.Empty);
+                        string stop = currentFinish.ToString("yyyyMMddHHmmss zzz", CultureInfo.InvariantCulture)
+                            .Replace(":", string.Empty);
+
+                        await WriteItemToXml(
+                            request,
+                            item,
+                            start,
+                            stop,
+                            false,
+                            templateContext,
+                            movieTemplate,
+                            episodeTemplate,
+                            musicVideoTemplate,
+                            songTemplate,
+                            otherVideoTemplate,
+                            fillerTemplate,
+                            minifier,
+                            xml);
+
+                        currentStart = currentFinish;
+                        currentFinish += perItem;
+                    }
+                    break;
             }
         }
     }

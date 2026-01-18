@@ -1,9 +1,73 @@
 ﻿using System.Reflection;
+using Serilog;
 
 namespace ErsatzTV.Core;
 
 public static class FileSystemLayout
 {
+    public static readonly string AppDataFolder;
+
+    public static readonly string TranscodeFolder;
+    public static readonly string TranscodeTroubleshootingFolder;
+
+    public static readonly string DataProtectionFolder;
+    public static readonly string LogsFolder;
+
+    public static readonly string DatabasePath;
+    public static readonly string LogFilePath;
+
+    public static readonly string LegacyImageCacheFolder;
+    public static readonly string ResourcesCacheFolder;
+    public static readonly string ChannelGuideCacheFolder;
+
+    public static readonly string PlexSecretsPath;
+    public static readonly string JellyfinSecretsPath;
+    public static readonly string EmbySecretsPath;
+
+    public static readonly string FFmpegReportsFolder;
+    public static readonly string SearchIndexFolder;
+    public static readonly string TempFilePoolFolder;
+
+    public static readonly string ArtworkCacheFolder;
+
+    public static readonly string PosterCacheFolder;
+    public static readonly string ThumbnailCacheFolder;
+    public static readonly string LogoCacheFolder;
+    public static readonly string FanArtCacheFolder;
+    public static readonly string WatermarkCacheFolder;
+
+    public static readonly string StreamsCacheFolder;
+
+    public static readonly string SubtitleCacheFolder;
+    public static readonly string FontsCacheFolder;
+
+    public static readonly string TemplatesFolder;
+
+    public static readonly string MusicVideoCreditsTemplatesFolder;
+
+    public static readonly string ChannelGuideTemplatesFolder;
+
+    public static readonly string GraphicsElementsTemplatesFolder;
+    public static readonly string GraphicsElementsTextTemplatesFolder;
+    public static readonly string GraphicsElementsImageTemplatesFolder;
+    public static readonly string GraphicsElementsSubtitleTemplatesFolder;
+
+    public static readonly string ScriptsFolder;
+
+    public static readonly string MultiEpisodeShuffleTemplatesFolder;
+
+    public static readonly string AudioStreamSelectorScriptsFolder;
+
+    public static readonly string ChannelStreamSelectorsFolder;
+
+    public static readonly string MacOsOldAppDataFolder = Path.Combine(
+        Environment.GetEnvironmentVariable("HOME") ?? string.Empty,
+        ".local",
+        "share",
+        "ersatztv");
+
+    public static readonly string MacOsOldDatabasePath = Path.Combine(MacOsOldAppDataFolder, "ersatztv.sqlite3");
+
     static FileSystemLayout()
     {
         string version = Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
@@ -17,7 +81,7 @@ public static class FileSystemLayout
                 Environment.SpecialFolderOption.DoNotVerify),
             "ersatztv");
 
-        string customConfigFolder = Environment.GetEnvironmentVariable("ETV_CONFIG_FOLDER");
+        string customConfigFolder = SystemEnvironment.ConfigFolder;
         bool useCustomConfigFolder = !string.IsNullOrWhiteSpace(customConfigFolder);
 
         if (useCustomConfigFolder && isDocker)
@@ -25,7 +89,7 @@ public static class FileSystemLayout
             // check for config at old location
             if (Directory.Exists(defaultConfigFolder))
             {
-                Serilog.Log.Logger.Warning(
+                Log.Logger.Warning(
                     "Ignoring ETV_CONFIG_FOLDER {Folder} and using default {Default}",
                     customConfigFolder,
                     defaultConfigFolder);
@@ -43,7 +107,7 @@ public static class FileSystemLayout
                 Environment.SpecialFolderOption.DoNotVerify),
             "etv-transcode");
 
-        string customTranscodeFolder = Environment.GetEnvironmentVariable("ETV_TRANSCODE_FOLDER");
+        string customTranscodeFolder = SystemEnvironment.TranscodeFolder;
         bool useCustomTranscodeFolder = !string.IsNullOrWhiteSpace(customTranscodeFolder);
 
         if (useCustomTranscodeFolder && isDocker)
@@ -51,7 +115,7 @@ public static class FileSystemLayout
             // check for config at old location
             if (Directory.Exists(defaultTranscodeFolder))
             {
-                Serilog.Log.Logger.Warning(
+                Log.Logger.Warning(
                     "Ignoring ETV_TRANSCODE_FOLDER {Folder} and using default {Default}",
                     customTranscodeFolder,
                     defaultTranscodeFolder);
@@ -62,6 +126,7 @@ public static class FileSystemLayout
         }
 
         TranscodeFolder = useCustomTranscodeFolder ? customTranscodeFolder : defaultTranscodeFolder;
+        TranscodeTroubleshootingFolder = Path.Combine(TranscodeFolder, ".troubleshooting");
 
         DataProtectionFolder = Path.Combine(AppDataFolder, "data-protection");
         LogsFolder = Path.Combine(AppDataFolder, "logs");
@@ -102,65 +167,17 @@ public static class FileSystemLayout
 
         ChannelGuideTemplatesFolder = Path.Combine(TemplatesFolder, "channel-guide");
 
+        GraphicsElementsTemplatesFolder = Path.Combine(TemplatesFolder, "graphics-elements");
+        GraphicsElementsTextTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "text");
+        GraphicsElementsImageTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "image");
+        GraphicsElementsSubtitleTemplatesFolder = Path.Combine(GraphicsElementsTemplatesFolder, "subtitle");
+
         ScriptsFolder = Path.Combine(AppDataFolder, "scripts");
 
         MultiEpisodeShuffleTemplatesFolder = Path.Combine(ScriptsFolder, "multi-episode-shuffle");
 
         AudioStreamSelectorScriptsFolder = Path.Combine(ScriptsFolder, "audio-stream-selector");
+
+        ChannelStreamSelectorsFolder = Path.Combine(ScriptsFolder, "channel-stream-selectors");
     }
-
-    public static readonly string AppDataFolder;
-
-    public static readonly string TranscodeFolder;
-
-    public static readonly string DataProtectionFolder;
-    public static readonly string LogsFolder;
-
-    public static readonly string DatabasePath;
-    public static readonly string LogFilePath;
-
-    public static readonly string LegacyImageCacheFolder;
-    public static readonly string ResourcesCacheFolder;
-    public static readonly string ChannelGuideCacheFolder;
-
-    public static readonly string PlexSecretsPath;
-    public static readonly string JellyfinSecretsPath;
-    public static readonly string EmbySecretsPath;
-
-    public static readonly string FFmpegReportsFolder;
-    public static readonly string SearchIndexFolder;
-    public static readonly string TempFilePoolFolder;
-
-    public static readonly string ArtworkCacheFolder;
-
-    public static readonly string PosterCacheFolder;
-    public static readonly string ThumbnailCacheFolder;
-    public static readonly string LogoCacheFolder;
-    public static readonly string FanArtCacheFolder;
-    public static readonly string WatermarkCacheFolder;
-
-    public static readonly string StreamsCacheFolder;
-
-    public static readonly string SubtitleCacheFolder;
-    public static readonly string FontsCacheFolder;
-
-    public static readonly string TemplatesFolder;
-
-    public static readonly string MusicVideoCreditsTemplatesFolder;
-
-    public static readonly string ChannelGuideTemplatesFolder;
-
-    public static readonly string ScriptsFolder;
-
-    public static readonly string MultiEpisodeShuffleTemplatesFolder;
-
-    public static readonly string AudioStreamSelectorScriptsFolder;
-
-    public static readonly string MacOsOldAppDataFolder = Path.Combine(
-        Environment.GetEnvironmentVariable("HOME") ?? string.Empty,
-        ".local",
-        "share",
-        "ersatztv");
-
-    public static readonly string MacOsOldDatabasePath = Path.Combine(MacOsOldAppDataFolder, "ersatztv.sqlite3");
 }

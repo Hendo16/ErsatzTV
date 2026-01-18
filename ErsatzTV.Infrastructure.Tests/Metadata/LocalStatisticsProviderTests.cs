@@ -3,10 +3,10 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Metadata;
-using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Infrastructure.Tests.Metadata;
 
@@ -37,12 +37,13 @@ public class LocalStatisticsProviderTests
                     string.Empty,
                     string.Empty,
                     string.Empty,
+                    string.Empty,
                     string.Empty)),
-            new List<LocalStatisticsProvider.FFprobeStreamData>(),
-            new List<LocalStatisticsProvider.FFprobeChapter>());
+            [],
+            []);
 
         MediaVersion result = provider.ProjectToMediaVersion("test", input);
 
-        result.Duration.Should().Be(TimeSpan.FromSeconds(123.45));
+        result.Duration.ShouldBe(TimeSpan.FromSeconds(123.45));
     }
 }

@@ -5,6 +5,376 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 ### Added
+- Add *experimental* graphics engine
+  - All watermarks will use new graphics engine
+- Add `Opacity Expression` watermark mode
+  - This allows specifying an expression that returns an opacity between 0.0 and 1.0
+  - The expression can use:
+    - `content_seconds` - the total number of seconds the frame is into the content
+    - `content_total_seconds` - the total number of seconds in the content
+    - `channel_seconds` - the total number of seconds the frame is from when the channel started/activated
+    - `time_of_day_seconds` - the total number of seconds the frame is since midnight
+  - The expression can also use functions:
+    - `LinearFadeDuration(time, start, fadeSeconds, peakSeconds)`
+    - `LinearFadePoints(time, start, peakStart, peakEnd, end)`
+- Add `Z-Index` to watermark editor
+  - The graphics engine will order by z-index when overlaying watermarks
+- Add *experimental* `Graphics Element` template system
+  - Graphics elements are defined in YAML files inside ETV config folder / templates / graphics-elements subfolder
+  - Add `text` graphics element type
+    - Supported in playback troubleshooting and YAML playouts
+    - Displays multi-line text in a specified font, color, location, z-index
+    - Supports constant opacity and opacity expression
+    - Supports EPG and Media Item variable replacement
+      - EPG data is sourced from XMLTV for the current time
+        - EPG data can also load a configurable number of subsequent (up next) entries
+      - Media Item data is sourced from the currently playing media item
+  - Add `image` graphics element type
+    - Supported in playback troubleshooting and YAML playouts
+    - Displays an image, similar to a watermark
+    - Supports constant opacity and opacity expression
+  - Add `subtitle` graphics element type
+    - Supported in playback troubleshooting and YAML playouts
+    - Supports SRT and SSA/ASS subtitle formats
+    - Supports EPG and Media Item variable replacement
+      - EPG data is sourced from XMLTV for the current time
+        - EPG data can also load a configurable number of subsequent (up next) entries
+      - Media Item data is sourced from the currently playing media item
+- YAML playout: add `graphics_on` and `graphics_off` instructions to control graphics elements
+  - `graphics_on` requires the name of a graphics element template, e.g. `text/cool_element.yml`
+    - The `variables` property can be used to dynamically replace text from the template
+  - `graphics_off` will turn off a specific element, or all elements if none are specified
+- Add `Seek Seconds` to playback troubleshooting to support capturing timing-related issues
+- Custom stream selector: add `content_condition` to allow channel and time-of-day based decisions
+  - `content_condition` expression can use
+    - `channel_number`
+    - `channel_name`
+    - `time_of_day_seconds` - the start time for the current item, represented in seconds since midnight
+- Add support for external chapter files next to video files
+  - Currently supports Matroska Chapter XML format
+    - Chapter files have .xml or .chapters extension
+- Add targeted (single-show) library scanning
+  - Supports quick and deep scans
+  - Can be triggered from the `Scan` button on show pages
+  - Can be triggered by API call to `/api/libraries/{library-id}/scan-show`
+- Add XMLTV setting `XMLTV Block Behavior` to control how block schedules appear in the EPG
+  - `Split Time Evenly` - default (existing) behavior; block time is split among all items that are visible in the EPG
+  - `Use Actual Times` - actual times are used for all items that are visible in the EPG
+    - This will introduce EPG gaps when filler is used, or when items are hidden from the EPG
+- Add *experimental* `Scripted Schedule` playout system
+  - This system uses python scripts to support the highest degree of customization
+  - The goal is to expose methods equivalent to all sequential schedule (YAML) instructions
+
+### Fix
+- Fix database operations that were slowing down playout builds
+  - YAML playouts in particular should build significantly faster
+- Fix channel playout mode `On Demand` for Block and YAML schedules
+- Fix QSV transitions when remote streaming from a media server
+- Fix green output when padding with VAAPI accel and i965 driver
+- Fix watermark custom image validation
+- Fix playback when using any watermarks that were saved with invalid state (no image)
+- Fix overlapping block playout items caused by `Stop scheduling block items` value `After Duration End`
+  - Existing overlapping items will not be removed, but no new overlapping items will be created
+  - Until these existing items age out, there will be warnings logged after each playout build/extension
+- Fix playback of anamorphic content from Jellyfin
+  - This fix requires a manual deep scan of any affected Jellyfin library
+- Fix bug where multiple Plex servers would mix their episodes
+- Fix incorrect media item counts after removing paths from local libraries
+- Fix song playback in playback troubleshooting
+- Fix seeking into extracted text subtitles
+- Fix error when changing default (lowest priority) alternate schedule
+- Fix remote library editing, tv shows, artists with MySql/MariaDB
+- Classic schedules: fix alternate schedule transitions (some edge cases would cause days to be skipped completely)
+- Classic schedules: always start new alternate schedules with the first schedule item
+- Classic Schedules: log offline gaps longer than 1 hour due to strict fixed start times
+- Fix `HLS Segmenter V2` streaming mode with AMF acceleration
+- Fix startup process for database and search index initialization
+  - Redirect all pages to home page when initializing to prevent errors
+  - Clear stale sqlite migration lock on startup to prevent getting stuck on database initialization
+
+### Changed
+- Rename some schedule and playout terms for clarity
+  - Schedules are used to build playouts and are what actually differs
+  - The playout is the end result, and is the same no matter what schedule kind is used
+  - Supported schedule kinds:
+    - `Classic Schedules`
+    - `Block Schedules`
+    - `Sequential Schedules` (formerly `YAML Schedules` or `YAML Playouts`)
+    - `Scripted Schedules`
+    - `JSON (dizqueTV) Schedules` (formerly `External JSON Playouts`)
+- Allow multiple watermarks in playback troubleshooting
+- Classic schedules: allow selecting multiple watermarks on schedule items
+- Block schedules: allow selecting multiple watermarks on decos
+- Block schedules: change available watermark modes on decos. For reference, the levels from highest to lowest with block schedules are `Global` > `Channel` > `Playout Default Deco` > `Template Deco`.
+  - `Inherit` - Use watermarks configured at a higher level
+  - `Disable` - Disable watermarks at this level and above
+  - `Replace` - Replace all watermarks configured at a higher level with those on this deco
+    - This was renamed from `Override`
+  - `Merge` - Merge all watermarks configured at a higher level with those on this deco
+- YAML playout: `watermark` instruction changes:
+  - When value is `true`, will add named watermark to list of active watermarks
+  - When value is `false` and `name` is specified, will remove named watermark from list of active watermarks
+  - When value is `false` and `name` is not specified, will clear all active watermarks
+- Use consistent UI sorting and validation, and fix renaming errors for
+  - Block groups, blocks
+  - Template groups, templates
+  - Deco groups, decos
+  - Deco template groups, deco templates
+
+## [25.4.0] - 2025-08-05
+### Added
+- Add `Troubleshoot Playback` to overflow menu on all media cards
+  - This should eliminate the need to lookup media ids for content
+- Add subtitle selection to playback troubleshooting. This is limited to:
+  - Sidecar text subtitles (e.g. `srt` files)
+  - Embedded image subtitles
+  - Embedded text subtitles that have already been extracted by ETV
+- Add light mode and light/dark mode toggle to app bar
+- YAML playout: add `pre_roll` instruction to enable and disable a pre-roll sequence
+  - With value of `true` and `sequence` property, will enable automatic pre-roll for all content in the playout to the sequence with the provided key
+  - With value of `false`, will disable automatic pre-roll in the playout
+- YAML playout: add `post_roll` instruction to enable and disable a post-roll sequence
+  - With value of `true` and `sequence` property, will enable automatic post-roll for all content in the playout to the sequence with the provided key
+  - With value of `false`, will disable automatic post-roll in the playout
+- YAML playout: add `mid_roll` instruction to enable and disable a mid-roll sequence
+  - With value of `true` and `sequence` property, will enable automatic mid-roll for (`count` and `all`) content in the playout to the sequence with the provided key
+  - With value of `false`, will disable automatic post-roll in the playout
+  - `expression` can be used to influence which chapters are selected for mid roll (same as in filler preset)
+- YAML playout: add `rewind` instruction to set start of playout relative to the current time
+  - Value should be formatted as `HH:MM:SS` e.g. `00:05:30` for 5 minutes 30 seconds (before now)
+  - This is instruction is mostly useful for debugging transitions, and can only be used as a reset instruction
+- YAML playout: add `import` section to allow importing partial YAML definitions that include `content` and `sequence` entries
+- Add YAML playout validation (using JSON Schema)
+  - Invalid YAML playout definitions will fail to build and will log validation failures as warnings
+  - `content` is fully validated
+  - `sequence` is fully validated
+  - `reset` is fully validated
+  - `playout` is fully validated
+- Add `Playlist` collection type to filler presets
+  - This will force filler mode `Count`
+  - Whenever the filler is used, it will schedule `Count` times full time through the playlist
+    - If the playlist has 3 items and none set to play all, it will schedule 3 items when `Count = 1`
+    - If the playlist has 3 items and none set to play all, it will schedule 6 items when `Count = 2`
+  - Using the same playlist in the same schedule for anything other than filler may cause undesired behavior
+- Detect supported VideoToolbox hardware decoders and encoders
+  - Software decoders/encoders will automatically be used when hardware versions are unavailable
+- Add VideoToolbox Capabilities to Troubleshooting page
+- Add `Use Chapters As Media Items` option to filler preset
+  - This option allows scheduling individual chapters as filler
+  - The chapters are shuffled or otherwise sorted together just like normal filler would be
+- Add smart collection edit page to allow renaming smart collections
+  - Previous edit link behavior (performing search using smart collection query) now uses magnifying glass icon
+- Add channel `Transcode Mode` setting
+  - This setting is currently disabled and only has the value `On Demand`
+- Add channel `Idle Behavior` setting to control the transcoding behavior after all clients have disconnected
+  - `Stop On Disconnect` - stops the transcoder after all clients have disconnected + the global idle timeout
+  - `Keep Running` - transcoder will run until manually stopped
+- Add support for music video thumbnails that end in `-thumb`
+  - For example `Music Video.mkv` could have a corresponding thumbnail `Music Video-thumb.jpg`
+- Reorganize troubleshooting page
+  - Add `YAML Validation` tool in `Troubleshooting` > `Tools`
+
+### Fixed
+- Fix app startup with MySql/MariaDB
+- YAML playout: fix `pad_to_next` always running over time
+- Fix playback with text subtitles when seeking into content, i.e. when first joining a channel
+- Fix playback with `.ass` and `.ssa` text subtitles
+- Fix green padding with 10-bit source content and i965 VAAPI driver
+- Fix building playouts with empty schedules
+- Fix schedule start time calculation when daily playout build goes beyond midnight and into a different alternate schedule
+- Fix compatibility with older NVIDIA devices (compute capability 3.0+) in unified docker image
+- Fix transitions when using NVIDIA, QSV and VAAPI acceleration
+- Fix playback of remote streams on channels where framerate normalization is enabled
+
+### Changed
+- Always tell ffmpeg to stop encoding with a specific duration
+  - This was removed to try to improve transitions with ffmpeg 7.x, but has been causing issues with other content
+- Move search debug logging to its own log category; add `Searching Minimum Log Level` to `Settings` > `Logging`
+- Classic schedules: always schedule the full `Duration` amount instead of stopping mid-duration
+  - This allows duration items to be scheduled beyond midnight
+  - e.g. fixed start time 22:00 with 4 hour duration will schedule until 02:00 instead of stopping at midnight
+- Rename channel setting `Progress Mode` to `Playout Mode`
+  - This controls the progression of the channel's playout, and has nothing to do with transcoding
+  - `Always` is now called `Continuous` (playout progresses with wall clock)
+  - `On Demand` is unchanged (playout only progresses while a client is watching the channel)
+- Replace channel `Active Mode` setting with new `Is Enabled` and `Show In EPG` settings
+  - `Active` channels will be converted to `Is Enabled` = true and `Show In EPG` = true
+  - `Hidden` channels will be converted to `Is Enabled` = true and `Show In EPG` = false
+  - `Inactive` channels will be converted to `Is Enabled` = false and `Show In EPG` = false
+
+## [25.3.1] - 2025-07-24
+### Fixed
+- Fix fallback filler playback
+
+## [25.3.0] - 2025-07-24
+### Added
+- Add new channel stream (audio and subtitle) selector system
+  - Channel editor has a new field `Stream Selector Mode`
+    - `Default` maintains existing behavior
+    - `Custom` uses a YAML config file
+  - The YAML config contains a prioritized list of stream selector "items" (audio and subtitle criteria pairs)
+  - The items are tested against the media from top to bottom, and when (at least) a matching audio track is found, stream selection occurs
+  - As an example, the custom stream selector config can specify (in priority order):
+    - english audio (and disable subtitles)
+    - any other audio (and english subtitles, if they exist)
+  - Criteria can include
+    - Stream language
+    - Stream title (allowed title and/or blocked title)
+    - Stream condition, which is an expression that can use
+      - `id` (index)
+      - `title`
+      - `lang`
+      - `default`
+      - `forced`
+      - `sdh` (subtitle only)
+      - `external` (subtitle only)
+      - `codec`
+      - `channels` (audio only)
+    - An example subtitle condition: `lang like 'en%' and external`
+    - An example audio condition: `title like '%movie%' and channels > 2`
+- Add new channel setting `Active Mode`
+  - `Active` - default value, channel streams as normal and has normal visibility
+  - `Hidden` - channel streams as normal and is hidden from M3U/XMLTV/HDHR
+  - `Inactive` - channel cannot stream (will 404) and is hidden from M3U/XMLTV/HDHR
+- Synchronize Plex "network" metadata for Plex show libraries
+  - Shows will have new `network` search field
+  - Episodes will have new `show_network` search field
+- YAML playout: add `stop_before_end` setting to `pad_until` and `duration` instructions
+  - When `stop_before_end: false`, content can run over the desired time before executing the next instruction
+- YAML playout: add `offline_tail` setting to `pad_until` instruction
+  - This can be used to stop primary content before the desired time (`stop_before_end: true` and `offline_tail: false`)
+  - You can then have a second `pad_until` with the same target time and different content
+- YAML playout: make `tomorrow` an expression on `pad_until` instruction
+  - `true` and `false` still work as normal
+  - The current time (as a decimal) can also be used in the expression, e.g. `now > 23`
+    - `now = hours + minutes / 60.0 + seconds / 3600.0`
+    - So `10:30 AM` would be `10.5`, `10:45 PM` would be `22.75`, etc
+- YAML playout: make `skip_items` an expression
+  - The following parameters can be used:
+    - `count`: the total number of items in the content
+    - `random`: a random number between zero and (count - 1)
+  - For example:
+    - `count / 2` will start in the middle of the content
+    - `random` will start at a random point in the content
+    - `2` (similar to before this change) will skip the first two items in the content
+- YAML playout: make `count` an expression
+    - The following parameters can be used:
+        - `count`: the total number of items in the content
+        - `random`: a random number between zero and (count - 1)
+    - For example:
+        - `count / 2` will play half of the items in the content
+        - `random % 4 + 1` will play between 1 and 4 items
+        - `2` (similar to before this change) will play exactly two items
+- YAML playout: add `disable_watermarks` property to all content instructions
+  - This property defaults to `false` (meaning watermarks are allowed by default)
+  - Setting to `true` will prevent watermarks from ever appearing over the content
+- YAML playout: add `watermark` instruction
+  - With value of `true` and `name` property, will override the watermark in the playout to the watermark with the provided name
+  - With value of `false`, will restore default watermark value (channel watermark, global watermark)
+- Show health check warning and error badges in nav menu
+- Add `Expression` for mid-roll filler to allow custom logic for using or skipping chapter markers
+  - The following parameters can be used:
+    - `total_points`: total number of potential mid-roll points
+    - `matched_points`: number of mid-roll points that have already matched the expression
+    - `total_duration`: total duration of the content, in seconds
+    - `total_progress`: normalized position from 0 to 1
+    - `last_mid_filler`: seconds since last mid-roll filler
+    - `remaining_duration`: duration of the content after this mid-roll point, in seconds
+    - `point`: the position of the mid-roll point, in seconds
+    - `num`: the mid-roll point number, starting with 1
+- Add `Disable Watermarks` checkbox to block items
+  - Block items that have this checked will never display a watermark, even with Deco set to override watermark
+- Add `ETV_MAXIMUM_UPLOAD_MB` environment variable to allow uploading large watermarks
+  - Default value is 10
+- Update ffmpeg health check to link to ErsatzTV-FFmpeg release that contains binaries for win64, linux64, linuxarm64
+- Add `Playback Troubleshooting` page
+  - This tool lets you play specific content without needing a test channel or schedule
+  - You can specify
+    - The media item id (found in ETV media info, and ETV movie URLs)
+    - The ffmpeg profile to use
+    - The watermark to use (if any)
+  - Clicking `Play` will play up to 30 seconds of the specified content using the desired settings
+  - Clicking `Download Results` will generate a zip archive containing:
+    - The FFmpeg report of the playback attempt
+    - The media info for the content
+    - The `Troubleshooting` > `General` output
+- Support `(Part [english number])` name suffixes for multi-part episode grouping, for example:
+  - `Awesome Episode (Part One)`
+  - `Better Episode (Part Two)`
+  - `Not So Great (Part Three)`
+- Add Trakt List option `Auto Refresh` to automatically update list from trakt.tv once each day
+- Add Trakt List option `Generate Playlist` to automatically generate ETV Playlist from matched Trakt List items
+- Read `country` field from movie NFO files and include in search index as `country`
+- Add *experimental* and *incomplete* `Remote Stream` library kind
+    - Remote Stream libraries have fallback metadata added like Other Video libraries (every folder is a tag)
+    - Remote Stream library items consist of YAML (`.yml`) files with the following fields
+      - `url`: the URL of the content that can be played directly by ffmpeg
+      - `script`: the process name and arguments for a command that will output content to stdout
+      - `is_live`: *required* property that indicates whether the remote stream contains live content
+          - When this is set to `true`, ETV cannot work ahead on transcoding this item, which is a necessary tradeoff for supporting live content
+          - When this is set to `false`, ETV will treat the stream as VOD and attempt to work ahead on transcoding like any other local item
+              - This *will* cause errors when the content is actually live, so it's important to configure this correctly
+      - `duration`: when the content is live and does not have duration metadata, this must be provided to allow scheduling
+    - The remote stream definition (YAML file) may provide either a `url` or a `script`
+      - If both are provided, `url` will be used
+- Include number of chapters in search index as `chapters`
+
+### Changed
+- Allow `Other Video` libraries and `Image` libraries to use the same folders
+- Try to mitigate inotify limit error by disabling automatic reloading of `appsettings.json` config files
+- Support `movie`, `musicvideo` and `episodedetails` top-level tags in other video NFO files
+  - Note that no change has been made to the metadata tags that are actually parsed, but this should help with various types of content
+- Remove some limits on multithreading that are no longer needed with latest ffmpeg
+  - Mixed transcoding (software decode, hardware filters/encode) can now use multiple decode threads
+- Split main `Settings` page into multiple pages
+- Update UI layout on all pages to be less cramped and to work better on mobile
+- Add CPU and Video Controller info to `Troubleshooting` > `General` output
+- Enable write-ahead logging (WAL) mode on SQLite databases
+- Add `Multiple Mode` option to schedule items editor and remove support for count values of zero
+  - `Count`: same behavior as before, requires a number of media items to play and will always schedule the same number
+  - `Collection Size`: similar to count of zero before, will play all media items from the collection before continuing to the next schedule item
+  - `Playlist Item Size`: will play all media items from the current playlist item before continuing to the next schedule item
+  - `Multi-Episode Group Size`: will play all media items from the current multi-part episode group, or one ungrouped media item
+- Change watermark width and margins to allow decimals
+- Move `Add To Collection` button to overflow menu on all media cards, and add `Show Media Info` to overflow menu
+  - This allows showing media info for all media kinds
+- Unify on a multi-platform base docker tag (`latest` and `develop`)
+  - `amd64`, `arm64`, `arm/v7` platforms are now all supported in the base docker tag
+  - Other docker platform tags are deprecated and will receive no new updates after the next release
+  - A health check has been added to notify users (on `-arm` or `-arm64` tags) of this change
+
+### Fixed
+- Fix QSV acceleration in docker with older Intel devices
+- Fix HDR transcoding with NVIDIA accel for:
+    - All NVIDIA docker users
+    - Windows NVIDIA users who have set the `ETV_DISABLE_VULKAN` env var
+- Fix audio sync issue with QSV acceleration
+- YAML playout: fix history for marathon and playlist content
+  - This allows playouts to be extended correctly, instead of always resetting to the earliest item in each group
+- Fix using channel External Logo URL as watermark
+- Fix display of SVG channel logo and watermark in admin UI
+  - Existing SVG logos and watermarks will have to be re-uploaded to display properly in the admin UI
+  - This does not affect streaming at all; existing artwork still works fine for streaming
+- Classify HDHR endpoints as streaming endpoints
+  - This allows these endpoints to be accessed through port `ETV_STREAMING_PORT` (default `8409`)
+  - This only matters if you configured `ETV_UI_PORT` to be a different value, which makes UI endpoints inaccessible on the streaming port
+- Update Plex movie/other video plot ("summary") during library deep scan
+- Fix compatibility with ffmpeg 7.2+ when using NVIDIA accel and 10-bit source content
+- Fix some NVIDIA edge cases when media servers don't provide video bit depth information
+- Fix VAAPI tonemap failure
+- Fix green bars after VAAPI tonemap
+- Fix bug where playout mode `Multiple` would ignore fixed start time
+- Fix block playout EPG generation to use `XMLTV Time Zone` setting
+- Fix adding "official" Trakt lists
+- Fix searching for `collection` names with spaces or other special characters, e.g. `collection:"Movies - Action"`
+- Fix QSV transcoding errors when scaling
+- Fix QSV frame freezing in browser
+- Fix some stream continuity issues, and some cases where audio sync is lost at transition
+- Fix HDR transcoding with AMD VAAPI accel
+- Allow paths longer than 255 characters in MySql databases
+
+## [25.2.0] - 2025-06-24
+### Added
 - Add `linux-musl-x64` artifact for users running Alpine x64
 - Add API endpoint to empty trash (POST to `/api/maintenance/empty_trash`)
   - e.g. `curl -XPOST -d '' http://localhost:8409/api/maintenance/empty_trash`
@@ -13,9 +383,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     - `ETV_STREAMING_PORT`: port used for streaming requests, defaults to 8409
     - `ETV_UI_PORT`: port used for admin UI, defaults to 8409
 - Publish docker images to ghcr.io (`ghcr.io/ersatztv/ersatztv`)
+- Add new option `Fixed Start Time Behavior` to Schedules and Schedule Items
+  - Schedules can set a default behavior for all items
+  - Schedule items can override this default behavior
+  - Possible values are:
+    - `Strict`: Always wait for the exact start time, even if that means waiting (adding unscheduled time) until the next day
+    - `Flexible`: Start scheduling immediately (do not wait) if waiting (adding unscheduled time) would go into the next day
+  - As an example, if the current scheduling time is 6:02 AM and the next schedule item has a fixed start time of 6:00 AM
+    - `Strict` will add nearly 24h (23:58) of unscheduled time so that it can start exactly at 6:00 AM the next day
+    - `Flexible` will NOT add unscheduled time, and will schedule its item at 6:02 AM (which may also affect the scheduling of later items)
+- Add basic HDR transcoding support
+  - VAAPI may use hardware-accelerated tone mapping (when opencl accel is also available)
+  - NVIDIA may use hardware-accelerated tone mapping (when vulkan accel and libplacebo filter are also available)
+  - QSV may use hardware-accelerated tone mapping (when hardware decoding is used)
+  - In all other cases, HDR content will use a software pipeline
+  - The tonemap algorithm can be configured in the ffmpeg profile
+- Use hardware-accelerated padding with VAAPI
+- Add environment variable `ETV_DISABLE_VULKAN`
+  - Any non-empty value will disable use of Vulkan acceleration and force software tonemapping
+  - This may be needed with misbehaving NVIDIA drivers on Windows
+- Add health check error when invalid VAAPI device and VAAPI driver combination is used in an active ffmpeg profile
+  - This makes it obvious when hardware acceleration will not work as configured
+- Add button in schedule editor to clone schedule item
+- Allow YAML playout sequence definitions to reference other sequences
+  - Cycles will be detected and logged, and sequences with cycles will prevent the playout from building
+- Add `repeat` property to YAML sequence instruction
+  - This tells the playout builder how many times this sequence should repeat
+  - Omitting this value is the same as setting it to `1`
+- Add `collection` (name) to search index for manual collections created within ETV
+  - Collections synchronized from media servers are still indexed as `tag`
+- Allow searching by `smart_collection` (name)
+  - Quotes are *always* required around each collection name when using this feature
+    - e.g. `smart_collection:"one" OR smart_collection:"two"`
+  - Cycles will be detected and logged, and searches with cycles will not work as expected
+- Add all `ETV_*` environment variables to Troubleshooting > General info
+- Add `External Logo URL` field to channel editor
+  - Using external (public) logos should fix channel logo display for clients that don't proxy artwork (such as Plex)
+  - Users who have customized the XMLTV channel template `channel.sbntxt` will need to update their templates again
+    - This is because the templates require different logic for external URLs vs ETV-hosted URLs
+
+### Changed
+- Start to make UI minimally responsive (functional on smaller screens)
+- Change how ETV determines which address to use for Plex connections
+  - The active Plex connection (address) will only be cached for 30 seconds
+  - When the connection is no longer cached, a ping will be sent to the last used address for Plex (the last address that had a successful ping)
+  - If the ping is successful, the address will be cached for another 30 seconds
+  - If the ping is not successful, all addresses will be checked again, and the first address to return a successful ping will be cached for 30 seconds
+- Remove requirement to have Jellyfin admin user; user id is no longer required on requests to latest Jellyfin server
+- Upgrade bundled ffmpeg on Windows from 6.1 to 7.1.1
+- Upgrade VAAPI docker image Ubuntu base from 22 to 24; bundled ffmpeg from 6.1 to 7.1.1
+- Upgrade NVIDIA docker image Ubuntu base from 20 to 24; bundled ffmpeg from 6.1 to 7.1.1
+- Upgrade base, arm, arm64 docker images bundled ffmpeg from 6.1 to 7.1.1
+- Unify all hardware acceleration methods in base docker images (`latest` and `develop`)
+  - VAAPI, QSV and NVIDIA are now all supported in the base docker image
+  - Other docker image tags are deprecated and will receive no new updates after the next release
+  - A health check has been added to notify users (on `-vaapi` or `-nvidia` tags) of this change
+- Schedule items editor: show currently selected row using background color instead of font weight
 
 ### Fixed
 - Fix error message about synchronizing Plex collections from a Plex server that has zero collections
+- Fix navigation after form submission when using `ETV_BASE_URL` environment variable
+- Fix UI crashes when channel numbers contain a period `.` in locales that have a different decimal separator (e.g. `,`)
+- Fix playout detail table to only reload once when resetting a playout
+- Fix date formatting in playout detail table on reload (will now respect browser's `Accept-Language` header)
+- Use cache busting to avoid UI errors after upgrading the MudBlazor library
+- Fix multi-variant playlist to report more accurate `BANDWIDTH` value based on ffmpeg profile
+- Fix detecting NVIDIA capabilities on Blackwell GPUs
+- Fix decoder selection in NVIDIA pipeline
+- Prevent playback order `Shuffle In Order` from being used with `Fill With Group Mode` as they are incompatible
+- Fix XMLTV items not grouping properly (guide mode: `Filler`) due to post-roll filler
 
 ## [25.1.0] - 2025-01-10
 ### Added
@@ -2185,7 +2621,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Initial release to facilitate testing outside of Docker.
 
 
-[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.8-beta...HEAD
+[Unreleased]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.4.0...HEAD
+[25.4.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.3.1...v25.4.0
+[25.3.1]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.3.0...v25.3.1
+[25.3.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.2.0...v25.3.0
+[25.2.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v25.1.0...v25.2.0
+[25.1.0]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.8-beta...v25.1.0
 [0.8.8-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.7-beta...v0.8.8-beta
 [0.8.7-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.6-beta...v0.8.7-beta
 [0.8.6-beta]: https://github.com/ErsatzTV/ErsatzTV/compare/v0.8.5-beta...v0.8.6-beta

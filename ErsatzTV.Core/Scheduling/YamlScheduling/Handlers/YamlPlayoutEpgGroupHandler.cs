@@ -11,7 +11,8 @@ public class YamlPlayoutEpgGroupHandler : IYamlPlayoutHandler
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutEpgGroupInstruction epgGroup)

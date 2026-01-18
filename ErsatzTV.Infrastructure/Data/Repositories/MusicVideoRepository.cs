@@ -154,23 +154,6 @@ public class MusicVideoRepository : IMusicVideoRepository
             .Map(result => result > 0);
     }
 
-    public async Task<List<MusicVideoMetadata>> GetMusicVideosForCards(List<int> ids)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.MusicVideoMetadata
-            .AsNoTracking()
-            .Filter(mvm => ids.Contains(mvm.MusicVideoId))
-            .Include(mvm => mvm.MusicVideo)
-            .ThenInclude(mv => mv.Artist)
-            .ThenInclude(a => a.ArtistMetadata)
-            .Include(mvm => mvm.MusicVideo)
-            .ThenInclude(e => e.MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .Include(mvm => mvm.Artwork)
-            .OrderBy(mvm => mvm.SortTitle)
-            .ToListAsync();
-    }
-
     public async Task<IEnumerable<string>> FindOrphanPaths(LibraryPath libraryPath)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
@@ -233,7 +216,13 @@ public class MusicVideoRepository : IMusicVideoRepository
                 [
                     new MediaVersion
                     {
-                        MediaFiles = [new MediaFile { Path = path, LibraryFolderId = libraryFolderId }],
+                        MediaFiles =
+                        [
+                            new MediaFile
+                            {
+                                Path = path, PathHash = PathUtils.GetPathHash(path), LibraryFolderId = libraryFolderId
+                            }
+                        ],
                         Streams = []
                     }
                 ],

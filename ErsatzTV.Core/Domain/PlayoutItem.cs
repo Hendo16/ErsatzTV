@@ -22,8 +22,7 @@ public class PlayoutItem
     public TimeSpan InPoint { get; set; }
     public TimeSpan OutPoint { get; set; }
     public string ChapterTitle { get; set; }
-    public ChannelWatermark Watermark { get; set; }
-    public int? WatermarkId { get; set; }
+    public List<ChannelWatermark> Watermarks { get; set; }
     public bool DisableWatermarks { get; set; }
     public string PreferredAudioLanguageCode { get; set; }
     public string PreferredAudioTitle { get; set; }
@@ -32,6 +31,9 @@ public class PlayoutItem
     public string BlockKey { get; set; }
     public string CollectionKey { get; set; }
     public string CollectionEtag { get; set; }
+    public List<PlayoutItemWatermark> PlayoutItemWatermarks { get; set; }
+    public List<GraphicsElement> GraphicsElements { get; set; }
+    public List<PlayoutItemGraphicsElement> PlayoutItemGraphicsElements { get; set; }
     public DateTimeOffset StartOffset => new DateTimeOffset(Start, TimeSpan.Zero).ToLocalTime();
     public DateTimeOffset FinishOffset => new DateTimeOffset(Finish, TimeSpan.Zero).ToLocalTime();
 
@@ -54,7 +56,17 @@ public class PlayoutItem
             Playout = Playout,
             InPoint = chapter.StartTime,
             OutPoint = chapter.EndTime,
-            ChapterTitle = chapter.Title
+            ChapterTitle = chapter.Title,
+            Watermarks = Watermarks,
+            DisableWatermarks = DisableWatermarks,
+            PreferredAudioLanguageCode = PreferredAudioLanguageCode,
+            PreferredAudioTitle = PreferredAudioTitle,
+            PreferredSubtitleLanguageCode = PreferredSubtitleLanguageCode,
+            SubtitleMode = SubtitleMode,
+            BlockKey = BlockKey,
+            CollectionKey = CollectionKey,
+            CollectionEtag = CollectionEtag,
+            PlayoutItemWatermarks = PlayoutItemWatermarks?.ToList()
         };
 
     public string GetDisplayDuration()

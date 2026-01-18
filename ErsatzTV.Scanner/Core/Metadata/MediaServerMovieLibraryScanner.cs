@@ -8,6 +8,7 @@ using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Scanner.Core.Metadata;
@@ -18,6 +19,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
     where TMovie : Movie
     where TEtag : MediaServerItemEtag
 {
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger _logger;
     private readonly IMediator _mediator;
@@ -25,11 +27,13 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
 
     protected MediaServerMovieLibraryScanner(
         ILocalFileSystem localFileSystem,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IMediator mediator,
         ILogger logger)
     {
         _localFileSystem = localFileSystem;
+        _localChaptersProvider = localChaptersProvider;
         _metadataRepository = metadataRepository;
         _mediator = mediator;
         _logger = logger;
@@ -73,7 +77,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         CancellationToken cancellationToken)
     {
         var incomingItemIds = new List<string>();
-        IReadOnlyDictionary<string, TEtag> existingMovies = (await movieRepository.GetExistingMovies(library))
+        var existingMovies = (await movieRepository.GetExistingMovies(library))
             .ToImmutableDictionary(e => e.MediaServerItemId, e => e);
 
         await foreach ((TMovie incoming, int totalMovieCount) in movieEntries.WithCancellation(cancellationToken))
@@ -97,7 +101,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
 
             string localPath = getLocalPath(incoming);
 
-            if (await ShouldScanItem(movieRepository, library, existingMovies, incoming, localPath, deepScan) == false)
+            if (!await ShouldScanItem(movieRepository, library, existingMovies, incoming, localPath, deepScan))
             {
                 continue;
             }
@@ -107,42 +111,47 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
             if (ServerReturnsStatisticsWithMetadata)
             {
                 maybeMovie = await movieRepository
-                    .GetOrAdd(library, incoming, deepScan)
-                    .MapT(
-                        result =>
-                        {
-                            result.LocalPath = localPath;
-                            return result;
-                        })
-                    .BindT(
-                        existing => UpdateMetadataAndStatistics(
-                            connectionParameters,
-                            library,
-                            existing,
-                            incoming,
-                            deepScan));
+                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                    .MapT(result =>
+                    {
+                        result.LocalPath = localPath;
+                        return result;
+                    })
+                    .BindT(existing => UpdateMetadataAndStatistics(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        cancellationToken))
+                    .BindT(existing => UpdateChapters(existing, cancellationToken));
             }
             else
             {
                 maybeMovie = await movieRepository
-                    .GetOrAdd(library, incoming, deepScan)
-                    .MapT(
-                        result =>
-                        {
-                            result.LocalPath = localPath;
-                            return result;
-                        })
-                    .BindT(
-                        existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan, None))
-                    .BindT(
-                        existing => UpdateStatistics(
-                            connectionParameters,
-                            library,
-                            existing,
-                            incoming,
-                            deepScan,
-                            None))
-                    .BindT(UpdateSubtitles);
+                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                    .MapT(result =>
+                    {
+                        result.LocalPath = localPath;
+                        return result;
+                    })
+                    .BindT(existing => UpdateMetadata(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        None,
+                        cancellationToken))
+                    .BindT(existing => UpdateStatistics(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        None))
+                    .BindT(existing => UpdateSubtitles(existing, cancellationToken))
+                    .BindT(existing => UpdateChapters(existing, cancellationToken));
             }
 
             if (maybeMovie.IsLeft)
@@ -248,12 +257,13 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
 
     protected abstract Task<Either<BaseError, MediaItemScanResult<TMovie>>> UpdateMetadata(
         MediaItemScanResult<TMovie> result,
-        MovieMetadata fullMetadata);
+        MovieMetadata fullMetadata,
+        CancellationToken cancellationToken);
 
     private async Task<bool> ShouldScanItem(
         IMediaServerMovieRepository<TLibrary, TMovie, TEtag> movieRepository,
         TLibrary library,
-        IReadOnlyDictionary<string, TEtag> existingMovies,
+        ImmutableDictionary<string, TEtag> existingMovies,
         TMovie incoming,
         string localPath,
         bool deepScan)
@@ -333,7 +343,8 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         TLibrary library,
         MediaItemScanResult<TMovie> result,
         TMovie incoming,
-        bool deepScan)
+        bool deepScan,
+        CancellationToken cancellationToken)
     {
         Option<Tuple<MovieMetadata, MediaVersion>> maybeMetadataAndStatistics = await GetFullMetadataAndStatistics(
             connectionParameters,
@@ -349,7 +360,8 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
                 result,
                 incoming,
                 deepScan,
-                fullMetadata);
+                fullMetadata,
+                cancellationToken);
 
             foreach (BaseError error in metadataResult.LeftToSeq())
             {
@@ -389,7 +401,8 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         MediaItemScanResult<TMovie> result,
         TMovie incoming,
         bool deepScan,
-        Option<MovieMetadata> maybeFullMetadata)
+        Option<MovieMetadata> maybeFullMetadata,
+        CancellationToken cancellationToken)
     {
         if (maybeFullMetadata.IsNone)
         {
@@ -400,7 +413,7 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
         {
             // TODO: move some of this code into this scanner
             // will have to merge JF, Emby, Plex logic
-            return await UpdateMetadata(result, fullMetadata);
+            return await UpdateMetadata(result, fullMetadata, cancellationToken);
         }
 
         return result;
@@ -442,7 +455,8 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
 
 
     private async Task<Either<BaseError, MediaItemScanResult<TMovie>>> UpdateSubtitles(
-        MediaItemScanResult<TMovie> existing)
+        MediaItemScanResult<TMovie> existing,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -455,13 +469,38 @@ public abstract class MediaServerMovieLibraryScanner<TConnectionParameters, TLib
                     .Map(Subtitle.FromMediaStream)
                     .ToList();
 
-                if (await _metadataRepository.UpdateSubtitles(metadata, subtitles))
+                if (await _metadataRepository.UpdateSubtitles(metadata, subtitles, cancellationToken))
                 {
                     return existing;
                 }
             }
 
             return BaseError.New("Failed to update media server subtitles");
+        }
+        catch (Exception ex)
+        {
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, MediaItemScanResult<TMovie>>> UpdateChapters(
+        MediaItemScanResult<TMovie> existing,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(existing.LocalPath))
+            {
+                // No local path available for external chapter file lookup
+                return existing;
+            }
+
+            if (await _localChaptersProvider.UpdateChapters(existing.Item, Some(existing.LocalPath), cancellationToken))
+            {
+                existing.IsUpdated = true;
+            }
+
+            return existing;
         }
         catch (Exception ex)
         {

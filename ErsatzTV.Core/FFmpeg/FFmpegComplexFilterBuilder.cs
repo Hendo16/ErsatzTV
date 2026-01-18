@@ -184,23 +184,22 @@ public class FFmpegComplexFilterBuilder
 
         string outputPixelFormat = null;
 
-        _scaleToSize.IfSome(
-            size =>
+        _scaleToSize.IfSome(size =>
+        {
+            string filter = videoOnly switch
             {
-                string filter = videoOnly switch
-                {
-                    true =>
-                        $"scale={size.Width}:{size.Height}:force_original_aspect_ratio=increase,crop={size.Width}:{size.Height}",
-                    false => $"scale={size.Width}:{size.Height}:flags=fast_bilinear"
-                };
+                true =>
+                    $"scale={size.Width}:{size.Height}:force_original_aspect_ratio=increase,crop={size.Width}:{size.Height}",
+                false => $"scale={size.Width}:{size.Height}:flags=fast_bilinear"
+            };
 
-                if (!string.IsNullOrWhiteSpace(filter))
-                {
-                    videoFilterQueue.Add(filter);
-                }
-            });
+            if (!string.IsNullOrWhiteSpace(filter))
+            {
+                videoFilterQueue.Add(filter);
+            }
+        });
 
-        if (scaleOrPad && _boxBlur == false)
+        if (scaleOrPad && !_boxBlur)
         {
             videoFilterQueue.Add("setsar=1");
         }

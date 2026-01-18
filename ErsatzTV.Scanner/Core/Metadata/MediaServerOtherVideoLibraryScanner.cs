@@ -8,6 +8,7 @@ using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.MediaSources;
 using ErsatzTV.Core.Metadata;
+using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Scanner.Core.Metadata;
@@ -18,6 +19,7 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
     where TOtherVideo : OtherVideo
     where TEtag : MediaServerItemEtag
 {
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger _logger;
     private readonly IMediator _mediator;
@@ -25,11 +27,13 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
 
     protected MediaServerOtherVideoLibraryScanner(
         ILocalFileSystem localFileSystem,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IMediator mediator,
         ILogger logger)
     {
         _localFileSystem = localFileSystem;
+        _localChaptersProvider = localChaptersProvider;
         _metadataRepository = metadataRepository;
         _mediator = mediator;
         _logger = logger;
@@ -73,10 +77,11 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
         CancellationToken cancellationToken)
     {
         var incomingItemIds = new List<string>();
-        IReadOnlyDictionary<string, TEtag> existingOtherVideos = (await otherVideoRepository.GetExistingOtherVideos(library))
+        var existingOtherVideos = (await otherVideoRepository.GetExistingOtherVideos(library))
             .ToImmutableDictionary(e => e.MediaServerItemId, e => e);
 
-        await foreach ((TOtherVideo incoming, int totalOtherVideoCount) in otherVideoEntries.WithCancellation(cancellationToken))
+        await foreach ((TOtherVideo incoming, int totalOtherVideoCount) in otherVideoEntries.WithCancellation(
+                           cancellationToken))
         {
             if (cancellationToken.IsCancellationRequested)
             {
@@ -91,13 +96,19 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
                     library.Id,
                     library.Name,
                     percentCompletion,
-                    Array.Empty<int>(),
-                    Array.Empty<int>()),
+                    [],
+                    []),
                 cancellationToken);
 
             string localPath = getLocalPath(incoming);
 
-            if (await ShouldScanItem(otherVideoRepository, library, existingOtherVideos, incoming, localPath, deepScan) == false)
+            if (!await ShouldScanItem(
+                    otherVideoRepository,
+                    library,
+                    existingOtherVideos,
+                    incoming,
+                    localPath,
+                    deepScan))
             {
                 continue;
             }
@@ -107,42 +118,47 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
             if (ServerReturnsStatisticsWithMetadata)
             {
                 maybeOtherVideo = await otherVideoRepository
-                    .GetOrAdd(library, incoming, deepScan)
-                    .MapT(
-                        result =>
-                        {
-                            result.LocalPath = localPath;
-                            return result;
-                        })
-                    .BindT(
-                        existing => UpdateMetadataAndStatistics(
-                            connectionParameters,
-                            library,
-                            existing,
-                            incoming,
-                            deepScan));
+                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                    .MapT(result =>
+                    {
+                        result.LocalPath = localPath;
+                        return result;
+                    })
+                    .BindT(existing => UpdateMetadataAndStatistics(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        cancellationToken))
+                    .BindT(existing => UpdateChapters(existing, cancellationToken));
             }
             else
             {
                 maybeOtherVideo = await otherVideoRepository
-                    .GetOrAdd(library, incoming, deepScan)
-                    .MapT(
-                        result =>
-                        {
-                            result.LocalPath = localPath;
-                            return result;
-                        })
-                    .BindT(
-                        existing => UpdateMetadata(connectionParameters, library, existing, incoming, deepScan, None))
-                    .BindT(
-                        existing => UpdateStatistics(
-                            connectionParameters,
-                            library,
-                            existing,
-                            incoming,
-                            deepScan,
-                            None))
-                    .BindT(UpdateSubtitles);
+                    .GetOrAdd(library, incoming, deepScan, cancellationToken)
+                    .MapT(result =>
+                    {
+                        result.LocalPath = localPath;
+                        return result;
+                    })
+                    .BindT(existing => UpdateMetadata(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        None,
+                        cancellationToken))
+                    .BindT(existing => UpdateStatistics(
+                        connectionParameters,
+                        library,
+                        existing,
+                        incoming,
+                        deepScan,
+                        None))
+                    .BindT(existing => UpdateSubtitles(existing, cancellationToken))
+                    .BindT(existing => UpdateChapters(existing, cancellationToken));
             }
 
             if (maybeOtherVideo.IsLeft)
@@ -248,12 +264,13 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
 
     protected abstract Task<Either<BaseError, MediaItemScanResult<TOtherVideo>>> UpdateMetadata(
         MediaItemScanResult<TOtherVideo> result,
-        OtherVideoMetadata fullMetadata);
+        OtherVideoMetadata fullMetadata,
+        CancellationToken cancellationToken);
 
     private async Task<bool> ShouldScanItem(
         IMediaServerOtherVideoRepository<TLibrary, TOtherVideo, TEtag> otherVideoRepository,
         TLibrary library,
-        IReadOnlyDictionary<string, TEtag> existingOtherVideos,
+        ImmutableDictionary<string, TEtag> existingOtherVideos,
         TOtherVideo incoming,
         string localPath,
         bool deepScan)
@@ -322,7 +339,9 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
         }
         else
         {
-            _logger.LogDebug("UPDATE: Etag has changed for other video {OtherVideo}", incoming.OtherVideoMetadata.Head().Title);
+            _logger.LogDebug(
+                "UPDATE: Etag has changed for other video {OtherVideo}",
+                incoming.OtherVideoMetadata.Head().Title);
         }
 
         return true;
@@ -333,7 +352,8 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
         TLibrary library,
         MediaItemScanResult<TOtherVideo> result,
         TOtherVideo incoming,
-        bool deepScan)
+        bool deepScan,
+        CancellationToken cancellationToken)
     {
         Option<Tuple<OtherVideoMetadata, MediaVersion>> maybeMetadataAndStatistics = await GetFullMetadataAndStatistics(
             connectionParameters,
@@ -349,7 +369,8 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
                 result,
                 incoming,
                 deepScan,
-                fullMetadata);
+                fullMetadata,
+                cancellationToken);
 
             foreach (BaseError error in metadataResult.LeftToSeq())
             {
@@ -389,7 +410,8 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
         MediaItemScanResult<TOtherVideo> result,
         TOtherVideo incoming,
         bool deepScan,
-        Option<OtherVideoMetadata> maybeFullMetadata)
+        Option<OtherVideoMetadata> maybeFullMetadata,
+        CancellationToken cancellationToken)
     {
         if (maybeFullMetadata.IsNone)
         {
@@ -400,7 +422,7 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
         {
             // TODO: move some of this code into this scanner
             // will have to merge JF, Emby, Plex logic
-            return await UpdateMetadata(result, fullMetadata);
+            return await UpdateMetadata(result, fullMetadata, cancellationToken);
         }
 
         return result;
@@ -442,7 +464,8 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
 
 
     private async Task<Either<BaseError, MediaItemScanResult<TOtherVideo>>> UpdateSubtitles(
-        MediaItemScanResult<TOtherVideo> existing)
+        MediaItemScanResult<TOtherVideo> existing,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -455,13 +478,38 @@ public abstract class MediaServerOtherVideoLibraryScanner<TConnectionParameters,
                     .Map(Subtitle.FromMediaStream)
                     .ToList();
 
-                if (await _metadataRepository.UpdateSubtitles(metadata, subtitles))
+                if (await _metadataRepository.UpdateSubtitles(metadata, subtitles, cancellationToken))
                 {
                     return existing;
                 }
             }
 
             return BaseError.New("Failed to update media server subtitles");
+        }
+        catch (Exception ex)
+        {
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, MediaItemScanResult<TOtherVideo>>> UpdateChapters(
+        MediaItemScanResult<TOtherVideo> existing,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(existing.LocalPath))
+            {
+                // No local path available for external chapter file lookup
+                return existing;
+            }
+
+            if (await _localChaptersProvider.UpdateChapters(existing.Item, Some(existing.LocalPath), cancellationToken))
+            {
+                existing.IsUpdated = true;
+            }
+
+            return existing;
         }
         catch (Exception ex)
         {

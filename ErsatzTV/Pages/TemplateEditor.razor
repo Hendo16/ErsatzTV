@@ -7,86 +7,95 @@
 @inject ISnackbar Snackbar
 @inject IMediator Mediator
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-    <MudText Typo="Typo.h4" Class="mb-4">Edit Template</MudText>
-    <MudGrid>
-        <MudItem xs="4">
-            <div style="max-width: 400px">
-                <MudCard>
-                    <MudCardContent>
-                        <MudTextField Label="Name" @bind-Value="_template.Name" For="@(() => _template.Name)"/>
-                    </MudCardContent>
-                </MudCard>
-            </div>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => SaveChanges())" Class="mt-4">
-                Save Changes
-            </MudButton>
-        </MudItem>
-        <MudItem xs="4">
-            <div style="max-width: 400px">
-                <MudCard>
-                    <MudCardContent>
-                        <MudSelect T="BlockGroupViewModel"
-                                   Label="Block Group"
-                                   ValueChanged="@(vm => UpdateBlockGroupItems(vm))">
-                            @foreach (BlockGroupViewModel blockGroup in _blockGroups)
-                            {
-                                <MudSelectItem Value="@blockGroup">@blockGroup.Name</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect Class="mt-3"
-                                   T="BlockViewModel"
-                                   Label="Block"
-                                   @bind-value="_selectedBlock">
-                            @foreach (BlockViewModel block in _blocks)
-                            {
-                                <MudSelectItem Value="@block">@block.Name</MudSelectItem>
-                            }
-                        </MudSelect>
-                        <MudSelect Class="mt-3"
-                                   T="DateTime"
-                                   Label="Start Time On Or After"
-                                   @bind-value="_selectedBlockStart">
-                            @foreach (DateTime startTime in _startTimes)
-                            {
-                                <MudSelectItem Value="@startTime">
-                                    @startTime.ToString(CultureInfo.CurrentUICulture.DateTimeFormat.ShortTimePattern)
-                                </MudSelectItem>
-                            }
-                        </MudSelect>
-                    </MudCardContent>
-                    <MudCardActions>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => AddBlockToTemplate())" Disabled="@(_selectedBlock is null)">
-                            Add Block To Template
-                        </MudButton>
-                    </MudCardActions>
-                </MudCard>
-            </div>
-        </MudItem>
-        <MudItem xs="4">
-            <div style="max-width: 400px">
-                <MudCard>
-                    <MudCardContent>
-                        <MudSelect T="TemplateItemEditViewModel"
-                                   Label="Block To Remove"
-                                   @bind-Value="_blockToRemove">
-                            <MudSelectItem Value="@((TemplateItemEditViewModel)null)">(none)</MudSelectItem>
-                            @foreach (TemplateItemEditViewModel item in _template.Items.OrderBy(i => i.Start))
-                            {
-                                <MudSelectItem Value="@item">@item.Start.ToShortTimeString() - @item.Text</MudSelectItem>
-                            }
-                        </MudSelect>
-                    </MudCardContent>
-                    <MudCardActions>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => RemoveBlockFromTemplate())" Disabled="@(_blockToRemove is null)">
-                            Remove Block From Template
-                        </MudButton>
-                    </MudCardActions>
-                </MudCard>
-            </div>
-        </MudItem>
-        <MudItem xs="8">
-            <MudCalendar Class="mt-4"
+<MudForm Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="ml-6" OnClick="@(_ => SaveChanges())" StartIcon="@Icons.Material.Filled.Save">
+            Save Template
+        </MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">General</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Template Group Name</MudText>
+                </div>
+                <MudTextField @bind-Value="_template.GroupName" Disabled="true"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Template Name</MudText>
+                </div>
+                <MudTextField @bind-Value="_template.Name" For="@(() => _template.Name)"/>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">Add Content</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Block Group</MudText>
+                </div>
+                <MudSelect T="BlockGroupViewModel" ValueChanged="@(vm => UpdateBlockGroupItems(vm))">
+                    @foreach (BlockGroupViewModel blockGroup in _blockGroups)
+                    {
+                        <MudSelectItem Value="@blockGroup">@blockGroup.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Block</MudText>
+                </div>
+                <MudSelect T="BlockViewModel" @bind-value="_selectedBlock">
+                    @foreach (BlockViewModel block in _blocks)
+                    {
+                        <MudSelectItem Value="@block">@block.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Start Time On Or After</MudText>
+                </div>
+                <MudSelect T="DateTime" @bind-value="_selectedBlockStart">
+                    @foreach (DateTime startTime in _startTimes)
+                    {
+                        <MudSelectItem Value="@startTime">
+                            @startTime.ToString(CultureInfo.CurrentUICulture.DateTimeFormat.ShortTimePattern)
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex"></div>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => AddBlockToTemplate())" Disabled="@(_selectedBlock is null)" StartIcon="@Icons.Material.Filled.Add">
+                    Add Block To Template
+                </MudButton>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">Remove Content</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Block To Remove</MudText>
+                </div>
+                <MudSelect T="TemplateItemEditViewModel" @bind-Value="_blockToRemove">
+                    <MudSelectItem Value="@((TemplateItemEditViewModel)null)">(none)</MudSelectItem>
+                    @foreach (TemplateItemEditViewModel item in _template.Items.OrderBy(i => i.Start))
+                    {
+                        <MudSelectItem Value="@item">@item.Start.ToShortTimeString() - @item.Text</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex"></div>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => RemoveBlockFromTemplate())" Disabled="@(_blockToRemove is null)" StartIcon="@Icons.Material.Filled.Remove">
+                    Remove Block From Template
+                </MudButton>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">Content</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudCalendar T="CalendarItem"
+                         Class="mb-6"
                          Items="@_template.Items"
                          ShowMonth="false"
                          ShowWeek="false"
@@ -98,12 +107,12 @@
                          EnableDragItems="true"
                          EnableResizeItems="false"
                          ItemChanged="@(ci => CalendarItemChanged(ci))"/>
-        </MudItem>
-    </MudGrid>
-</MudContainer>
+        </MudContainer>
+    </div>
+</MudForm>
 
 @code {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts;
     private readonly List<BlockGroupViewModel> _blockGroups = [];
     private readonly List<BlockViewModel> _blocks = [];
     private readonly List<DateTime> _startTimes = [];
@@ -112,33 +121,45 @@
     public int Id { get; set; }
 
     private TemplateItemsEditViewModel _template = new();
-    private TemplateItemEditViewModel _blockToRemove = new();
+    private TemplateItemEditViewModel _blockToRemove;
     private BlockGroupViewModel _selectedBlockGroup;
     private BlockViewModel _selectedBlock;
     private DateTime _selectedBlockStart;
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _cts.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        await LoadTemplateItems();
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
 
-        DateTime start = DateTime.Today;
-        _selectedBlockStart = start;
-        while (start.Date == DateTime.Today.Date)
+        try
         {
-            _startTimes.Add(start);
-            start = start.AddMinutes(5);
+            await LoadTemplateItems(token);
+
+            DateTime start = DateTime.Today;
+            _selectedBlockStart = start;
+            while (start.Date == DateTime.Today.Date)
+            {
+                _startTimes.Add(start);
+                start = start.AddMinutes(5);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
         }
     }
 
-    private async Task LoadTemplateItems()
+    private async Task LoadTemplateItems(CancellationToken cancellationToken)
     {
-        Option<TemplateViewModel> maybeTemplate = await Mediator.Send(new GetTemplateById(Id), _cts.Token);
+        Option<TemplateViewModel> maybeTemplate = await Mediator.Send(new GetTemplateById(Id), cancellationToken);
         if (maybeTemplate.IsNone)
         {
             NavigationManager.NavigateTo("templates");
@@ -147,16 +168,21 @@
 
         foreach (TemplateViewModel template in maybeTemplate)
         {
-            _template = new TemplateItemsEditViewModel { Name = template.Name };
+            _template = new TemplateItemsEditViewModel
+            {
+                GroupId = template.TemplateGroupId,
+                GroupName = template.GroupName,
+                Name = template.Name
+            };
         }
 
-        Option<IEnumerable<TemplateItemViewModel>> maybeResults = await Mediator.Send(new GetTemplateItems(Id), _cts.Token);
+        Option<IEnumerable<TemplateItemViewModel>> maybeResults = await Mediator.Send(new GetTemplateItems(Id), cancellationToken);
         foreach (IEnumerable<TemplateItemViewModel> items in maybeResults)
         {
             _template.Items.AddRange(items.Map(ProjectToEditViewModel));
         }
 
-        _blockGroups.AddRange(await Mediator.Send(new GetAllBlockGroups(), _cts.Token));
+        _blockGroups.AddRange(await Mediator.Send(new GetAllBlockGroups(), cancellationToken));
     }
 
     private static TemplateItemEditViewModel ProjectToEditViewModel(TemplateItemViewModel item) =>
@@ -183,7 +209,7 @@
         while (maybeStart.Date == DateTime.Today)
         {
             DateTime maybeEnd = maybeStart.AddMinutes(_selectedBlock.Minutes);
-            if (IntersectsOthers(null, maybeStart, maybeEnd) == false)
+            if (!IntersectsOthers(null, maybeStart, maybeEnd))
             {
                 var item = new TemplateItemEditViewModel
                 {
@@ -255,7 +281,7 @@
             }
         }
 
-        return willFit == false;
+        return !willFit;
     }
 
     // private void RemoveTemplateItem(TemplateItemEditViewModel item)
@@ -268,7 +294,7 @@
     {
         var items = _template.Items.Map(item => new ReplaceTemplateItem(item.BlockId, item.Start.TimeOfDay)).ToList();
 
-        Seq<BaseError> errorMessages = await Mediator.Send(new ReplaceTemplateItems(Id, _template.Name, items), _cts.Token)
+        Seq<BaseError> errorMessages = await Mediator.Send(new ReplaceTemplateItems(_template.GroupId, Id, _template.Name, items), _cts.Token)
             .Map(e => e.LeftToSeq());
 
         errorMessages.HeadOrNone().Match(
@@ -277,7 +303,7 @@
                 Snackbar.Add($"Unexpected error saving template: {error.Value}", Severity.Error);
                 Logger.LogError("Unexpected error saving template: {Error}", error.Value);
             },
-            () => NavigationManager.NavigateTo("/templates"));
+            () => NavigationManager.NavigateTo("templates"));
     }
 
 }

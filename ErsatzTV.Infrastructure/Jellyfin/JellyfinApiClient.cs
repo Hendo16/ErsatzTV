@@ -73,26 +73,6 @@ public class JellyfinApiClient : IJellyfinApiClient
         }
     }
 
-    public async Task<Either<BaseError, string>> GetAdminUserId(string address, string apiKey)
-    {
-        try
-        {
-            IJellyfinApi service = RestService.For<IJellyfinApi>(address);
-            List<JellyfinUserResponse> users = await service.GetUsers(apiKey);
-            Option<string> maybeUserId = users
-                .Filter(user => user.Policy.IsAdministrator && !user.Policy.IsDisabled && user.Policy.EnableAllFolders)
-                .Map(user => user.Id)
-                .HeadOrNone();
-
-            return maybeUserId.ToEither(BaseError.New("Unable to locate jellyfin admin user"));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error getting jellyfin admin user id");
-            return BaseError.New(ex.Message);
-        }
-    }
-
     public IAsyncEnumerable<Tuple<JellyfinMovie, int>> GetMovieLibraryItems(
         string address,
         string apiKey,
@@ -102,9 +82,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             library,
             library.MediaSourceId,
             library.ItemId,
-            (service, userId, itemId, skip, pageSize) => service.GetMovieLibraryItems(
+            (service, itemId, skip, pageSize) => service.GetMovieLibraryItems(
                 apiKey,
-                userId,
                 itemId,
                 startIndex: skip,
                 limit: pageSize),
@@ -119,9 +98,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             library,
             library.MediaSourceId,
             library.ItemId,
-            (service, userId, itemId, skip, pageSize) => service.GetShowLibraryItems(
+            (service, itemId, skip, pageSize) => service.GetShowLibraryItems(
                 apiKey,
-                userId,
                 itemId,
                 startIndex: skip,
                 limit: pageSize),
@@ -137,9 +115,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             library,
             library.MediaSourceId,
             showId,
-            (service, userId, _, skip, pageSize) => service.GetSeasonLibraryItems(
+            (service, _, skip, pageSize) => service.GetSeasonLibraryItems(
                 apiKey,
-                userId,
                 showId,
                 startIndex: skip,
                 limit: pageSize),
@@ -155,9 +132,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             library,
             library.MediaSourceId,
             seasonId,
-            (service, userId, _, skip, pageSize) => service.GetEpisodeLibraryItems(
+            (service, _, skip, pageSize) => service.GetEpisodeLibraryItems(
                 apiKey,
-                userId,
                 seasonId,
                 startIndex: skip,
                 limit: pageSize),
@@ -177,9 +153,8 @@ public class JellyfinApiClient : IJellyfinApiClient
                 None,
                 mediaSourceId,
                 itemId,
-                (service, userId, _, skip, pageSize) => service.GetCollectionLibraryItems(
+                (service, _, skip, pageSize) => service.GetCollectionLibraryItems(
                     apiKey,
-                    userId,
                     itemId,
                     startIndex: skip,
                     limit: pageSize),
@@ -199,9 +174,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             None,
             mediaSourceId,
             collectionId,
-            (service, userId, _, skip, pageSize) => service.GetCollectionItems(
+            (service, _, skip, pageSize) => service.GetCollectionItems(
                 apiKey,
-                userId,
                 collectionId,
                 startIndex: skip,
                 limit: pageSize),
@@ -215,15 +189,10 @@ public class JellyfinApiClient : IJellyfinApiClient
     {
         try
         {
-            if (_memoryCache.TryGetValue($"jellyfin_admin_user_id.{library.MediaSourceId}", out string userId))
-            {
-                IJellyfinApi service = RestService.For<IJellyfinApi>(address);
-                JellyfinPlaybackInfoResponse playbackInfo = await service.GetPlaybackInfo(apiKey, userId, itemId);
-                Option<MediaVersion> maybeVersion = ProjectToMediaVersion(playbackInfo);
-                return maybeVersion.ToEither(() => BaseError.New("Unable to locate Jellyfin statistics"));
-            }
-
-            return BaseError.New("Jellyfin admin user id is not available");
+            IJellyfinApi service = RestService.For<IJellyfinApi>(address);
+            JellyfinPlaybackInfoResponse playbackInfo = await service.GetPlaybackInfo(apiKey, itemId);
+            Option<MediaVersion> maybeVersion = ProjectToMediaVersion(playbackInfo);
+            return maybeVersion.ToEither(() => BaseError.New("Unable to locate Jellyfin statistics"));
         }
         catch (Exception ex)
         {
@@ -232,34 +201,111 @@ public class JellyfinApiClient : IJellyfinApiClient
         }
     }
 
-    private async IAsyncEnumerable<Tuple<TItem, int>> GetPagedLibraryItems<TItem>(
+    public async Task<Either<BaseError, Option<JellyfinShow>>> GetSingleShow(
+        string address,
+        string apiKey,
+        JellyfinLibrary library,
+        string showId)
+    {
+        try
+        {
+            IJellyfinApi service = RestService.For<IJellyfinApi>(address);
+            JellyfinLibraryItemsResponse itemsResponse = await service.GetShowLibraryItems(
+                apiKey,
+                parentId: library.ItemId,
+                recursive: false,
+                startIndex: 0,
+                limit: 1,
+                ids: showId);
+
+            foreach (JellyfinLibraryItemResponse item in itemsResponse.Items)
+            {
+                return ProjectToShow(item);
+            }
+
+            return BaseError.New($"Unable to locate show with id {showId}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error searching Jellyfin shows by id");
+            return BaseError.New(ex.Message);
+        }
+    }
+
+    public async Task<Either<BaseError, List<JellyfinShow>>> SearchShowsByTitle(
+        string address,
+        string apiKey,
+        JellyfinLibrary library,
+        string showTitle)
+    {
+        try
+        {
+            IJellyfinApi service = RestService.For<IJellyfinApi>(address);
+            JellyfinSearchHintsResponse searchResponse = await service.SearchHints(
+                apiKey,
+                showTitle,
+                "Series",
+                library.ItemId);
+
+            var shows = new List<JellyfinShow>();
+
+            foreach (JellyfinSearchHintResponse hint in searchResponse.SearchHints)
+            {
+                if (hint.Type == "Series" &&
+                    string.Equals(hint.Name, showTitle, StringComparison.OrdinalIgnoreCase))
+                {
+                    JellyfinLibraryItemsResponse detailResponse = await service.GetShowLibraryItems(
+                        apiKey,
+                        hint.Id,
+                        recursive: false,
+                        startIndex: 0,
+                        limit: 1);
+
+                    foreach (JellyfinLibraryItemResponse item in detailResponse.Items)
+                    {
+                        Option<JellyfinShow> maybeShow = ProjectToShow(item);
+                        foreach (JellyfinShow show in maybeShow)
+                        {
+                            shows.Add(show);
+                        }
+                    }
+                }
+            }
+
+            return shows;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error searching Jellyfin shows by title");
+            return BaseError.New(ex.Message);
+        }
+    }
+
+    private static async IAsyncEnumerable<Tuple<TItem, int>> GetPagedLibraryItems<TItem>(
         string address,
         Option<JellyfinLibrary> maybeLibrary,
         int mediaSourceId,
         string parentId,
-        Func<IJellyfinApi, string, string, int, int, Task<JellyfinLibraryItemsResponse>> getItems,
+        Func<IJellyfinApi, string, int, int, Task<JellyfinLibraryItemsResponse>> getItems,
         Func<Option<JellyfinLibrary>, JellyfinLibraryItemResponse, Option<TItem>> mapper)
     {
-        if (_memoryCache.TryGetValue($"jellyfin_admin_user_id.{mediaSourceId}", out string userId))
+        IJellyfinApi service = RestService.For<IJellyfinApi>(address);
+
+        const int PAGE_SIZE = 10;
+
+        int pages = int.MaxValue;
+        for (var i = 0; i < pages; i++)
         {
-            IJellyfinApi service = RestService.For<IJellyfinApi>(address);
+            int skip = i * PAGE_SIZE;
 
-            const int PAGE_SIZE = 10;
+            JellyfinLibraryItemsResponse result = await getItems(service, parentId, skip, PAGE_SIZE);
 
-            int pages = int.MaxValue;
-            for (var i = 0; i < pages; i++)
+            // update page count
+            pages = Math.Min(pages, (result.TotalRecordCount - 1) / PAGE_SIZE + 1);
+
+            foreach (TItem item in result.Items.Map(item => mapper(maybeLibrary, item)).Somes())
             {
-                int skip = i * PAGE_SIZE;
-
-                JellyfinLibraryItemsResponse result = await getItems(service, userId, parentId, skip, PAGE_SIZE);
-
-                // update page count
-                pages = Math.Min(pages, (result.TotalRecordCount - 1) / PAGE_SIZE + 1);
-
-                foreach (TItem item in result.Items.Map(item => mapper(maybeLibrary, item)).Somes())
-                {
-                    yield return new Tuple<TItem, int>(item, result.TotalRecordCount);
-                }
+                yield return new Tuple<TItem, int>(item, result.TotalRecordCount);
             }
         }
     }
@@ -330,12 +376,11 @@ public class JellyfinApiClient : IJellyfinApiClient
             result.AddRange(
                 response.LibraryOptions.PathInfos
                     .Filter(pi => !string.IsNullOrWhiteSpace(pi.NetworkPath))
-                    .Map(
-                        pi => new JellyfinPathInfo
-                        {
-                            Path = pi.Path,
-                            NetworkPath = pi.NetworkPath
-                        }));
+                    .Map(pi => new JellyfinPathInfo
+                    {
+                        Path = pi.Path,
+                        NetworkPath = pi.NetworkPath
+                    }));
         }
 
         return result;
@@ -363,8 +408,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             }
 
             string path = item.Path ?? string.Empty;
-            foreach (JellyfinPathInfo pathInfo in library.PathInfos.Filter(
-                         pi => !string.IsNullOrWhiteSpace(pi.NetworkPath)))
+            foreach (JellyfinPathInfo pathInfo in library.PathInfos.Filter(pi =>
+                         !string.IsNullOrWhiteSpace(pi.NetworkPath)))
             {
                 if (path.StartsWith(pathInfo.NetworkPath, StringComparison.Ordinal))
                 {
@@ -382,14 +427,15 @@ public class JellyfinApiClient : IJellyfinApiClient
                 Name = "Main",
                 Duration = duration,
                 DateAdded = item.DateCreated.UtcDateTime,
-                MediaFiles = new List<MediaFile>
-                {
-                    new()
+                MediaFiles =
+                [
+                    new MediaFile
                     {
-                        Path = path
+                        Path = path,
+                        PathHash = PathUtils.GetPathHash(path)
                     }
-                },
-                Streams = new List<MediaStream>(),
+                ],
+                Streams = [],
                 Chapters = ProjectToModel(Optional(item.Chapters).Flatten(), duration)
             };
 
@@ -399,9 +445,9 @@ public class JellyfinApiClient : IJellyfinApiClient
             {
                 ItemId = item.Id,
                 Etag = item.Etag,
-                MediaVersions = new List<MediaVersion> { version },
-                MovieMetadata = new List<MovieMetadata> { metadata },
-                TraktListItems = new List<TraktListItem>()
+                MediaVersions = [version],
+                MovieMetadata = [metadata],
+                TraktListItems = []
             };
 
             return movie;
@@ -739,8 +785,8 @@ public class JellyfinApiClient : IJellyfinApiClient
             }
 
             string path = item.Path ?? string.Empty;
-            foreach (JellyfinPathInfo pathInfo in library.PathInfos.Filter(
-                         pi => !string.IsNullOrWhiteSpace(pi.NetworkPath)))
+            foreach (JellyfinPathInfo pathInfo in library.PathInfos.Filter(pi =>
+                         !string.IsNullOrWhiteSpace(pi.NetworkPath)))
             {
                 if (path.StartsWith(pathInfo.NetworkPath, StringComparison.Ordinal))
                 {
@@ -758,14 +804,15 @@ public class JellyfinApiClient : IJellyfinApiClient
                 Name = "Main",
                 Duration = duration,
                 DateAdded = item.DateCreated.UtcDateTime,
-                MediaFiles = new List<MediaFile>
-                {
-                    new()
+                MediaFiles =
+                [
+                    new MediaFile
                     {
-                        Path = path
+                        Path = path,
+                        PathHash = PathUtils.GetPathHash(path)
                     }
-                },
-                Streams = new List<MediaStream>(),
+                ],
+                Streams = [],
                 Chapters = ProjectToModel(Optional(item.Chapters).Flatten(), duration)
             };
 
@@ -775,9 +822,9 @@ public class JellyfinApiClient : IJellyfinApiClient
             {
                 ItemId = item.Id,
                 Etag = item.Etag,
-                MediaVersions = new List<MediaVersion> { version },
-                EpisodeMetadata = new List<EpisodeMetadata> { metadata },
-                TraktListItems = new List<TraktListItem>()
+                MediaVersions = [version],
+                EpisodeMetadata = [metadata],
+                TraktListItems = []
             };
 
             return episode;
@@ -884,117 +931,115 @@ public class JellyfinApiClient : IJellyfinApiClient
 
         Option<JellyfinMediaStreamResponse> maybeVideoStream =
             streams.Find(s => s.Type == JellyfinMediaStreamType.Video);
-        return maybeVideoStream.Map(
-            videoStream =>
+        return maybeVideoStream.Map(videoStream =>
+        {
+            int width = videoStream.Width ?? 1;
+            int height = videoStream.Height ?? 1;
+
+            var isAnamorphic = false;
+            if (!string.IsNullOrWhiteSpace(videoStream.AspectRatio) && videoStream.AspectRatio.Contains(':'))
             {
-                int width = videoStream.Width ?? 1;
-                int height = videoStream.Height ?? 1;
+                // if width/height != aspect ratio, is anamorphic
+                double resolutionRatio = width / (double)height;
 
-                var isAnamorphic = false;
-                if (videoStream.IsAnamorphic.HasValue)
+                string[] split = videoStream.AspectRatio.Split(":");
+                if (double.TryParse(split[0], NumberStyles.Any, CultureInfo.InvariantCulture, out double num) &&
+                    double.TryParse(split[1], NumberStyles.Any, CultureInfo.InvariantCulture, out double den) &&
+                    den != 0)
                 {
-                    isAnamorphic = videoStream.IsAnamorphic.Value;
+                    double displayRatio = num / den;
+
+                    isAnamorphic = Math.Abs(resolutionRatio - displayRatio) > 0.01d;
                 }
-                else if (!string.IsNullOrWhiteSpace(videoStream.AspectRatio) && videoStream.AspectRatio.Contains(':'))
+            }
+
+            var version = new MediaVersion
+            {
+                Duration = TimeSpan.FromTicks(mediaSource.RunTimeTicks),
+                SampleAspectRatio = isAnamorphic ? "0:0" : "1:1",
+                DisplayAspectRatio = string.IsNullOrWhiteSpace(videoStream.AspectRatio)
+                    ? string.Empty
+                    : videoStream.AspectRatio,
+                VideoScanKind = videoStream.IsInterlaced switch
                 {
-                    // if width/height != aspect ratio, is anamorphic
-                    double resolutionRatio = width / (double)height;
+                    true => VideoScanKind.Interlaced,
+                    false => VideoScanKind.Progressive
+                },
+                Streams = new List<MediaStream>(),
+                Width = videoStream.Width ?? 1,
+                Height = videoStream.Height ?? 1,
+                RFrameRate = videoStream.RealFrameRate.HasValue
+                    ? videoStream.RealFrameRate.Value.ToString("0.00###", CultureInfo.InvariantCulture)
+                    : string.Empty,
+                Chapters = new List<MediaChapter>()
+            };
 
-                    string[] split = videoStream.AspectRatio.Split(":");
-                    var num = double.Parse(split[0], CultureInfo.InvariantCulture);
-                    var den = double.Parse(split[1], CultureInfo.InvariantCulture);
-                    double aspectRatio = num / den;
-
-                    isAnamorphic = Math.Abs(resolutionRatio - aspectRatio) > 0.01d;
-                }
-
-                var version = new MediaVersion
+            version.Streams.Add(
+                new MediaStream
                 {
-                    Duration = TimeSpan.FromTicks(mediaSource.RunTimeTicks),
-                    SampleAspectRatio = isAnamorphic ? "0:0" : "1:1",
-                    DisplayAspectRatio = string.IsNullOrWhiteSpace(videoStream.AspectRatio)
-                        ? string.Empty
-                        : videoStream.AspectRatio,
-                    VideoScanKind = videoStream.IsInterlaced switch
-                    {
-                        true => VideoScanKind.Interlaced,
-                        false => VideoScanKind.Progressive
-                    },
-                    Streams = new List<MediaStream>(),
-                    Width = videoStream.Width ?? 1,
-                    Height = videoStream.Height ?? 1,
-                    RFrameRate = videoStream.RealFrameRate.HasValue
-                        ? videoStream.RealFrameRate.Value.ToString("0.00###", CultureInfo.InvariantCulture)
-                        : string.Empty,
-                    Chapters = new List<MediaChapter>()
+                    MediaVersionId = version.Id,
+                    MediaStreamKind = MediaStreamKind.Video,
+                    Index = videoStream.Index - streamIndexOffset,
+                    Codec = videoStream.Codec,
+                    Profile = (videoStream.Profile ?? string.Empty).ToLowerInvariant(),
+                    Default = videoStream.IsDefault,
+                    Language = videoStream.Language,
+                    Forced = videoStream.IsForced,
+                    PixelFormat = videoStream.PixelFormat,
+                    ColorRange = (videoStream.ColorRange ?? string.Empty).ToLowerInvariant(),
+                    ColorSpace = (videoStream.ColorSpace ?? string.Empty).ToLowerInvariant(),
+                    ColorTransfer = (videoStream.ColorTransfer ?? string.Empty).ToLowerInvariant(),
+                    ColorPrimaries = (videoStream.ColorPrimaries ?? string.Empty).ToLowerInvariant()
+                });
+
+            foreach (JellyfinMediaStreamResponse audioStream in streams.Filter(s =>
+                         s.Type == JellyfinMediaStreamType.Audio))
+            {
+                var stream = new MediaStream
+                {
+                    MediaVersionId = version.Id,
+                    MediaStreamKind = MediaStreamKind.Audio,
+                    Index = audioStream.Index - streamIndexOffset,
+                    Codec = audioStream.Codec,
+                    Profile = (audioStream.Profile ?? string.Empty).ToLowerInvariant(),
+                    Channels = audioStream.Channels ?? 2,
+                    Default = audioStream.IsDefault,
+                    Forced = audioStream.IsForced,
+                    Language = audioStream.Language,
+                    Title = audioStream.Title ?? string.Empty
                 };
 
-                version.Streams.Add(
-                    new MediaStream
-                    {
-                        MediaVersionId = version.Id,
-                        MediaStreamKind = MediaStreamKind.Video,
-                        Index = videoStream.Index - streamIndexOffset,
-                        Codec = videoStream.Codec,
-                        Profile = (videoStream.Profile ?? string.Empty).ToLowerInvariant(),
-                        Default = videoStream.IsDefault,
-                        Language = videoStream.Language,
-                        Forced = videoStream.IsForced,
-                        PixelFormat = videoStream.PixelFormat,
-                        ColorRange = (videoStream.ColorRange ?? string.Empty).ToLowerInvariant(),
-                        ColorSpace = (videoStream.ColorSpace ?? string.Empty).ToLowerInvariant(),
-                        ColorTransfer = (videoStream.ColorTransfer ?? string.Empty).ToLowerInvariant(),
-                        ColorPrimaries = (videoStream.ColorPrimaries ?? string.Empty).ToLowerInvariant()
-                    });
+                version.Streams.Add(stream);
+            }
 
-                foreach (JellyfinMediaStreamResponse audioStream in streams.Filter(
-                             s => s.Type == JellyfinMediaStreamType.Audio))
+            foreach (JellyfinMediaStreamResponse subtitleStream in streams.Filter(s =>
+                         s.Type == JellyfinMediaStreamType.Subtitle))
+            {
+                var stream = new MediaStream
                 {
-                    var stream = new MediaStream
-                    {
-                        MediaVersionId = version.Id,
-                        MediaStreamKind = MediaStreamKind.Audio,
-                        Index = audioStream.Index - streamIndexOffset,
-                        Codec = audioStream.Codec,
-                        Profile = (audioStream.Profile ?? string.Empty).ToLowerInvariant(),
-                        Channels = audioStream.Channels ?? 2,
-                        Default = audioStream.IsDefault,
-                        Forced = audioStream.IsForced,
-                        Language = audioStream.Language,
-                        Title = audioStream.Title ?? string.Empty
-                    };
+                    MediaVersionId = version.Id,
+                    Codec = (subtitleStream.Codec ?? string.Empty).ToLowerInvariant(),
+                    Default = subtitleStream.IsDefault,
+                    Forced = subtitleStream.IsForced,
+                    Language = subtitleStream.Language
+                };
 
-                    version.Streams.Add(stream);
+                if (subtitleStream.IsExternal)
+                {
+                    stream.MediaStreamKind = MediaStreamKind.ExternalSubtitle;
+                    // ensure these don't collide with real indexes from the source file
+                    stream.Index = subtitleStream.Index + JellyfinStream.ExternalStreamOffset;
+                }
+                else
+                {
+                    stream.MediaStreamKind = MediaStreamKind.Subtitle;
+                    stream.Index = subtitleStream.Index - streamIndexOffset;
                 }
 
-                foreach (JellyfinMediaStreamResponse subtitleStream in streams.Filter(
-                             s => s.Type == JellyfinMediaStreamType.Subtitle))
-                {
-                    var stream = new MediaStream
-                    {
-                        MediaVersionId = version.Id,
-                        Codec = (subtitleStream.Codec ?? string.Empty).ToLowerInvariant(),
-                        Default = subtitleStream.IsDefault,
-                        Forced = subtitleStream.IsForced,
-                        Language = subtitleStream.Language
-                    };
+                version.Streams.Add(stream);
+            }
 
-                    if (subtitleStream.IsExternal)
-                    {
-                        stream.MediaStreamKind = MediaStreamKind.ExternalSubtitle;
-                        // ensure these don't collide with real indexes from the source file
-                        stream.Index = subtitleStream.Index + JellyfinStream.ExternalStreamOffset;
-                    }
-                    else
-                    {
-                        stream.MediaStreamKind = MediaStreamKind.Subtitle;
-                        stream.Index = subtitleStream.Index - streamIndexOffset;
-                    }
-
-                    version.Streams.Add(stream);
-                }
-
-                return version;
-            });
+            return version;
+        });
     }
 }

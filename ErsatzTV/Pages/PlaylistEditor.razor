@@ -9,258 +9,301 @@
 @inject ISnackbar Snackbar
 @inject IMediator Mediator
 
+<MudForm Style="max-height: 100%">
+<MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+    <div style="display: flex; flex-direction: row; margin-bottom: auto; margin-top: auto; width: 100%; align-items: center" class="ml-6 mr-6">
+        <div class="d-none d-md-flex">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@SaveChanges" StartIcon="@Icons.Material.Filled.Save" Disabled="@(_playlist.IsSystem)">
+                Save Playlist
+            </MudButton>
+            <MudButton Class="ml-3" Variant="Variant.Filled" Color="Color.Default" OnClick="@AddPlaylistItem" StartIcon="@Icons.Material.Filled.PlaylistAdd" Disabled="@(_playlist.IsSystem)">
+                Add Playlist Item
+            </MudButton>
+            <MudButton Class="ml-3" Variant="Variant.Filled" Color="Color.Secondary" OnClick="@PreviewPlayout" StartIcon="@Icons.Material.Filled.Preview">
+                Preview Playlist Playout
+            </MudButton>
+        </div>
+        <div style="align-items: center; display: flex; margin-left: auto;" class="d-md-none">
+            <div class="flex-grow-1"></div>
+            <MudMenu Icon="@Icons.Material.Filled.MoreVert">
+                <MudMenuItem Icon="@Icons.Material.Filled.Save" Label="Save Playlist" OnClick="@SaveChanges" Disabled="@(_playlist.IsSystem)"/>
+                <MudMenuItem Icon="@Icons.Material.Filled.PlaylistAdd" Label="Add Playlist Item" OnClick="@AddPlaylistItem" Disabled="@(_playlist.IsSystem)"/>
+                <MudMenuItem Icon="@Icons.Material.Filled.Preview" Label="Preview Playlist Playout" OnClick="@PreviewPlayout"/>
+            </MudMenu>
+        </div>
+    </div>
+</MudPaper>
+<div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-<MudText Typo="Typo.h4" Class="mb-4">Edit Playlist</MudText>
-<div style="max-width: 400px">
-    <MudCard>
-        <MudCardContent>
-            <MudTextField Label="Name" @bind-Value="_playlist.Name" For="@(() => _playlist.Name)"/>
-        </MudCardContent>
-    </MudCard>
-</div>
-<MudButton Variant="Variant.Filled" Color="Color.Default" OnClick="@(_ => AddPlaylistItem())" Class="mt-4">
-    Add Playlist Item
-</MudButton>
-<MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => SaveChanges())" Class="mt-4 ml-4">
-    Save Changes
-</MudButton>
-<MudButton Variant="Variant.Filled" Color="Color.Secondary" OnClick="@(_ => PreviewPlayout())" Class="mt-4 ml-4">
-    Preview Playlist Playout
-</MudButton>
-<MudGrid>
-    <MudItem xs="12">
-        <MudTable Class="mt-6" Hover="true" Items="_playlist.Items.OrderBy(i => i.Index)" Dense="true" @bind-SelectedItem="_selectedItem">
-            <ColGroup>
-                <col/>
-                <col/>
-                <col/>
-                <col/>
-                <col/>
-                <col style="width: 60px;"/>
-                <col style="width: 60px;"/>
-                <col style="width: 60px;"/>
-                <col style="width: 60px;"/>
-            </ColGroup>
-            <HeaderContent>
-                <MudTh>Item Type</MudTh>
-                <MudTh>Item</MudTh>
-                <MudTh>Playback Order</MudTh>
-                <MudTh>Play All</MudTh>
-                <MudTh>Show In EPG</MudTh>
-                <MudTh/>
-                <MudTh/>
-                <MudTh/>
-                <MudTh/>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd DataLabel="Item Type">
-                    <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
-                        @context.ItemType
-                    </MudText>
-                </MudTd>
-                <MudTd DataLabel="Item">
-                    <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
-                        @context.ItemName
-                    </MudText>
-                </MudTd>
-                <MudTd DataLabel="Playback Order">
-                    <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
-                        @(context.PlaybackOrder > 0 ? context.PlaybackOrder : "")
-                    </MudText>
-                </MudTd>
-                <MudTd>
-                    <MudCheckBox T="bool" Value="@context.PlayAll" ValueChanged="@(e => UpdatePlayAll(context, e))"/>
-                </MudTd>
-                <MudTd>
-                    <MudCheckBox T="bool" Value="@context.IncludeInProgramGuide" ValueChanged="@(e => UpdateEPG(context, e))"/>
-                </MudTd>
-                <MudTd>
-                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
-                                   OnClick="@(_ => CopyItem(context))">
-                    </MudIconButton>
-                </MudTd>
-                <MudTd>
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward"
-                                   OnClick="@(_ => MoveItemUp(context))"
-                                   Disabled="@(_playlist.Items.All(x => x.Index >= context.Index))">
-                    </MudIconButton>
-                </MudTd>
-                <MudTd>
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward"
-                                   OnClick="@(_ => MoveItemDown(context))"
-                                   Disabled="@(_playlist.Items.All(x => x.Index <= context.Index))">
-                    </MudIconButton>
-                </MudTd>
-                <MudTd>
-                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                   OnClick="@(_ => RemovePlaylistItem(context))">
-                    </MudIconButton>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </MudItem>
-</MudGrid>
-<div class="mt-4">
-    @if (_selectedItem is not null)
-    {
-        <EditForm Model="_selectedItem">
-            <FluentValidationValidator/>
-            <div style="max-width: 400px;" class="mr-6">
-                <MudCard>
-                    <MudCardContent>
-                        <MudSelect Class="mt-3" Label="Collection Type" @bind-Value="_selectedItem.CollectionType" For="@(() => _selectedItem.CollectionType)">
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Collection">Collection</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionShow">Television Show</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionSeason">Television Season</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Artist">Artist</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.MultiCollection">Multi Collection</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.SmartCollection">Smart Collection</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Movie">Movie</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Episode">Episode</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.MusicVideo">Music Video</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.OtherVideo">Other Video</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Song">Song</MudSelectItem>
-                            <MudSelectItem Value="ProgramScheduleItemCollectionType.Image">Image</MudSelectItem>
-                        </MudSelect>
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Collection)
-                        {
-                            <MudAutocomplete Class="mt-3" T="MediaCollectionViewModel" Label="Collection"
-                                             @bind-Value="_selectedItem.Collection" SearchFunc="@SearchCollections"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.MultiCollection)
-                        {
-                            <MudAutocomplete Class="mt-3" T="MultiCollectionViewModel" Label="Multi Collection"
-                                             @bind-Value="_selectedItem.MultiCollection" SearchFunc="@SearchMultiCollections"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.SmartCollection)
-                        {
-                            <MudAutocomplete Class="mt-3" T="SmartCollectionViewModel" Label="Smart Collection"
-                                             @bind-Value="_selectedItem.SmartCollection" SearchFunc="@SearchSmartCollections"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionShow)
-                        {
-                            <MudAutocomplete Class="mt-3" T="NamedMediaItemViewModel" Label="Television Show"
-                                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchTelevisionShows"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionSeason)
-                        {
-                            <MudAutocomplete Class="mt-3" T="NamedMediaItemViewModel" Label="Television Season"
-                                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchTelevisionSeasons"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
-                                             MaxItems="20">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 20 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Artist)
-                        {
-                            <MudAutocomplete Class="mt-3" T="NamedMediaItemViewModel" Label="Artist"
-                                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchArtists"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
-                                             MaxItems="10">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Movie)
-                        {
-                            <MudAutocomplete Class="mt-3" T="NamedMediaItemViewModel" Label="Movie"
-                                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchMovies"
-                                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
-                                             MaxItems="10">
-                                <MoreItemsTemplate>
-                                    <MudText Align="Align.Center" Class="px-4 py-1">
-                                        Only the first 10 items are shown
-                                    </MudText>
-                                </MoreItemsTemplate>
-                            </MudAutocomplete>
-                        }
-
-                        <MudSelect Class="mt-3"
-                                   Label="Playback Order"
-                                   @bind-Value="@_selectedItem.PlaybackOrder"
-                                   For="@(() => _selectedItem.PlaybackOrder)"
-                                   Disabled="@(_selectedItem.CollectionType is ProgramScheduleItemCollectionType.Movie or ProgramScheduleItemCollectionType.Episode or ProgramScheduleItemCollectionType.MusicVideo or ProgramScheduleItemCollectionType.OtherVideo or ProgramScheduleItemCollectionType.Song or ProgramScheduleItemCollectionType.Image)">
-                            @switch (_selectedItem.CollectionType)
-                            {
-                                case ProgramScheduleItemCollectionType.MultiCollection:
-                                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
-                                    @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
-                                    break;
-                                case ProgramScheduleItemCollectionType.Collection:
-                                case ProgramScheduleItemCollectionType.SmartCollection:
-                                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
-                                    @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
-                                    break;
-                                case ProgramScheduleItemCollectionType.TelevisionShow:
-                                    <MudSelectItem Value="PlaybackOrder.SeasonEpisode">Season, Episode</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
-                                    @* <MudSelectItem Value="PlaybackOrder.MultiEpisodeShuffle">Multi-Episode Shuffle</MudSelectItem> *@
-                                    break;
-                                case ProgramScheduleItemCollectionType.TelevisionSeason:
-                                case ProgramScheduleItemCollectionType.Artist:
-                                case ProgramScheduleItemCollectionType.FakeCollection:
-                                default:
-                                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
-                                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
-                                    break;
-                            }
-                        </MudSelect>
-                    </MudCardContent>
-                </MudCard>
+<MudText Typo="Typo.h5" Class="mb-2">Playlist</MudText>
+<MudDivider Class="mb-6"/>
+<MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+    <div class="d-flex">
+        <MudText>Name</MudText>
+    </div>
+    <MudTextField @bind-Value="_playlist.Name" For="@(() => _playlist.Name)" Disabled="@(_playlist.IsSystem)"/>
+</MudStack>
+<MudText Typo="Typo.h5" Class="mt-10 mb-2">Playlist Items</MudText>
+<MudDivider Class="mb-6"/>
+<MudTable Hover="true" Items="_playlist.Items.OrderBy(i => i.Index)" Dense="true" @bind-SelectedItem="_selectedItem" RowClassFunc="@SelectedRowClassFunc">
+    <ColGroup>
+        <MudHidden Breakpoint="Breakpoint.Xs">
+            <col/>
+            <col/>
+            <col/>
+            <col/>
+            <col/>
+            <col style="width: 240px;"/>
+        </MudHidden>
+    </ColGroup>
+    <HeaderContent>
+        <MudTh>Item Type</MudTh>
+        <MudTh>Item</MudTh>
+        <MudTh>Playback Order</MudTh>
+        <MudTh>Play All</MudTh>
+        <MudTh>Show In EPG</MudTh>
+        <MudTh/>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Item Type">
+            <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
+                @context.ItemType
+            </MudText>
+        </MudTd>
+        <MudTd DataLabel="Item">
+            <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
+                @context.ItemName
+            </MudText>
+        </MudTd>
+        <MudTd DataLabel="Playback Order">
+            <MudText Typo="@(context == _selectedItem ? Typo.subtitle2 : Typo.body2)">
+                @(context.PlaybackOrder > 0 ? context.PlaybackOrder : "")
+            </MudText>
+        </MudTd>
+        <MudTd DataLabel="Play All">
+            <MudCheckBox T="bool" Value="@context.PlayAll" ValueChanged="@(e => UpdatePlayAll(context, e))" Disabled="@(_playlist.IsSystem)"/>
+        </MudTd>
+        <MudTd DataLabel="Show In EPG">
+            <MudCheckBox T="bool" Value="@context.IncludeInProgramGuide" ValueChanged="@(e => UpdateEPG(context, e))" Disabled="@(_playlist.IsSystem)"/>
+        </MudTd>
+        <MudTd>
+            <div class="d-flex">
+                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                               OnClick="@(_ => CopyItem(context))"
+                               Disabled="@(_playlist.IsSystem)">
+                </MudIconButton>
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward"
+                               OnClick="@(_ => MoveItemUp(context))"
+                               Disabled="@(_playlist.IsSystem || _playlist.Items.All(x => x.Index >= context.Index))">
+                </MudIconButton>
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward"
+                               OnClick="@(_ => MoveItemDown(context))"
+                               Disabled="@(_playlist.IsSystem || _playlist.Items.All(x => x.Index <= context.Index))">
+                </MudIconButton>
+                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                               OnClick="@(_ => RemovePlaylistItem(context))"
+                               Disabled="@(_playlist.IsSystem)">
+                </MudIconButton>
             </div>
-        </EditForm>
-    }
-</div>
-@if (_previewItems != null)
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+@if (!_playlist.IsSystem && _selectedItem is not null)
 {
-    <MudTable Class="mt-8"
-              Hover="true"
+    <MudText Typo="Typo.h5" Class="mt-10 mb-2">Playlist Item</MudText>
+    <MudDivider Class="mb-6"/>
+    <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+        <div class="d-flex">
+            <MudText>Collection Type</MudText>
+        </div>
+        <MudSelect @bind-Value="_selectedItem.CollectionType" For="@(() => _selectedItem.CollectionType)">
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Collection">Collection</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionShow">Television Show</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.TelevisionSeason">Television Season</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Artist">Artist</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.MultiCollection">Multi Collection</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.SmartCollection">Smart Collection</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Movie">Movie</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Episode">Episode</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.MusicVideo">Music Video</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.OtherVideo">Other Video</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Song">Song</MudSelectItem>
+            <MudSelectItem Value="ProgramScheduleItemCollectionType.Image">Image</MudSelectItem>
+        </MudSelect>
+    </MudStack>
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Collection)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Collection</MudText>
+            </div>
+            <MudAutocomplete T="MediaCollectionViewModel"
+                             @bind-Value="_selectedItem.Collection" SearchFunc="@SearchCollections"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.MultiCollection)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Multi Collection</MudText>
+            </div>
+            <MudAutocomplete T="MultiCollectionViewModel"
+                             @bind-Value="_selectedItem.MultiCollection" SearchFunc="@SearchMultiCollections"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.SmartCollection)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Smart Collection</MudText>
+            </div>
+            <MudAutocomplete T="SmartCollectionViewModel"
+                             @bind-Value="_selectedItem.SmartCollection" SearchFunc="@SearchSmartCollections"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionShow)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Television Show</MudText>
+            </div>
+            <MudAutocomplete T="NamedMediaItemViewModel"
+                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchTelevisionShows"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search...">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.TelevisionSeason)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Television Season</MudText>
+            </div>
+            <MudAutocomplete T="NamedMediaItemViewModel"
+                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchTelevisionSeasons"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
+                             MaxItems="20">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 20 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Artist)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Artist</MudText>
+            </div>
+            <MudAutocomplete T="NamedMediaItemViewModel"
+                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchArtists"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
+                             MaxItems="10">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    @if (_selectedItem.CollectionType == ProgramScheduleItemCollectionType.Movie)
+    {
+        <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+            <div class="d-flex">
+                <MudText>Movie</MudText>
+            </div>
+            <MudAutocomplete T="NamedMediaItemViewModel"
+                             @bind-Value="_selectedItem.MediaItem" SearchFunc="@SearchMovies"
+                             ToStringFunc="@(c => c?.Name)" Placeholder="Type to search..."
+                             MaxItems="10">
+                <MoreItemsTemplate>
+                    <MudText Align="Align.Center" Class="px-4 py-1">
+                        Only the first 10 items are shown
+                    </MudText>
+                </MoreItemsTemplate>
+            </MudAutocomplete>
+        </MudStack>
+    }
+
+    <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+        <div class="d-flex">
+            <MudText>Playback Order</MudText>
+        </div>
+        <MudSelect @bind-Value="@_selectedItem.PlaybackOrder"
+                   For="@(() => _selectedItem.PlaybackOrder)"
+                   Disabled="@(_selectedItem.CollectionType is ProgramScheduleItemCollectionType.Movie or ProgramScheduleItemCollectionType.Episode or ProgramScheduleItemCollectionType.MusicVideo or ProgramScheduleItemCollectionType.OtherVideo or ProgramScheduleItemCollectionType.Song or ProgramScheduleItemCollectionType.Image)">
+            @switch (_selectedItem.CollectionType)
+            {
+                case ProgramScheduleItemCollectionType.MultiCollection:
+                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
+                    @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
+                    break;
+                case ProgramScheduleItemCollectionType.Collection:
+                case ProgramScheduleItemCollectionType.SmartCollection:
+                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
+                    @* <MudSelectItem Value="PlaybackOrder.ShuffleInOrder">Shuffle In Order</MudSelectItem> *@
+                    break;
+                case ProgramScheduleItemCollectionType.TelevisionShow:
+                    <MudSelectItem Value="PlaybackOrder.SeasonEpisode">Season, Episode</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
+                    @* <MudSelectItem Value="PlaybackOrder.MultiEpisodeShuffle">Multi-Episode Shuffle</MudSelectItem> *@
+                    break;
+                case ProgramScheduleItemCollectionType.TelevisionSeason:
+                case ProgramScheduleItemCollectionType.Artist:
+                case ProgramScheduleItemCollectionType.FakeCollection:
+                default:
+                    <MudSelectItem Value="PlaybackOrder.Chronological">Chronological</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Shuffle">Shuffle</MudSelectItem>
+                    <MudSelectItem Value="PlaybackOrder.Random">Random</MudSelectItem>
+                    break;
+            }
+        </MudSelect>
+    </MudStack>
+}
+else if (_previewItems is not null)
+{
+    <MudText Typo="Typo.h5" Class="mt-10 mb-2">Preview</MudText>
+    <MudDivider Class="mb-6"/>
+    <MudTable Hover="true"
               Dense="true"
               Items="_previewItems">
         <ToolBarContent>
@@ -281,9 +324,11 @@
     </MudTable>
 }
 </MudContainer>
+</div>
+</MudForm>
 
 @code {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts;
 
     [Parameter]
     public int Id { get; set; }
@@ -294,38 +339,49 @@
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _cts.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadPlaylistItems();
-
-    private async Task LoadPlaylistItems()
+    protected override async Task OnParametersSetAsync()
     {
-        Option<PlaylistViewModel> maybePlaylist = await Mediator.Send(new GetPlaylistById(Id), _cts.Token);
-        if (maybePlaylist.IsNone)
-        {
-            NavigationManager.NavigateTo("/media/playlists");
-            return;
-        }
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
 
-        foreach (PlaylistViewModel playlist in maybePlaylist)
+        try
         {
-            _playlist = new PlaylistItemsEditViewModel
+            Option<PlaylistViewModel> maybePlaylist = await Mediator.Send(new GetPlaylistById(Id), token);
+            if (maybePlaylist.IsNone)
             {
-                Name = playlist.Name,
-                Items = []
-            };
-        }
-
-        Option<IEnumerable<PlaylistItemViewModel>> maybeResults = await Mediator.Send(new GetPlaylistItems(Id), _cts.Token);
-        foreach (IEnumerable<PlaylistItemViewModel> items in maybeResults)
-        {
-            _playlist.Items.AddRange(items.Map(ProjectToEditViewModel));
-            if (_playlist.Items.Count == 1)
-            {
-                _selectedItem = _playlist.Items.Head();
+                NavigationManager.NavigateTo("media/playlists");
+                return;
             }
+
+            foreach (PlaylistViewModel playlist in maybePlaylist)
+            {
+                _playlist = new PlaylistItemsEditViewModel
+                {
+                    Name = playlist.Name,
+                    IsSystem = playlist.IsSystem,
+                    Items = []
+                };
+            }
+
+            Option<IEnumerable<PlaylistItemViewModel>> maybeResults = await Mediator.Send(new GetPlaylistItems(Id), token);
+            foreach (IEnumerable<PlaylistItemViewModel> items in maybeResults)
+            {
+                _playlist.Items.AddRange(items.Map(ProjectToEditViewModel));
+                if (_playlist.Items.Count == 1)
+                {
+                    _selectedItem = _playlist.Items.Head();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
         }
     }
 
@@ -483,22 +539,21 @@
                 Snackbar.Add($"Unexpected error saving playlist: {error.Value}", Severity.Error);
                 Logger.LogError("Unexpected error saving playlist: {Error}", error.Value);
             },
-            () => NavigationManager.NavigateTo("/media/playlists"));
+            () => NavigationManager.NavigateTo("media/playlists"));
     }
 
     private ReplacePlaylistItems GenerateReplaceRequest()
     {
-        var items = _playlist.Items.Map(
-            item => new ReplacePlaylistItem(
-                item.Index,
-                item.CollectionType,
-                item.Collection?.Id,
-                item.MultiCollection?.Id,
-                item.SmartCollection?.Id,
-                item.MediaItem?.MediaItemId,
-                item.PlaybackOrder,
-                item.PlayAll,
-                item.IncludeInProgramGuide)).ToList();
+        var items = _playlist.Items.Map(item => new ReplacePlaylistItem(
+            item.Index,
+            item.CollectionType,
+            item.Collection?.Id,
+            item.MultiCollection?.Id,
+            item.SmartCollection?.Id,
+            item.MediaItem?.MediaItemId,
+            item.PlaybackOrder,
+            item.PlayAll,
+            item.IncludeInProgramGuide)).ToList();
 
         return new ReplacePlaylistItems(Id, _playlist.Name, items);
     }
@@ -512,4 +567,6 @@
     private static void UpdateEPG(PlaylistItemEditViewModel context, bool includeInProgramGuide) => context.IncludeInProgramGuide = includeInProgramGuide;
 
     private static void UpdatePlayAll(PlaylistItemEditViewModel context, bool playAll) => context.PlayAll = playAll;
+
+    private string SelectedRowClassFunc(PlaylistItemEditViewModel element, int rowNumber) => _selectedItem != null && _selectedItem == element ? "selected" : string.Empty;
 }

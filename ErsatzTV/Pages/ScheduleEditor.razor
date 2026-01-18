@@ -1,110 +1,130 @@
 ﻿@page "/schedules/{Id:int}"
 @page "/schedules/add"
 @using ErsatzTV.Application.ProgramSchedules
+@using ErsatzTV.Core.Scheduling
 @implements IDisposable
 @inject NavigationManager NavigationManager
 @inject ILogger<ScheduleEditor> Logger
 @inject ISnackbar Snackbar
 @inject IMediator Mediator
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-    <div style="max-width: 400px;">
-        <MudText Typo="Typo.h4" Class="mb-4">@(IsEdit ? "Edit Schedule" : "Add Schedule")</MudText>
-
-        <EditForm EditContext="_editContext" OnSubmit="@HandleSubmitAsync">
-            <FluentValidationValidator/>
-            <MudCard>
-                <MudCardContent>
-                    <MudTextField Label="Name" @bind-Value="_model.Name" For="@(() => _model.Name)"/>
-                    <MudElement HtmlTag="div" Class="mt-3">
-                        <MudTooltip Text="Always schedule multi-part episodes chronologically when shuffling">
-                            <MudCheckBox Label="Keep Multi-Part Episodes Together"
-                                         @bind-Value="@_model.KeepMultiPartEpisodesTogether"
-                                         For="@(() => _model.KeepMultiPartEpisodesTogether)"/>
-                        </MudTooltip>
-                    </MudElement>
-                    <MudElement HtmlTag="div" Class="mt-3">
-                        <MudTooltip Text="This is useful for multi-part crossover episodes">
-                            <MudCheckBox Label="Treat Collections As Shows*"
-                                         @bind-Value="@_model.TreatCollectionsAsShows"
-                                         Disabled="@(_model.KeepMultiPartEpisodesTogether == false)"
-                                         For="@(() => _model.TreatCollectionsAsShows)"/>
-                        </MudTooltip>
-                    </MudElement>
-                    <MudElement HtmlTag="div" Class="mt-3">
-                        <MudTooltip Text="Note: this disables fixed start times and flood mode">
-                            <MudCheckBox Label="Shuffle Schedule Items"
-                                         @bind-Value="@_model.ShuffleScheduleItems"
-                                         For="@(() => _model.ShuffleScheduleItems)"/>
-                        </MudTooltip>
-                    </MudElement>
-                    <MudElement HtmlTag="div" Class="mt-3">
-                        <MudCheckBox Label="Random Start Point"
-                                     @bind-Value="@_model.RandomStartPoint"
-                                     For="@(() => _model.RandomStartPoint)"/>
-                    </MudElement>
-                </MudCardContent>
-                <MudCardActions>
-                    <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled" Color="Color.Primary">
-                        @(IsEdit ? "Save Changes" : "Add Schedule")
-                    </MudButton>
-                </MudCardActions>
-            </MudCard>
-        </EditForm>
+<MudForm @ref="_form" @bind-IsValid="@_success" Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="ml-6" OnClick="HandleSubmitAsync" StartIcon="@(IsEdit ? Icons.Material.Filled.Save : Icons.Material.Filled.Add)">@(IsEdit ? "Save Schedule" : "Add Schedule")</MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">Schedule</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Name</MudText>
+                </div>
+                <MudTextField @bind-Value="_model.Name" For="@(() => _model.Name)" Required="true" RequiredError="Schedule name is required!"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Keep Multi-Part Episodes Together</MudText>
+                </div>
+                <MudCheckBox @bind-Value="@_model.KeepMultiPartEpisodesTogether" For="@(() => _model.KeepMultiPartEpisodesTogether)" Dense="true">
+                    <MudText Typo="Typo.caption" Style="font-weight: normal">Group multi-part episodes when shuffling</MudText>
+                </MudCheckBox>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Treat Collections As Shows</MudText>
+                </div>
+                <MudCheckBox @bind-Value="@_model.TreatCollectionsAsShows"
+                             Disabled="@(_model.KeepMultiPartEpisodesTogether == false)"
+                             For="@(() => _model.TreatCollectionsAsShows)" Dense="true">
+                    <MudText Typo="Typo.caption" Style="font-weight: normal">This is useful for multi-part crossover episodes</MudText>
+                </MudCheckBox>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Shuffle Schedule Items</MudText>
+                </div>
+                <MudCheckBox @bind-Value="@_model.ShuffleScheduleItems" For="@(() => _model.ShuffleScheduleItems)" Dense="true">
+                    <MudText Typo="Typo.caption" Style="font-weight: normal">Note: this disables fixed start times and flood mode</MudText>
+                </MudCheckBox>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Random Start Point</MudText>
+                </div>
+                <MudCheckBox @bind-Value="@_model.RandomStartPoint" For="@(() => _model.RandomStartPoint)" Dense="true"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Fixed Start Time Behavior</MudText>
+                </div>
+                <MudSelect @bind-Value="@_model.FixedStartTimeBehavior" For="@(() => _model.FixedStartTimeBehavior)">
+                    <MudSelectItem Value="FixedStartTimeBehavior.Strict">Strict - Wait For Exact Start Time</MudSelectItem>
+                    <MudSelectItem Value="FixedStartTimeBehavior.Flexible">Flexible - Start As Soon As Possible</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+        </MudContainer>
     </div>
-</MudContainer>
+</MudForm>
 
 @code {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts;
 
     [Parameter]
     public int Id { get; set; }
 
     private readonly ProgramScheduleEditViewModel _model = new();
-    private EditContext _editContext;
-    private ValidationMessageStore _messageStore;
+    private MudForm _form;
+    private bool _success;
 
     public void Dispose()
     {
-        _cts.Cancel();
-        _cts.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        if (IsEdit)
-        {
-            Option<ProgramScheduleViewModel> maybeProgramSchedule = await Mediator.Send(new GetProgramScheduleById(Id), _cts.Token);
-            maybeProgramSchedule.Match(
-                viewModel =>
-                {
-                    _model.Id = viewModel.Id;
-                    _model.Name = viewModel.Name;
-                    _model.ShuffleScheduleItems = viewModel.ShuffleScheduleItems;
-                    _model.KeepMultiPartEpisodesTogether = viewModel.KeepMultiPartEpisodesTogether;
-                    _model.TreatCollectionsAsShows = viewModel.TreatCollectionsAsShows;
-                    _model.RandomStartPoint = viewModel.RandomStartPoint;
-                },
-                () => NavigationManager.NavigateTo("404"));
-        }
-        else
-        {
-            _model.Name = "New Schedule";
-        }
-    }
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
 
-    protected override void OnInitialized()
-    {
-        _editContext = new EditContext(_model);
-        _messageStore = new ValidationMessageStore(_editContext);
+        try
+        {
+            if (IsEdit)
+            {
+                Option<ProgramScheduleViewModel> maybeProgramSchedule = await Mediator.Send(new GetProgramScheduleById(Id), token);
+                maybeProgramSchedule.Match(
+                    viewModel =>
+                    {
+                        _model.Id = viewModel.Id;
+                        _model.Name = viewModel.Name;
+                        _model.ShuffleScheduleItems = viewModel.ShuffleScheduleItems;
+                        _model.KeepMultiPartEpisodesTogether = viewModel.KeepMultiPartEpisodesTogether;
+                        _model.TreatCollectionsAsShows = viewModel.TreatCollectionsAsShows;
+                        _model.RandomStartPoint = viewModel.RandomStartPoint;
+                        _model.FixedStartTimeBehavior = viewModel.FixedStartTimeBehavior;
+                    },
+                    () => NavigationManager.NavigateTo("404"));
+            }
+            else
+            {
+                _model.Name = "New Schedule";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
+        }
     }
 
     private bool IsEdit => Id > 0;
 
     private async Task HandleSubmitAsync()
     {
-        _messageStore.Clear();
-        if (_editContext.Validate())
+        await _form.Validate();
+        if (_success)
         {
             Either<BaseError, EntityIdResult> result = IsEdit
                 ? await Mediator.Send(_model.ToUpdate(), _cts.Token).MapT(r => r as EntityIdResult)

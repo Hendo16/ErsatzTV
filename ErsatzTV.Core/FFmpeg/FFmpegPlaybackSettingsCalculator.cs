@@ -21,7 +21,9 @@
 using System.Globalization;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.FFmpeg;
+using ErsatzTV.FFmpeg;
 using ErsatzTV.FFmpeg.Format;
+using MediaStream = ErsatzTV.Core.Domain.MediaStream;
 
 namespace ErsatzTV.Core.FFmpeg;
 
@@ -45,12 +47,12 @@ public static class FFmpegPlaybackSettingsCalculator
         FFmpegProfile ffmpegProfile,
         MediaVersion videoVersion,
         Option<MediaStream> videoStream,
-        Option<MediaStream> audioStream,
         DateTimeOffset start,
         DateTimeOffset now,
         TimeSpan inPoint,
         TimeSpan outPoint,
         bool hlsRealtime,
+        StreamInputKind streamInputKind,
         Option<int> targetFramerate)
     {
         var result = new FFmpegPlaybackSettings
@@ -69,7 +71,7 @@ public static class FFmpegPlaybackSettingsCalculator
             ThreadCount = ffmpegProfile.ThreadCount
         };
 
-        if (now != start || inPoint != TimeSpan.Zero)
+        if ((now != start || inPoint != TimeSpan.Zero) && streamInputKind is not StreamInputKind.Live)
         {
             result.StreamSeek = now - start + inPoint;
         }
@@ -89,7 +91,7 @@ public static class FFmpegPlaybackSettingsCalculator
 
                 if (NeedToScale(ffmpegProfile, videoVersion) && videoVersion.SampleAspectRatio != "0:0")
                 {
-                    IDisplaySize scaledSize = CalculateScaledSize(ffmpegProfile, videoVersion);
+                    DisplaySize scaledSize = CalculateScaledSize(ffmpegProfile, videoVersion);
                     if (!scaledSize.IsSameSizeAs(videoVersion))
                     {
                         int fixedHeight = scaledSize.Height + scaledSize.Height % 2;
@@ -99,7 +101,8 @@ public static class FFmpegPlaybackSettingsCalculator
                 }
 
                 IDisplaySize sizeAfterScaling = result.ScaledSize.IfNone(videoVersion);
-                if (!sizeAfterScaling.IsSameSizeAs(ffmpegProfile.Resolution) && ffmpegProfile.ScalingBehavior is not ScalingBehavior.Crop)
+                if (!sizeAfterScaling.IsSameSizeAs(ffmpegProfile.Resolution) &&
+                    ffmpegProfile.ScalingBehavior is not ScalingBehavior.Crop)
                 {
                     result.PadToDesiredResolution = true;
                 }
@@ -111,11 +114,12 @@ public static class FFmpegPlaybackSettingsCalculator
 
                 result.VideoTrackTimeScale = 90000;
 
-                foreach (MediaStream stream in videoStream.Where(s => s.AttachedPic == false))
+                foreach (MediaStream stream in videoStream.Where(s => !s.AttachedPic))
                 {
                     result.VideoFormat = ffmpegProfile.VideoFormat;
                     result.VideoBitrate = ffmpegProfile.VideoBitrate;
                     result.VideoBufferSize = ffmpegProfile.VideoBufferSize;
+                    result.TonemapAlgorithm = ffmpegProfile.TonemapAlgorithm;
 
                     result.VideoDecoder =
                         (result.HardwareAcceleration, stream.Codec, stream.PixelFormat) switch
@@ -150,13 +154,7 @@ public static class FFmpegPlaybackSettingsCalculator
                 result.AudioFormat = ffmpegProfile.AudioFormat;
                 result.AudioBitrate = ffmpegProfile.AudioBitrate;
                 result.AudioBufferSize = ffmpegProfile.AudioBufferSize;
-
-                foreach (MediaStream _ in audioStream)
-                {
-                    // this can be optimized out later, depending on the audio codec
-                    result.AudioChannels = ffmpegProfile.AudioChannels;
-                }
-
+                result.AudioChannels = ffmpegProfile.AudioChannels;
                 result.AudioSampleRate = ffmpegProfile.AudioSampleRate;
                 result.AudioDuration = outPoint - inPoint;
                 result.NormalizeLoudnessMode = ffmpegProfile.NormalizeLoudnessMode;
@@ -184,6 +182,7 @@ public static class FFmpegPlaybackSettingsCalculator
             VideoFormat = ffmpegProfile.VideoFormat,
             VideoBitrate = ffmpegProfile.VideoBitrate,
             VideoBufferSize = ffmpegProfile.VideoBufferSize,
+            TonemapAlgorithm = ffmpegProfile.TonemapAlgorithm,
             VideoDecoder = null,
             PixelFormat = ffmpegProfile.BitDepth switch
             {
@@ -232,14 +231,14 @@ public static class FFmpegPlaybackSettingsCalculator
         IsOddSize(version) ||
         TooSmallToCrop(ffmpegProfile, version);
 
-    private static bool IsIncorrectSize(IDisplaySize desiredResolution, MediaVersion version) =>
+    private static bool IsIncorrectSize(Resolution desiredResolution, MediaVersion version) =>
         IsAnamorphic(version) ||
         version.Width != desiredResolution.Width ||
         version.Height != desiredResolution.Height;
 
-    private static bool IsTooLarge(IDisplaySize desiredResolution, IDisplaySize displaySize) =>
-        displaySize.Height > desiredResolution.Height ||
-        displaySize.Width > desiredResolution.Width;
+    private static bool IsTooLarge(Resolution desiredResolution, MediaVersion version) =>
+        version.Height > desiredResolution.Height ||
+        version.Width > desiredResolution.Width;
 
     private static bool IsOddSize(MediaVersion version) =>
         version.Height % 2 == 1 || version.Width % 2 == 1;
@@ -256,13 +255,13 @@ public static class FFmpegPlaybackSettingsCalculator
 
     private static DisplaySize CalculateScaledSize(FFmpegProfile ffmpegProfile, MediaVersion version)
     {
-        IDisplaySize sarSize = SARSize(version);
+        DisplaySize sarSize = SARSize(version);
         int p = version.Width * sarSize.Width;
         int q = version.Height * sarSize.Height;
         int g = Gcd(q, p);
         p = p / g;
         q = q / g;
-        IDisplaySize targetSize = ffmpegProfile.Resolution;
+        Resolution targetSize = ffmpegProfile.Resolution;
         int hw1 = targetSize.Width;
         int hh1 = hw1 * q / p;
         int hh2 = targetSize.Height;

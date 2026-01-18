@@ -6,7 +6,7 @@ using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Metadata;
 using ErsatzTV.Core.Plex;
-using ErsatzTV.Infrastructure.Data.Repositories;
+using ErsatzTV.Scanner.Core.Interfaces.Metadata;
 using ErsatzTV.Scanner.Core.Metadata;
 using Microsoft.Extensions.Logging;
 
@@ -33,9 +33,11 @@ public class PlexOtherVideoLibraryScanner :
         IPlexOtherVideoRepository plexOtherVideoRepository,
         IPlexPathReplacementService plexPathReplacementService,
         ILocalFileSystem localFileSystem,
+        ILocalChaptersProvider localChaptersProvider,
         ILogger<PlexOtherVideoLibraryScanner> logger)
         : base(
             localFileSystem,
+            localChaptersProvider,
             metadataRepository,
             mediator,
             logger)
@@ -159,7 +161,8 @@ public class PlexOtherVideoLibraryScanner :
 
     protected override async Task<Either<BaseError, MediaItemScanResult<PlexOtherVideo>>> UpdateMetadata(
         MediaItemScanResult<PlexOtherVideo> result,
-        OtherVideoMetadata fullMetadata)
+        OtherVideoMetadata fullMetadata,
+        CancellationToken cancellationToken)
     {
         PlexOtherVideo existing = result.Item;
         OtherVideoMetadata existingMetadata = existing.OtherVideoMetadata.Head();
@@ -174,6 +177,13 @@ public class PlexOtherVideoLibraryScanner :
         {
             existingMetadata.ContentRating = fullMetadata.ContentRating;
             await _metadataRepository.SetContentRating(existingMetadata, fullMetadata.ContentRating);
+            result.IsUpdated = true;
+        }
+
+        if (existingMetadata.Plot != fullMetadata.Plot)
+        {
+            existingMetadata.Plot = fullMetadata.Plot;
+            await _metadataRepository.SetPlot(existingMetadata, fullMetadata.Plot);
             result.IsUpdated = true;
         }
 
@@ -222,9 +232,8 @@ public class PlexOtherVideoLibraryScanner :
         }
 
         foreach (Actor actor in existingMetadata.Actors
-                     .Filter(
-                         a => fullMetadata.Actors.All(
-                             a2 => a2.Name != a.Name || a.Artwork == null && a2.Artwork != null))
+                     .Filter(a =>
+                         fullMetadata.Actors.All(a2 => a2.Name != a.Name || a.Artwork == null && a2.Artwork != null))
                      .ToList())
         {
             existingMetadata.Actors.Remove(actor);
@@ -334,7 +343,7 @@ public class PlexOtherVideoLibraryScanner :
             }
         }
 
-        if (await _metadataRepository.UpdateSubtitles(existingMetadata, fullMetadata.Subtitles))
+        if (await _metadataRepository.UpdateSubtitles(existingMetadata, fullMetadata.Subtitles, cancellationToken))
         {
             result.IsUpdated = true;
         }

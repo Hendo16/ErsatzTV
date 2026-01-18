@@ -37,20 +37,28 @@ public partial class AddTraktListHandler : TraktCommandBase, IRequestHandler<Add
         {
             Validation<BaseError, Parameters> validation = ValidateUrl(request);
             return await validation.Match(
-                DoAdd,
+                p => DoAdd(p, cancellationToken),
                 error => Task.FromResult<Either<BaseError, Unit>>(error.Join()));
         }
         finally
         {
-            _entityLocker.UnlockTrakt();
+            if (request.Unlock)
+            {
+                _entityLocker.UnlockTrakt();
+            }
         }
     }
 
     private static Validation<BaseError, Parameters> ValidateUrl(AddTraktList request)
     {
+        if (!string.IsNullOrWhiteSpace(request.User) && !string.IsNullOrWhiteSpace(request.List))
+        {
+            return new Parameters(request.User, request.List);
+        }
+
         // if we get a url, ensure it's for trakt.tv
         Match match = Uri.IsWellFormedUriString(request.TraktListUrl, UriKind.Absolute)
-            ? UriTraktListRegex().Match(request.TraktListUrl)
+            ? MatchTraktListUrl(request.TraktListUrl)
             : ShorthandTraktListRegex().Match(request.TraktListUrl);
 
         if (match.Success)
@@ -63,16 +71,28 @@ public partial class AddTraktListHandler : TraktCommandBase, IRequestHandler<Add
         return BaseError.New("Invalid Trakt list url");
     }
 
-    private async Task<Either<BaseError, Unit>> DoAdd(Parameters parameters)
+    private static Match MatchTraktListUrl(string traktListUrl)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        Match match = UriTraktListRegex().Match(traktListUrl);
+        if (!match.Success)
+        {
+            match = UriTraktListRegex2().Match(traktListUrl);
+        }
+
+        return match;
+    }
+
+    private async Task<Either<BaseError, Unit>> DoAdd(Parameters parameters, CancellationToken cancellationToken)
+    {
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Logger.LogDebug("Searching for trakt list: {User}/{List}", parameters.User, parameters.List);
         Either<BaseError, TraktList> maybeList = await TraktApiClient.GetUserList(parameters.User, parameters.List);
 
         foreach (TraktList list in maybeList.RightToSeq())
         {
-            maybeList = await SaveList(dbContext, list);
+            list.User = parameters.User.ToLowerInvariant();
+            maybeList = await SaveList(dbContext, list, cancellationToken);
         }
 
         foreach (TraktList list in maybeList.RightToSeq())
@@ -83,17 +103,20 @@ public partial class AddTraktListHandler : TraktCommandBase, IRequestHandler<Add
         foreach (TraktList list in maybeList.RightToSeq())
         {
             // match list items (and update in search index)
-            maybeList = await MatchListItems(dbContext, list);
+            maybeList = await MatchListItems(dbContext, list, cancellationToken);
         }
 
         return maybeList.Map(_ => Unit.Default);
     }
 
-    private sealed record Parameters(string User, string List);
-
     [GeneratedRegex(@"https:\/\/trakt\.tv\/users\/([\w\-_]+)\/(?:lists\/)?([\w\-_]+)")]
     private static partial Regex UriTraktListRegex();
 
+    [GeneratedRegex(@"https:\/\/trakt\.tv\/lists\/([\w\-_]+)\/([\w\-_]+)")]
+    private static partial Regex UriTraktListRegex2();
+
     [GeneratedRegex(@"([\w\-_]+)\/(?:lists\/)?([\w\-_]+)")]
     private static partial Regex ShorthandTraktListRegex();
+
+    private sealed record Parameters(string User, string List);
 }

@@ -2,11 +2,11 @@
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Scanner.Core.Metadata.Nfo;
-using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IO;
 using NSubstitute;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Scanner.Tests.Core.Metadata.Nfo;
 
@@ -27,9 +27,9 @@ public class MovieNfoReaderTests
         await using var stream =
             new MemoryStream(Encoding.UTF8.GetBytes(@"https://www.themoviedb.org/movie/11-star-wars"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsLeft.Should().BeTrue();
+        result.IsLeft.ShouldBeTrue();
     }
 
     [Test]
@@ -37,9 +37,9 @@ public class MovieNfoReaderTests
     {
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(@"<movie></movie>"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
     }
 
     [Test]
@@ -50,9 +50,9 @@ public class MovieNfoReaderTests
                 @"<movie></movie>
 https://www.themoviedb.org/movie/11-star-wars"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
     }
 
     [Test]
@@ -168,31 +168,32 @@ https://www.themoviedb.org/movie/11-star-wars"));
     <dateadded>2021-03-26 11:35:50</dateadded>
 </movie>"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
 
         foreach (MovieNfo nfo in result.RightToSeq())
         {
-            nfo.Title.Should().Be("Zack Snyder's Justice League");
-            nfo.SortTitle.Should().Be("Justice League 2");
-            nfo.Outline.Should().BeNullOrEmpty();
-            nfo.Year.Should().Be(2021);
-            nfo.ContentRating.Should().Be("Australia:M");
+            nfo.Title.ShouldBe("Zack Snyder's Justice League");
+            nfo.SortTitle.ShouldBe("Justice League 2");
+            nfo.Outline.ShouldBeNullOrEmpty();
+            nfo.Year.ShouldBe(2021);
+            nfo.ContentRating.ShouldBe("Australia:M");
 
-            nfo.Premiered.IsSome.Should().BeTrue();
+            nfo.Premiered.IsSome.ShouldBeTrue();
             foreach (DateTime premiered in nfo.Premiered)
             {
-                premiered.Should().Be(new DateTime(2021, 03, 18));
+                premiered.ShouldBe(new DateTime(2021, 03, 18));
             }
 
-            nfo.Plot.Should().Be(
+            nfo.Plot.ShouldBe(
                 "Determined to ensure Superman's ultimate sacrifice was not in vain, Bruce Wayne aligns forces with Diana Prince with plans to recruit a team of metahumans to protect the world from an approaching threat of catastrophic proportions.");
-            // nfo.Tagline.Should().BeNullOrEmpty();
-            nfo.Genres.Should().BeEquivalentTo(new List<string> { "SuperHero" });
-            nfo.Tags.Should().BeEquivalentTo(new List<string> { "TV Recording" });
-            nfo.Studios.Should().BeEquivalentTo(new List<string> { "Warner Bros. Pictures" });
-            nfo.Actors.Should().BeEquivalentTo(
+            // nfo.Tagline.ShouldBeNullOrEmpty();
+            nfo.Genres.ShouldBeEquivalentTo(new List<string> { "SuperHero" });
+            nfo.Tags.ShouldBeEquivalentTo(new List<string> { "TV Recording" });
+            nfo.Countries.ShouldBeEquivalentTo(new List<string> { "USA" });
+            nfo.Studios.ShouldBeEquivalentTo(new List<string> { "Warner Bros. Pictures" });
+            nfo.Actors.ShouldBeEquivalentTo(
                 new List<ActorNfo>
                 {
                     new()
@@ -211,9 +212,9 @@ https://www.themoviedb.org/movie/11-star-wars"));
                         Thumb = "https://image.tmdb.org/t/p/original/fysvehTvU6bE3JgxaOTRfvQJzJ4.jpg"
                     }
                 });
-            nfo.Writers.Should().BeEquivalentTo(new List<string> { "Chris Terrio" });
-            nfo.Directors.Should().BeEquivalentTo(new List<string> { "Zack Snyder" });
-            nfo.UniqueIds.Should().BeEquivalentTo(
+            nfo.Writers.ShouldBeEquivalentTo(new List<string> { "Chris Terrio" });
+            nfo.Directors.ShouldBeEquivalentTo(new List<string> { "Zack Snyder" });
+            nfo.UniqueIds.ShouldBeEquivalentTo(
                 new List<UniqueIdNfo>
                 {
                     new() { Type = "imdb", Guid = "tt12361974", Default = false },
@@ -227,12 +228,12 @@ https://www.themoviedb.org/movie/11-star-wars"));
     {
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(@"<movie><tag>Test Tag</tag></movie>"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
         foreach (MovieNfo nfo in result.RightToSeq())
         {
-            nfo.Tags.Should().BeEquivalentTo(new List<string> { "Test Tag" });
+            nfo.Tags.ShouldBeEquivalentTo(new List<string> { "Test Tag" });
         }
     }
 
@@ -242,12 +243,12 @@ https://www.themoviedb.org/movie/11-star-wars"));
         await using var stream =
             new MemoryStream(Encoding.UTF8.GetBytes(@"<movie><outline>Test Outline</outline></movie>"));
 
-        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream);
+        Either<BaseError, MovieNfo> result = await _movieNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
         foreach (MovieNfo nfo in result.RightToSeq())
         {
-            nfo.Outline.Should().Be("Test Outline");
+            nfo.Outline.ShouldBe("Test Outline");
         }
     }
 }

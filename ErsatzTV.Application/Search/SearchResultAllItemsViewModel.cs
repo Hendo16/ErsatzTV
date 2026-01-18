@@ -10,4 +10,5 @@ public record SearchResultAllItemsViewModel(
     List<int> OtherVideoIds,
     List<int> FillerIds,
     List<int> SongIds,
-    List<int> ImageIds);
+    List<int> ImageIds,
+    List<int> RemoteStreamIds);

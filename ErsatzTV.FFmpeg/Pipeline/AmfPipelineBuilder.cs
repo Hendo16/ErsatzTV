@@ -3,7 +3,7 @@ using ErsatzTV.FFmpeg.Encoder;
 using ErsatzTV.FFmpeg.Encoder.Amf;
 using ErsatzTV.FFmpeg.Filter;
 using ErsatzTV.FFmpeg.Format;
-using ErsatzTV.FFmpeg.GlobalOption.HardwareAcceleration;
+using ErsatzTV.FFmpeg.OutputFormat;
 using ErsatzTV.FFmpeg.OutputOption;
 using Microsoft.Extensions.Logging;
 
@@ -23,6 +23,7 @@ public class AmfPipelineBuilder : SoftwarePipelineBuilder
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         string reportsFolder,
         string fontsFolder,
         ILogger logger) : base(
@@ -33,6 +34,7 @@ public class AmfPipelineBuilder : SoftwarePipelineBuilder
         watermarkInputFile,
         subtitleInputFile,
         concatInputFile,
+        graphicsEngineInput,
         reportsFolder,
         fontsFolder,
         logger)
@@ -51,13 +53,18 @@ public class AmfPipelineBuilder : SoftwarePipelineBuilder
         FFmpegCapability decodeCapability = _hardwareCapabilities.CanDecode(
             videoStream.Codec,
             videoStream.Profile,
-            videoStream.PixelFormat);
+            videoStream.PixelFormat,
+            videoStream.ColorParams.IsHdr);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
             desiredState.PixelFormat);
 
-        pipelineSteps.Add(new AmfHardwareAccelerationOption());
+        // use software encoding (rawvideo) when piping to parent hls segmenter
+        if (ffmpegState.OutputFormat is OutputFormatKind.Nut)
+        {
+            encodeCapability = FFmpegCapability.Software;
+        }
 
         // disable hw accel if decoder/encoder isn't supported
         return ffmpegState with

@@ -1,15 +1,17 @@
+using System.Text.RegularExpressions;
+using ErsatzTV.Core.Search;
 using Lucene.Net.Analysis;
 using Lucene.Net.Analysis.Core;
 using Lucene.Net.Analysis.Miscellaneous;
 using Lucene.Net.Analysis.Standard;
 using Lucene.Net.QueryParsers.Classic;
 using Lucene.Net.Search;
-using Serilog;
+using Microsoft.Extensions.Logging;
 using Query = Lucene.Net.Search.Query;
 
 namespace ErsatzTV.Infrastructure.Search;
 
-public static class SearchQueryParser
+public partial class SearchQueryParser(ISmartCollectionCache smartCollectionCache, ILogger<SearchQueryParser> logger)
 {
     static SearchQueryParser() => BooleanQuery.MaxClauseCount = 1024 * 4;
 
@@ -17,6 +19,7 @@ public static class SearchQueryParser
     {
         using var defaultAnalyzer = new CustomAnalyzer(LuceneSearchIndex.AppLuceneVersion);
         using var keywordAnalyzer = new KeywordAnalyzer();
+        using var lowercaseKeywordAnalyzer = new LowercaseKeywordAnalyzer(LuceneSearchIndex.AppLuceneVersion);
         var customAnalyzers = new Dictionary<string, Analyzer>
         {
             // StringField should use KeywordAnalyzer
@@ -34,8 +37,10 @@ public static class SearchQueryParser
             { LuceneSearchIndex.ShowContentRatingField, keywordAnalyzer },
             { LuceneSearchIndex.LibraryFolderIdField, keywordAnalyzer },
             { LuceneSearchIndex.VideoCodecField, keywordAnalyzer },
-            { LuceneSearchIndex.VideoDynamicRange, keywordAnalyzer },
+            { LuceneSearchIndex.VideoDynamicRangeField, keywordAnalyzer },
             { LuceneSearchIndex.TagFullField, keywordAnalyzer },
+
+            { LuceneSearchIndex.CollectionField, lowercaseKeywordAnalyzer },
 
             { LuceneSearchIndex.PlotField, new StandardAnalyzer(LuceneSearchIndex.AppLuceneVersion) }
         };
@@ -43,20 +48,92 @@ public static class SearchQueryParser
         return new PerFieldAnalyzerWrapper(defaultAnalyzer, customAnalyzers);
     }
 
-    public static Query ParseQuery(string query)
+    public async Task<Query> ParseQuery(string query, string smartCollectionName, CancellationToken cancellationToken)
     {
+        string parsedQuery = query;
+
+        if (!string.IsNullOrWhiteSpace(smartCollectionName) &&
+            await smartCollectionCache.HasCycle(smartCollectionName, cancellationToken))
+        {
+            logger.LogError("Smart collection {Name} contains a cycle; will not evaluate", smartCollectionName);
+        }
+        else
+        {
+            var replaceCount = 0;
+            while (parsedQuery.Contains("smart_collection"))
+            {
+                if (replaceCount > 100)
+                {
+                    logger.LogWarning("smart_collection query is nested too deep; giving up");
+                    break;
+                }
+
+                ReplaceResult replaceResult = await ReplaceSmartCollections(parsedQuery, cancellationToken);
+                if (replaceResult.Fatal)
+                {
+                    break;
+                }
+
+                if (parsedQuery == replaceResult.Query)
+                {
+                    logger.LogWarning(
+                        "Failed to replace smart_collection in query; is the syntax correct? Quotes are required. Giving up...");
+                    break;
+                }
+
+                parsedQuery = replaceResult.Query;
+
+                replaceCount++;
+            }
+        }
+
         using Analyzer analyzerWrapper = AnalyzerWrapper();
 
-        QueryParser parser = new CustomMultiFieldQueryParser(
+        var parser = new CustomMultiFieldQueryParser(
             LuceneSearchIndex.AppLuceneVersion,
             [LuceneSearchIndex.TitleField],
-            analyzerWrapper);
-        parser.AllowLeadingWildcard = true;
-        Query result = ParseQuery(query, parser);
+            analyzerWrapper)
+        {
+            AllowLeadingWildcard = true
+        };
+        Query result = ParseQuery(parsedQuery, parser);
 
-        Log.Logger.Debug("Search query parsed from [{Query}] to [{ParsedQuery}]", query, result.ToString());
+        logger.LogDebug("Search query parsed from [{Query}] to [{ParsedQuery}]", query, result.ToString());
 
         return result;
+    }
+
+    private async Task<ReplaceResult> ReplaceSmartCollections(string query, CancellationToken cancellationToken)
+    {
+        try
+        {
+            string result = query;
+
+            foreach (Match match in SmartCollectionRegex().Matches(query))
+            {
+                string smartCollectionName = match.Groups[1].Value;
+                if (await smartCollectionCache.HasCycle(smartCollectionName, cancellationToken))
+                {
+                    logger.LogError(
+                        "Smart collection {Name} contains a cycle; will not evaluate",
+                        smartCollectionName);
+                    return new ReplaceResult(query, true);
+                }
+
+                Option<string> maybeQuery = await smartCollectionCache.GetQuery(smartCollectionName, cancellationToken);
+                foreach (string smartCollectionQuery in maybeQuery)
+                {
+                    result = result.Replace(match.Value, $"({smartCollectionQuery})");
+                }
+            }
+
+            return new ReplaceResult(result, false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Unexpected exception replacing smart collections in search query");
+            return new ReplaceResult(query, true);
+        }
     }
 
     private static Query ParseQuery(string searchQuery, QueryParser parser)
@@ -73,4 +150,12 @@ public static class SearchQueryParser
 
         return query;
     }
+
+    [GeneratedRegex(
+        """
+        smart_collection:"([^"]+)"
+        """)]
+    internal static partial Regex SmartCollectionRegex();
+
+    private record ReplaceResult(string Query, bool Fatal);
 }

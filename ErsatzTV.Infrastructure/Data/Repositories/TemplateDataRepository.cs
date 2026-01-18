@@ -1,0 +1,233 @@
+using System.Globalization;
+using ErsatzTV.Core;
+using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Extensions;
+using ErsatzTV.Core.Interfaces.Metadata;
+using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Core.Metadata;
+using ErsatzTV.Infrastructure.Epg;
+using ErsatzTV.Infrastructure.Epg.Models;
+using ErsatzTV.Infrastructure.Extensions;
+using Microsoft.EntityFrameworkCore;
+
+namespace ErsatzTV.Infrastructure.Data.Repositories;
+
+public class TemplateDataRepository(ILocalFileSystem localFileSystem, IDbContextFactory<TvContext> dbContextFactory)
+    : ITemplateDataRepository
+{
+    public async Task<Option<Dictionary<string, object>>> GetMediaItemTemplateData(
+        MediaItem mediaItem,
+        CancellationToken cancellationToken) =>
+        mediaItem switch
+        {
+            Movie => await GetMovieTemplateData(mediaItem.Id, cancellationToken),
+            Episode => await GetEpisodeTemplateData(mediaItem.Id, cancellationToken),
+            MusicVideo => await GetMusicVideoTemplateData(mediaItem.Id, cancellationToken),
+            _ => Option<Dictionary<string, object>>.None
+        };
+
+    public async Task<Option<Dictionary<string, object>>> GetEpgTemplateData(
+        string channelNumber,
+        DateTimeOffset time,
+        int count)
+    {
+        try
+        {
+            string targetFile = Path.Combine(FileSystemLayout.ChannelGuideCacheFolder, $"{channelNumber}.xml");
+            if (localFileSystem.FileExists(targetFile))
+            {
+                await using FileStream stream = File.OpenRead(targetFile);
+                List<EpgProgramme> xmlProgrammes = EpgReader.FindProgrammesAt(stream, time, count);
+                var result = new List<EpgProgrammeTemplateData>();
+
+                foreach (EpgProgramme epgProgramme in xmlProgrammes)
+                {
+                    var data = new EpgProgrammeTemplateData
+                    {
+                        Title = epgProgramme.Title?.Value,
+                        SubTitle = epgProgramme.SubTitle?.Value,
+                        Description = epgProgramme.Description?.Value,
+                        Rating = epgProgramme.Rating?.Value,
+                        Categories = (epgProgramme.Categories ?? []).Map(c => c.Value).ToArray(),
+                        Date = epgProgramme.Date?.Value
+                    };
+
+                    if (DateTimeOffset.TryParseExact(
+                            epgProgramme.Start,
+                            EpgReader.XmlTvDateFormat,
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.None,
+                            out DateTimeOffset start))
+                    {
+                        data.Start = start;
+                    }
+
+                    if (DateTimeOffset.TryParseExact(
+                            epgProgramme.Stop,
+                            EpgReader.XmlTvDateFormat,
+                            CultureInfo.InvariantCulture,
+                            DateTimeStyles.None,
+                            out DateTimeOffset stop))
+                    {
+                        data.Stop = stop;
+                    }
+
+                    result.Add(data);
+                }
+
+                return new Dictionary<string, object>
+                {
+                    [EpgTemplateDataKey.Epg] = result
+                };
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine(e);
+            throw;
+        }
+
+        return Option<Dictionary<string, object>>.None;
+    }
+
+    private async Task<Option<Dictionary<string, object>>> GetMovieTemplateData(int movieId, CancellationToken cancellationToken)
+    {
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        Option<Movie> maybeMovie = await dbContext.Movies
+            .AsNoTracking()
+            .Include(m => m.MediaVersions)
+            .Include(m => m.MovieMetadata)
+            .ThenInclude(mm => mm.Studios)
+            .Include(m => m.MovieMetadata)
+            .ThenInclude(mm => mm.Directors)
+            .Include(m => m.MovieMetadata)
+            .ThenInclude(mm => mm.Genres)
+            .SelectOneAsync(m => m.Id, m => m.Id == movieId, cancellationToken);
+
+        foreach (Movie movie in maybeMovie)
+        {
+            foreach (MovieMetadata metadata in movie.MovieMetadata.HeadOrNone())
+            {
+                return new Dictionary<string, object>
+                {
+                    [MediaItemTemplateDataKey.Title] = metadata.Title,
+                    [MediaItemTemplateDataKey.Plot] = metadata.Plot,
+                    [MediaItemTemplateDataKey.ReleaseDate] = metadata.ReleaseDate,
+                    [MediaItemTemplateDataKey.Studios] = (metadata.Studios ?? []).Map(s => s.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Directors] =
+                        (metadata.Directors ?? []).Map(d => d.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Genres] = (metadata.Genres ?? []).Map(g => g.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Duration] = movie.GetHeadVersion().Duration
+                };
+            }
+        }
+
+        return Option<Dictionary<string, object>>.None;
+    }
+
+    private async Task<Option<Dictionary<string, object>>> GetEpisodeTemplateData(int episodeId, CancellationToken cancellationToken)
+    {
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        Option<Episode> maybeEpisode = await dbContext.Episodes
+            .AsNoTracking()
+            .Include(e => e.MediaVersions)
+            .Include(e => e.Season)
+            .ThenInclude(s => s.Show)
+            .ThenInclude(s => s.ShowMetadata)
+            .Include(e => e.EpisodeMetadata)
+            .ThenInclude(em => em.Studios)
+            .Include(e => e.EpisodeMetadata)
+            .ThenInclude(em => em.Directors)
+            .Include(e => e.EpisodeMetadata)
+            .ThenInclude(em => em.Genres)
+            .SelectOneAsync(e => e.Id, e => e.Id == episodeId, cancellationToken);
+
+        var result = new Dictionary<string, object>();
+
+        foreach (Episode episode in maybeEpisode)
+        {
+            foreach (ShowMetadata showMetadata in Optional(episode.Season?.Show?.ShowMetadata.HeadOrNone()).Flatten())
+            {
+                result.Add(MediaItemTemplateDataKey.ShowTitle, showMetadata.Title);
+                result.Add(MediaItemTemplateDataKey.ShowYear, showMetadata.Year);
+                result.Add(MediaItemTemplateDataKey.ShowContentRating, showMetadata.ContentRating);
+                result.Add(
+                    MediaItemTemplateDataKey.ShowGenres,
+                    (showMetadata.Genres ?? []).Map(s => s.Name).OrderBy(identity));
+            }
+
+            foreach (EpisodeMetadata metadata in episode.EpisodeMetadata.HeadOrNone())
+            {
+                result.Add(MediaItemTemplateDataKey.Title, metadata.Title);
+                result.Add(MediaItemTemplateDataKey.Plot, metadata.Plot);
+                result.Add(MediaItemTemplateDataKey.ReleaseDate, metadata.ReleaseDate);
+                result.Add(
+                    MediaItemTemplateDataKey.Studios,
+                    (metadata.Studios ?? []).Map(s => s.Name).OrderBy(identity));
+                result.Add(
+                    MediaItemTemplateDataKey.Directors,
+                    (metadata.Directors ?? []).Map(s => s.Name).OrderBy(identity));
+                result.Add(
+                    MediaItemTemplateDataKey.Genres,
+                    (metadata.Genres ?? []).Map(s => s.Name).OrderBy(identity));
+                result.Add(MediaItemTemplateDataKey.Duration, episode.GetHeadVersion().Duration);
+            }
+
+            return result;
+        }
+
+        return Option<Dictionary<string, object>>.None;
+    }
+
+    private async Task<Option<Dictionary<string, object>>> GetMusicVideoTemplateData(int musicVideoId, CancellationToken cancellationToken)
+    {
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+
+        Option<MusicVideo> maybeMusicVideo = await dbContext.MusicVideos
+            .AsNoTracking()
+            .Include(mv => mv.MediaVersions)
+            .Include(mv => mv.Artist)
+            .ThenInclude(a => a.ArtistMetadata)
+            .Include(mv => mv.MusicVideoMetadata)
+            .ThenInclude(mvm => mvm.Artists)
+            .Include(mv => mv.MusicVideoMetadata)
+            .ThenInclude(mvm => mvm.Studios)
+            .Include(mv => mv.MusicVideoMetadata)
+            .ThenInclude(mvm => mvm.Directors)
+            .Include(mv => mv.MusicVideoMetadata)
+            .ThenInclude(mvm => mvm.Genres)
+            .SelectOneAsync(mv => mv.Id, mv => mv.Id == musicVideoId, cancellationToken);
+
+        foreach (MusicVideo musicVideo in maybeMusicVideo)
+        {
+            foreach (MusicVideoMetadata metadata in musicVideo.MusicVideoMetadata.HeadOrNone())
+            {
+                string artist = string.Empty;
+                foreach (ArtistMetadata artistMetadata in Optional(musicVideo.Artist?.ArtistMetadata).Flatten())
+                {
+                    artist = artistMetadata.Title;
+                }
+
+                return new Dictionary<string, object>
+                {
+                    [MediaItemTemplateDataKey.Title] = metadata.Title,
+                    [MediaItemTemplateDataKey.Track] = metadata.Track,
+                    [MediaItemTemplateDataKey.Album] = metadata.Album,
+                    [MediaItemTemplateDataKey.Plot] = metadata.Plot,
+                    [MediaItemTemplateDataKey.ReleaseDate] = metadata.ReleaseDate,
+                    [MediaItemTemplateDataKey.Artists] = (metadata.Artists ?? []).Map(a => a.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Artist] = artist,
+                    [MediaItemTemplateDataKey.Studios] = (metadata.Studios ?? []).Map(s => s.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Directors] =
+                        (metadata.Directors ?? []).Map(d => d.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Genres] = (metadata.Genres ?? []).Map(g => g.Name).OrderBy(identity),
+                    [MediaItemTemplateDataKey.Duration] = musicVideo.GetHeadVersion().Duration
+                };
+            }
+        }
+
+        return Option<Dictionary<string, object>>.None;
+    }
+}

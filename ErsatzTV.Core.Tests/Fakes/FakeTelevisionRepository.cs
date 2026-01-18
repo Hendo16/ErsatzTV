@@ -13,14 +13,11 @@ public class FakeTelevisionRepository : ITelevisionRepository
 
     public Task<List<Show>> GetAllShows() => throw new NotSupportedException();
 
-    public Task<Option<Show>> GetShow(int showId) => throw new NotSupportedException();
-
-    public Task<List<ShowMetadata>> GetShowsForCards(List<int> ids) => throw new NotSupportedException();
-    public Task<List<SeasonMetadata>> GetSeasonsForCards(List<int> ids) => throw new NotSupportedException();
-
-    public Task<List<EpisodeMetadata>> GetEpisodesForCards(List<int> ids) => throw new NotSupportedException();
+    public Task<Option<Show>> GetShow(int showId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    public Task<Option<int>> GetShowIdByTitle(int libraryId, string title) => throw new NotSupportedException();
 
     public Task<List<Episode>> GetShowItems(int showId) => throw new NotSupportedException();
+    public Task<List<int>> GetEpisodeIdsForShow(int showId) => throw new NotSupportedException();
 
     public Task<List<Season>> GetAllSeasons() => throw new NotSupportedException();
 
@@ -28,7 +25,11 @@ public class FakeTelevisionRepository : ITelevisionRepository
 
     public Task<int> GetSeasonCount(int showId) => throw new NotSupportedException();
 
-    public Task<List<Season>> GetPagedSeasons(int televisionShowId, int pageNumber, int pageSize) =>
+    public Task<List<Season>> GetPagedSeasons(
+        int televisionShowId,
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken) =>
         throw new NotSupportedException();
 
     public Task<List<Episode>> GetSeasonItems(int seasonId) => throw new NotSupportedException();
@@ -51,7 +52,8 @@ public class FakeTelevisionRepository : ITelevisionRepository
         Season season,
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
-        string path) =>
+        string path,
+        CancellationToken cancellationToken) =>
         throw new NotSupportedException();
 
     public Task<IEnumerable<string>> FindEpisodePaths(LibraryPath libraryPath) => throw new NotSupportedException();
@@ -65,7 +67,7 @@ public class FakeTelevisionRepository : ITelevisionRepository
     public Task<bool> AddGenre(ShowMetadata metadata, Genre genre) => throw new NotSupportedException();
     public Task<bool> AddGenre(EpisodeMetadata metadata, Genre genre) => throw new NotSupportedException();
 
-    public Task<bool> AddTag(ErsatzTV.Core.Domain.Metadata metadata, Tag tag) => throw new NotSupportedException();
+    public Task<bool> AddTag(Core.Domain.Metadata metadata, Tag tag) => throw new NotSupportedException();
 
     public Task<bool> AddStudio(ShowMetadata metadata, Studio studio) => throw new NotSupportedException();
     public Task<bool> AddActor(ShowMetadata metadata, Actor actor) => throw new NotSupportedException();

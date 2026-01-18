@@ -39,6 +39,8 @@ public interface IMetadataRepository
     Task<Unit> MarkAsExternal(FillerMetadata metadata);
     Task<Unit> SetContentRating(MovieMetadata metadata, string contentRating);
     Task<Unit> SetContentRating(OtherVideoMetadata metadata, string contentRating);
+    Task<Unit> SetPlot(MovieMetadata metadata, string plot);
+    Task<Unit> SetPlot(OtherVideoMetadata metadata, string plot);
     Task<Unit> SetContentRating(FillerMetadata metadata, string contentRating);
 
     [SuppressMessage("Naming", "CA1720:Identifier contains type name")]
@@ -49,5 +51,6 @@ public interface IMetadataRepository
 
     Task<bool> RemoveDirector(Director director);
     Task<bool> RemoveWriter(Writer writer);
-    Task<bool> UpdateSubtitles(Domain.Metadata metadata, List<Subtitle> subtitles);
+    Task<bool> UpdateSubtitles(Domain.Metadata metadata, List<Subtitle> subtitles, CancellationToken cancellationToken);
+    Task<bool> UpdateChapters(MediaVersion version, List<MediaChapter> chapters, CancellationToken cancellationToken);
 }

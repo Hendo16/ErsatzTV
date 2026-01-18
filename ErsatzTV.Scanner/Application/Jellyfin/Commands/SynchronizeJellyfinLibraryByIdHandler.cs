@@ -45,7 +45,7 @@ public class
     public async Task<Either<BaseError, string>>
         Handle(SynchronizeJellyfinLibraryById request, CancellationToken cancellationToken)
     {
-        Validation<BaseError, RequestParameters> validation = await Validate(request);
+        Validation<BaseError, RequestParameters> validation = await Validate(request, cancellationToken);
         return await validation.Match(
             parameters => Synchronize(parameters, cancellationToken),
             error => Task.FromResult<Either<BaseError, string>>(error.Join()));
@@ -59,17 +59,6 @@ public class
         DateTimeOffset nextScan = lastScan + TimeSpan.FromHours(parameters.LibraryRefreshInterval);
         if (parameters.ForceScan || parameters.LibraryRefreshInterval > 0 && nextScan < DateTimeOffset.Now)
         {
-            // need the jellyfin admin user id for now
-            Either<BaseError, Unit> syncAdminResult = await _mediator.Send(
-                new SynchronizeJellyfinAdminUserId(parameters.Library.MediaSourceId),
-                cancellationToken);
-
-            foreach (BaseError error in syncAdminResult.LeftToSeq())
-            {
-                _logger.LogError("Error synchronizing jellyfin admin user id: {Error}", error);
-                return error;
-            }
-
             Either<BaseError, Unit> result = parameters.Library.MediaKind switch
             {
                 LibraryMediaKind.Movies =>
@@ -119,18 +108,18 @@ public class
     }
 
     private async Task<Validation<BaseError, RequestParameters>> Validate(
-        SynchronizeJellyfinLibraryById request) =>
+        SynchronizeJellyfinLibraryById request,
+        CancellationToken cancellationToken) =>
         (await ValidateConnection(request), await JellyfinLibraryMustExist(request),
-            await ValidateLibraryRefreshInterval())
-        .Apply(
-            (connectionParameters, jellyfinLibrary, libraryRefreshInterval) =>
-                new RequestParameters(
-                    connectionParameters,
-                    jellyfinLibrary,
-                    request.ForceScan,
-                    libraryRefreshInterval,
-                    request.DeepScan
-                ));
+            await ValidateLibraryRefreshInterval(cancellationToken))
+        .Apply((connectionParameters, jellyfinLibrary, libraryRefreshInterval) =>
+            new RequestParameters(
+                connectionParameters,
+                jellyfinLibrary,
+                request.ForceScan,
+                libraryRefreshInterval,
+                request.DeepScan
+            ));
 
     private Task<Validation<BaseError, ConnectionParameters>> ValidateConnection(
         SynchronizeJellyfinLibraryById request) =>
@@ -141,9 +130,8 @@ public class
     private Task<Validation<BaseError, JellyfinMediaSource>> JellyfinMediaSourceMustExist(
         SynchronizeJellyfinLibraryById request) =>
         _mediaSourceRepository.GetJellyfinByLibraryId(request.JellyfinLibraryId)
-            .Map(
-                v => v.ToValidation<BaseError>(
-                    $"Jellyfin media source for library {request.JellyfinLibraryId} does not exist."));
+            .Map(v => v.ToValidation<BaseError>(
+                $"Jellyfin media source for library {request.JellyfinLibraryId} does not exist."));
 
     private Validation<BaseError, ConnectionParameters> MediaSourceMustHaveActiveConnection(
         JellyfinMediaSource jellyfinMediaSource)
@@ -168,8 +156,8 @@ public class
         _mediaSourceRepository.GetJellyfinLibrary(request.JellyfinLibraryId)
             .Map(v => v.ToValidation<BaseError>($"Jellyfin library {request.JellyfinLibraryId} does not exist."));
 
-    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval() =>
-        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval)
+    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval(CancellationToken cancellationToken) =>
+        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval, cancellationToken)
             .FilterT(lri => lri is >= 0 and < 1_000_000)
             .Map(lri => lri.ToValidation<BaseError>("Library refresh interval is invalid"));
 

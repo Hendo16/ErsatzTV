@@ -17,6 +17,7 @@ public class TvContext : DbContext
 
     public static string LastInsertedRowId { get; set; } = "last_insert_rowid()";
     public static string CaseInsensitiveCollation { get; set; } = "NOCASE";
+    public static bool IsSqlite { get; set; }
 
     public IDbConnection Connection => Database.GetDbConnection();
 
@@ -58,6 +59,8 @@ public class TvContext : DbContext
     public DbSet<Image> Images { get; set; }
     public DbSet<ImageMetadata> ImageMetadata { get; set; }
     public DbSet<ImageFolderDuration> ImageFolderDurations { get; set; }
+    public DbSet<RemoteStream> RemoteStreams { get; set; }
+    public DbSet<RemoteStreamMetadata> RemoteStreamMetadata { get; set; }
     public DbSet<Show> Shows { get; set; }
     public DbSet<ShowMetadata> ShowMetadata { get; set; }
     public DbSet<Season> Seasons { get; set; }
@@ -87,6 +90,7 @@ public class TvContext : DbContext
     public DbSet<ProgramSchedule> ProgramSchedules { get; set; }
     public DbSet<ProgramScheduleItem> ProgramScheduleItems { get; set; }
     public DbSet<Playout> Playouts { get; set; }
+    public DbSet<PlayoutHistory> PlayoutHistory { get; set; }
     public DbSet<ProgramScheduleAlternate> ProgramScheduleAlternates { get; set; }
     public DbSet<PlayoutItem> PlayoutItems { get; set; }
     public DbSet<PlayoutProgramScheduleAnchor> PlayoutProgramScheduleItemAnchors { get; set; }
@@ -111,6 +115,7 @@ public class TvContext : DbContext
     public DbSet<TraktList> TraktLists { get; set; }
     public DbSet<FillerPreset> FillerPresets { get; set; }
     public DbSet<Subtitle> Subtitles { get; set; }
+    public DbSet<GraphicsElement> GraphicsElements { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) =>
         optionsBuilder.UseLoggerFactory(_loggerFactory);
@@ -118,6 +123,12 @@ public class TvContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        // mysql-specific configuration
+        if ((Database.ProviderName ?? string.Empty).Contains("MySql", StringComparison.InvariantCultureIgnoreCase))
+        {
+            modelBuilder.Entity<MediaFile>().Property(mf => mf.Path).HasColumnType("longtext");
+        }
 
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(TvContext).Assembly);
     }

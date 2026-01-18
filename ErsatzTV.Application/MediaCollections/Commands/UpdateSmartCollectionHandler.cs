@@ -5,6 +5,7 @@ using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Search;
 using ErsatzTV.Core.Scheduling;
+using ErsatzTV.Core.Search;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
 using Microsoft.EntityFrameworkCore;
@@ -17,17 +18,20 @@ public class UpdateSmartCollectionHandler : IRequestHandler<UpdateSmartCollectio
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
     private readonly ISearchTargets _searchTargets;
+    private readonly ISmartCollectionCache _smartCollectionCache;
 
     public UpdateSmartCollectionHandler(
         IDbContextFactory<TvContext> dbContextFactory,
         IMediaCollectionRepository mediaCollectionRepository,
         ChannelWriter<IBackgroundServiceRequest> channel,
-        ISearchTargets searchTargets)
+        ISearchTargets searchTargets,
+        ISmartCollectionCache smartCollectionCache)
     {
         _dbContextFactory = dbContextFactory;
         _mediaCollectionRepository = mediaCollectionRepository;
         _channel = channel;
         _searchTargets = searchTargets;
+        _smartCollectionCache = smartCollectionCache;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(
@@ -35,23 +39,29 @@ public class UpdateSmartCollectionHandler : IRequestHandler<UpdateSmartCollectio
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, SmartCollection> validation = await Validate(dbContext, request);
-        return await validation.Apply(c => ApplyUpdateRequest(dbContext, c, request));
+        Validation<BaseError, SmartCollection> validation = await Validate(dbContext, request, cancellationToken);
+        return await validation.Apply(c => ApplyUpdateRequest(dbContext, c, request, cancellationToken));
     }
 
-    private async Task<Unit> ApplyUpdateRequest(TvContext dbContext, SmartCollection c, UpdateSmartCollection request)
+    private async Task<Unit> ApplyUpdateRequest(
+        TvContext dbContext,
+        SmartCollection c,
+        UpdateSmartCollection request,
+        CancellationToken cancellationToken)
     {
         c.Query = request.Query;
+        c.Name = request.Name;
 
         // rebuild playouts
-        if (await dbContext.SaveChangesAsync() > 0)
+        if (await dbContext.SaveChangesAsync(cancellationToken) > 0)
         {
             _searchTargets.SearchTargetsChanged();
+            await _smartCollectionCache.Refresh(cancellationToken);
 
             // refresh all playouts that use this smart collection
             foreach (int playoutId in await _mediaCollectionRepository.PlayoutIdsUsingSmartCollection(request.Id))
             {
-                await _channel.WriteAsync(new BuildPlayout(playoutId, PlayoutBuildMode.Refresh));
+                await _channel.WriteAsync(new BuildPlayout(playoutId, PlayoutBuildMode.Refresh), cancellationToken);
             }
         }
 
@@ -60,12 +70,14 @@ public class UpdateSmartCollectionHandler : IRequestHandler<UpdateSmartCollectio
 
     private static Task<Validation<BaseError, SmartCollection>> Validate(
         TvContext dbContext,
-        UpdateSmartCollection request) => SmartCollectionMustExist(dbContext, request);
+        UpdateSmartCollection request,
+        CancellationToken cancellationToken) => SmartCollectionMustExist(dbContext, request, cancellationToken);
 
     private static Task<Validation<BaseError, SmartCollection>> SmartCollectionMustExist(
         TvContext dbContext,
-        UpdateSmartCollection updateCollection) =>
+        UpdateSmartCollection updateCollection,
+        CancellationToken cancellationToken) =>
         dbContext.SmartCollections
-            .SelectOneAsync(c => c.Id, c => c.Id == updateCollection.Id)
+            .SelectOneAsync(c => c.Id, c => c.Id == updateCollection.Id, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("SmartCollection does not exist."));
 }

@@ -1,6 +1,7 @@
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
 using Microsoft.Extensions.Logging;
+using NCalc;
 
 namespace ErsatzTV.Core.Scheduling.YamlScheduling.Handlers;
 
@@ -10,7 +11,8 @@ public class YamlPlayoutPadUntilHandler(EnumeratorCache enumeratorCache) : YamlP
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutPadUntilInstruction padUntil)
@@ -29,7 +31,17 @@ public class YamlPlayoutPadUntilHandler(EnumeratorCache enumeratorCache) : YamlP
 
             if (timeOnly > result)
             {
-                if (padUntil.Tomorrow)
+                var expression = new Expression(padUntil.Tomorrow);
+                expression.EvaluateParameter += (name, e) =>
+                {
+                    e.Result = name switch
+                    {
+                        "now" => timeOnly.Hour + timeOnly.Minute / 60.0 + timeOnly.Second / 3600.0,
+                        _ => e.Result
+                    };
+                };
+
+                if (expression.Evaluate() as bool? == true)
                 {
                     // this is wrong when offset changes
                     dayOnly = dayOnly.AddDays(1);
@@ -62,18 +74,22 @@ public class YamlPlayoutPadUntilHandler(EnumeratorCache enumeratorCache) : YamlP
 
         foreach (IMediaCollectionEnumerator enumerator in maybeEnumerator)
         {
-            context.CurrentTime = Schedule(
+            context.CurrentTime = await Schedule(
                 context,
                 padUntil.Content,
                 padUntil.Fallback,
                 targetTime,
+                padUntil.StopBeforeEnd,
                 padUntil.DiscardAttempts,
                 padUntil.Trim,
-                offlineTail: true,
-                GetFillerKind(padUntil),
+                padUntil.OfflineTail,
+                GetFillerKind(padUntil, context),
                 padUntil.CustomTitle,
+                padUntil.DisableWatermarks,
                 enumerator,
-                fallbackEnumerator);
+                fallbackEnumerator,
+                executeSequence,
+                logger);
 
             return true;
         }

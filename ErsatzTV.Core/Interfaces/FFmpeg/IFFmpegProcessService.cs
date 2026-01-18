@@ -9,7 +9,7 @@ namespace ErsatzTV.Core.Interfaces.FFmpeg;
 
 public interface IFFmpegProcessService
 {
-    Task<Command> ForPlayoutItem(
+    Task<PlayoutItemResult> ForPlayoutItem(
         string ffmpegPath,
         string ffprobePath,
         bool saveReports,
@@ -26,20 +26,23 @@ public interface IFFmpegProcessService
         DateTimeOffset start,
         DateTimeOffset finish,
         DateTimeOffset now,
-        Option<ChannelWatermark> playoutItemWatermark,
-        Option<ChannelWatermark> globalWatermark,
+        List<WatermarkOptions> watermarks,
+        List<PlayoutItemGraphicsElement> graphicsElements,
         string vaapiDisplay,
         VaapiDriver vaapiDriver,
         string vaapiDevice,
         Option<int> qsvExtraHardwareFrames,
         bool hlsRealtime,
+        StreamInputKind streamInputKind,
         FillerKind fillerKind,
         TimeSpan inPoint,
         TimeSpan outPoint,
+        DateTimeOffset channelStartTime,
         long ptsOffset,
         Option<int> targetFramerate,
-        bool disableWatermarks,
-        Action<FFmpegPipeline> pipelineAction);
+        Option<string> customReportsFolder,
+        Action<FFmpegPipeline> pipelineAction,
+        CancellationToken cancellationToken);
 
     Task<Command> ForError(
         string ffmpegPath,
@@ -77,8 +80,6 @@ public interface IFFmpegProcessService
         string ffprobePath,
         Option<string> subtitleFile,
         Channel channel,
-        Option<ChannelWatermark> playoutItemWatermark,
-        Option<ChannelWatermark> globalWatermark,
         MediaVersion videoVersion,
         string videoPath,
         bool boxBlur,
@@ -88,4 +89,6 @@ public interface IFFmpegProcessService
         int verticalMarginPercent,
         int watermarkWidthPercent,
         CancellationToken cancellationToken);
+
+    Task<Command> SeekTextSubtitle(string ffmpegPath, string inputFile, TimeSpan seek);
 }

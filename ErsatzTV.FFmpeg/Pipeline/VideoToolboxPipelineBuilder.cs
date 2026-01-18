@@ -24,6 +24,7 @@ public class VideoToolboxPipelineBuilder : SoftwarePipelineBuilder
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         string reportsFolder,
         string fontsFolder,
         ILogger logger) : base(
@@ -34,6 +35,7 @@ public class VideoToolboxPipelineBuilder : SoftwarePipelineBuilder
         watermarkInputFile,
         subtitleInputFile,
         concatInputFile,
+        graphicsEngineInput,
         reportsFolder,
         fontsFolder,
         logger)
@@ -52,13 +54,17 @@ public class VideoToolboxPipelineBuilder : SoftwarePipelineBuilder
         FFmpegCapability decodeCapability = _hardwareCapabilities.CanDecode(
             videoStream.Codec,
             videoStream.Profile,
-            videoStream.PixelFormat);
+            videoStream.PixelFormat,
+            videoStream.ColorParams.IsHdr);
         FFmpegCapability encodeCapability = _hardwareCapabilities.CanEncode(
             desiredState.VideoFormat,
             desiredState.VideoProfile,
             desiredState.PixelFormat);
 
-        pipelineSteps.Add(new VideoToolboxHardwareAccelerationOption());
+        if (decodeCapability is FFmpegCapability.Hardware)
+        {
+            pipelineSteps.Add(new VideoToolboxHardwareAccelerationOption());
+        }
 
         // disable hw accel if decoder/encoder isn't supported
         return ffmpegState with

@@ -1,3 +1,4 @@
+using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Scheduling;
 
@@ -6,9 +7,10 @@ namespace ErsatzTV.Application.Scheduling;
 public record DecoViewModel(
     int Id,
     int DecoGroupId,
+    string DecoGroupName,
     string Name,
     DecoMode WatermarkMode,
-    int? WatermarkId,
+    List<WatermarkViewModel> Watermarks,
     bool UseWatermarkDuringFiller,
     DecoMode DefaultFillerMode,
     ProgramScheduleItemCollectionType DefaultFillerCollectionType,

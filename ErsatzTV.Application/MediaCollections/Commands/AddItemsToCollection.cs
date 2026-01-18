@@ -13,4 +13,5 @@ public record AddItemsToCollection(
     List<int> OtherVideoIds,
     List<int> FillerIds,
     List<int> SongIds,
-    List<int> ImageIds) : IRequest<Either<BaseError, Unit>>;
+    List<int> ImageIds,
+    List<int> RemoteStreamIds) : IRequest<Either<BaseError, Unit>>;

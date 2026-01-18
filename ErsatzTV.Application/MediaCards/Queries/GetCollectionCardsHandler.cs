@@ -29,10 +29,10 @@ public class GetCollectionCardsHandler :
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        Option<JellyfinMediaSource> maybeJellyfin = await _mediaSourceRepository.GetAllJellyfin()
+        Option<JellyfinMediaSource> maybeJellyfin = await _mediaSourceRepository.GetAllJellyfin(cancellationToken)
             .Map(list => list.HeadOrNone());
 
-        Option<EmbyMediaSource> maybeEmby = await _mediaSourceRepository.GetAllEmby()
+        Option<EmbyMediaSource> maybeEmby = await _mediaSourceRepository.GetAllEmby(cancellationToken)
             .Map(list => list.HeadOrNone());
 
         return await dbContext.Collections
@@ -80,9 +80,11 @@ public class GetCollectionCardsHandler :
             .ThenInclude(i => (i as Episode).Season)
             .ThenInclude(s => s.Show)
             .ThenInclude(s => s.ShowMetadata)
+            .ThenInclude(sm => sm.Artwork)
             .Include(c => c.MediaItems)
             .ThenInclude(i => (i as Episode).Season)
             .ThenInclude(s => s.SeasonMetadata)
+            .ThenInclude(sm => sm.Artwork)
             .Include(c => c.MediaItems)
             .ThenInclude(i => (i as Episode).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
@@ -110,7 +112,13 @@ public class GetCollectionCardsHandler :
             .Include(c => c.MediaItems)
             .ThenInclude(i => (i as Image).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
-            .SelectOneAsync(c => c.Id, c => c.Id == request.Id)
+            .Include(c => c.MediaItems)
+            .ThenInclude(i => (i as RemoteStream).RemoteStreamMetadata)
+            .ThenInclude(ovm => ovm.Artwork)
+            .Include(c => c.MediaItems)
+            .ThenInclude(i => (i as RemoteStream).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .SelectOneAsync(c => c.Id, c => c.Id == request.Id, cancellationToken)
             .Map(c => c.ToEither(BaseError.New("Unable to load collection")))
             .MapT(c => ProjectToViewModel(c, maybeJellyfin, maybeEmby));
     }

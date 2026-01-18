@@ -6,9 +6,11 @@ public class TonemapFilter : BaseFilter
 {
     private readonly FrameState _currentState;
     private readonly IPixelFormat _desiredPixelFormat;
+    private readonly FFmpegState _ffmpegState;
 
-    public TonemapFilter(FrameState currentState, IPixelFormat desiredPixelFormat)
+    public TonemapFilter(FFmpegState ffmpegState, FrameState currentState, IPixelFormat desiredPixelFormat)
     {
+        _ffmpegState = ffmpegState;
         _currentState = currentState;
         _desiredPixelFormat = desiredPixelFormat;
     }
@@ -17,16 +19,25 @@ public class TonemapFilter : BaseFilter
     {
         get
         {
-            string pixelFormat = _currentState.PixelFormat.Match(pf => pf.FFmpegName, () => string.Empty);
-
             var tonemap =
-                $"setparams=colorspace=bt2020c,zscale=transfer=linear,tonemap=hable,zscale=transfer=bt709,format={_desiredPixelFormat.FFmpegName}";
+                $"zscale=transfer=linear,tonemap={_ffmpegState.TonemapAlgorithm},zscale=transfer=bt709,format={_desiredPixelFormat.FFmpegName}";
 
             if (_currentState.FrameDataLocation == FrameDataLocation.Hardware)
             {
-                if (!string.IsNullOrWhiteSpace(pixelFormat))
+                foreach (IPixelFormat pixelFormat in _currentState.PixelFormat)
                 {
-                    return $"hwdownload,format={pixelFormat},{tonemap}";
+                    if (pixelFormat is PixelFormatCuda or PixelFormatVaapi)
+                    {
+                        foreach (IPixelFormat pf in AvailablePixelFormats.ForPixelFormat(pixelFormat.Name, null))
+                        {
+                            return $"hwdownload,format={pf.FFmpegName},{tonemap}";
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(pixelFormat.FFmpegName))
+                    {
+                        return $"hwdownload,format={pixelFormat.FFmpegName},{tonemap}";
+                    }
                 }
 
                 return $"hwdownload,{tonemap}";

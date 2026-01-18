@@ -1,9 +1,8 @@
-
 [*]
 charset=utf-8
 end_of_line=lf
 trim_trailing_whitespace=true
-insert_final_newline=false
+insert_final_newline=true
 indent_style=space
 indent_size=4
 
@@ -15,7 +14,7 @@ csharp_style_expression_bodied_constructors=true:none
 csharp_style_expression_bodied_methods=true:none
 csharp_style_expression_bodied_properties=true:suggestion
 csharp_style_var_elsewhere=false:suggestion
-csharp_style_var_for_built_in_types=false:suggestion
+csharp_style_var_for_built_in_types=false:none
 csharp_style_var_when_type_is_apparent=true:suggestion
 dotnet_naming_rule.local_constants_rule.severity=warning
 dotnet_naming_rule.local_constants_rule.style=all_upper_style
@@ -42,6 +41,8 @@ resharper_braces_for_for=required
 resharper_braces_for_foreach=required
 resharper_braces_for_ifelse=required
 resharper_braces_for_while=required
+resharper_csharp_arguments_literal=positional
+resharper_csharp_arguments_named=positional
 resharper_csharp_insert_final_newline=true
 resharper_csharp_max_attribute_length_for_same_line=0
 resharper_csharp_place_accessorholder_attribute_on_same_line=never
@@ -66,7 +67,7 @@ resharper_built_in_type_reference_style_highlighting=hint
 resharper_redundant_base_qualifier_highlighting=warning
 resharper_suggest_var_or_type_built_in_types_highlighting=hint
 resharper_suggest_var_or_type_elsewhere_highlighting=hint
-resharper_suggest_var_or_type_simple_types_highlighting=hint
+resharper_suggest_var_or_type_simple_types_highlighting=none
 resharper_web_config_module_not_resolved_highlighting=warning
 resharper_web_config_type_not_resolved_highlighting=warning
 resharper_web_config_wrong_module_highlighting=warning
@@ -84,6 +85,21 @@ tab_width=4
 indent_style = space
 indent_size = 2
 
+[*.json]
+ij_json_array_wrapping = normal
+ij_json_keep_blank_lines_in_code = 0
+ij_json_keep_indents_on_empty_lines = false
+ij_json_keep_line_breaks = true
+ij_json_keep_trailing_comma = false
+ij_json_object_wrapping = normal
+ij_json_property_alignment = do_not_align
+ij_json_space_after_colon = true
+ij_json_space_after_comma = true
+ij_json_space_before_colon = false
+ij_json_space_before_comma = false
+ij_json_spaces_within_braces = true
+ij_json_spaces_within_brackets = true
+ij_json_wrap_long_lines = false
 
 [*.cs]
 # disable CA1848: Use the LoggerMessage delegates`

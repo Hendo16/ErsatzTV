@@ -1,5 +1,6 @@
 ﻿using System.Threading.Channels;
 using ErsatzTV.Application.Playouts;
+using ErsatzTV.Application.Search;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
@@ -16,15 +17,18 @@ public class AddOtherVideoToCollectionHandler :
     private readonly ChannelWriter<IBackgroundServiceRequest> _channel;
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
+    private readonly ChannelWriter<ISearchIndexBackgroundServiceRequest> _searchChannel;
 
     public AddOtherVideoToCollectionHandler(
         IDbContextFactory<TvContext> dbContextFactory,
         IMediaCollectionRepository mediaCollectionRepository,
-        ChannelWriter<IBackgroundServiceRequest> channel)
+        ChannelWriter<IBackgroundServiceRequest> channel,
+        ChannelWriter<ISearchIndexBackgroundServiceRequest> searchChannel)
     {
         _dbContextFactory = dbContextFactory;
         _mediaCollectionRepository = mediaCollectionRepository;
         _channel = channel;
+        _searchChannel = searchChannel;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(
@@ -32,7 +36,7 @@ public class AddOtherVideoToCollectionHandler :
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Parameters> validation = await Validate(dbContext, request);
+        Validation<BaseError, Parameters> validation = await Validate(dbContext, request, cancellationToken);
         return await LanguageExtensions.Apply(
             validation,
             parameters => ApplyAddOtherVideoRequest(dbContext, parameters));
@@ -43,6 +47,8 @@ public class AddOtherVideoToCollectionHandler :
         parameters.Collection.MediaItems.Add(parameters.OtherVideo);
         if (await dbContext.SaveChangesAsync() > 0)
         {
+            await _searchChannel.WriteAsync(new ReindexMediaItems([parameters.OtherVideo.Id]));
+
             // refresh all playouts that use this collection
             foreach (int playoutId in await _mediaCollectionRepository
                          .PlayoutIdsUsingCollection(parameters.Collection.Id))
@@ -56,23 +62,27 @@ public class AddOtherVideoToCollectionHandler :
 
     private static async Task<Validation<BaseError, Parameters>> Validate(
         TvContext dbContext,
-        AddOtherVideoToCollection request) =>
-        (await CollectionMustExist(dbContext, request), await ValidateOtherVideo(dbContext, request))
+        AddOtherVideoToCollection request,
+        CancellationToken cancellationToken) =>
+        (await CollectionMustExist(dbContext, request, cancellationToken),
+            await ValidateOtherVideo(dbContext, request, cancellationToken))
         .Apply((collection, episode) => new Parameters(collection, episode));
 
     private static Task<Validation<BaseError, Collection>> CollectionMustExist(
         TvContext dbContext,
-        AddOtherVideoToCollection request) =>
+        AddOtherVideoToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.Collections
             .Include(c => c.MediaItems)
-            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId)
+            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Collection does not exist."));
 
     private static Task<Validation<BaseError, OtherVideo>> ValidateOtherVideo(
         TvContext dbContext,
-        AddOtherVideoToCollection request) =>
+        AddOtherVideoToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.OtherVideos
-            .SelectOneAsync(m => m.Id, e => e.Id == request.OtherVideoId)
+            .SelectOneAsync(m => m.Id, e => e.Id == request.OtherVideoId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("OtherVideo does not exist"));
 
     private sealed record Parameters(Collection Collection, OtherVideo OtherVideo);

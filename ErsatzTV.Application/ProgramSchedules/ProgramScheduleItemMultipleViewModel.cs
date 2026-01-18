@@ -3,6 +3,7 @@ using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
@@ -13,6 +14,7 @@ public record ProgramScheduleItemMultipleViewModel : ProgramScheduleItemViewMode
         int index,
         StartType startType,
         TimeSpan? startTime,
+        FixedStartTimeBehavior? fixedStartTimeBehavior,
         ProgramScheduleItemCollectionType collectionType,
         MediaCollectionViewModel collection,
         MultiCollectionViewModel multiCollection,
@@ -21,6 +23,7 @@ public record ProgramScheduleItemMultipleViewModel : ProgramScheduleItemViewMode
         NamedMediaItemViewModel mediaItem,
         PlaybackOrder playbackOrder,
         FillWithGroupMode fillWithGroupMode,
+        MultipleMode multipleMode,
         int count,
         string customTitle,
         GuideMode guideMode,
@@ -29,7 +32,7 @@ public record ProgramScheduleItemMultipleViewModel : ProgramScheduleItemViewMode
         FillerPresetViewModel postRollFiller,
         FillerPresetViewModel tailFiller,
         FillerPresetViewModel fallbackFiller,
-        WatermarkViewModel watermark,
+        List<WatermarkViewModel> watermarks,
         string preferredAudioLanguageCode,
         string preferredAudioTitle,
         string preferredSubtitleLanguageCode,
@@ -38,6 +41,7 @@ public record ProgramScheduleItemMultipleViewModel : ProgramScheduleItemViewMode
         index,
         startType,
         startTime,
+        fixedStartTimeBehavior,
         PlayoutMode.Multiple,
         collectionType,
         collection,
@@ -54,12 +58,17 @@ public record ProgramScheduleItemMultipleViewModel : ProgramScheduleItemViewMode
         postRollFiller,
         tailFiller,
         fallbackFiller,
-        watermark,
+        watermarks,
         preferredAudioLanguageCode,
         preferredAudioTitle,
         preferredSubtitleLanguageCode,
-        subtitleMode) =>
+        subtitleMode)
+    {
+        MultipleMode = multipleMode;
         Count = count;
+    }
+
+    public MultipleMode MultipleMode { get; set; }
 
     public int Count { get; }
 }

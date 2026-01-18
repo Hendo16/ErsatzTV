@@ -1,5 +1,4 @@
 ﻿using System.Globalization;
-using ErsatzTV.Application.MediaCards;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Emby;
 using ErsatzTV.Core.Jellyfin;
@@ -13,30 +12,42 @@ internal static class Mapper
         Show show,
         List<string> languages,
         Option<JellyfinMediaSource> maybeJellyfin,
-        Option<EmbyMediaSource> maybeEmby) =>
-        new(
+        Option<EmbyMediaSource> maybeEmby)
+    {
+        MediaSourceKind mediaSourceKind = show.LibraryPath.Library switch
+        {
+            PlexLibrary => MediaSourceKind.Plex,
+            JellyfinLibrary => MediaSourceKind.Jellyfin,
+            EmbyLibrary => MediaSourceKind.Emby,
+            _ => MediaSourceKind.Local
+        };
+
+        return new TelevisionShowViewModel(
             show.Id,
+            show.LibraryPath.LibraryId,
+            mediaSourceKind,
             show.ShowMetadata.HeadOrNone().Map(m => m.Title ?? string.Empty).IfNone(string.Empty),
             show.ShowMetadata.HeadOrNone().Map(m => m.Year?.ToString(CultureInfo.InvariantCulture) ?? string.Empty)
                 .IfNone(string.Empty),
             show.ShowMetadata.HeadOrNone().Map(m => m.Plot ?? string.Empty).IfNone(string.Empty),
             show.ShowMetadata.HeadOrNone().Map(m => GetPoster(m, maybeJellyfin, maybeEmby)).IfNone(string.Empty),
             show.ShowMetadata.HeadOrNone().Map(m => GetFanArt(m, maybeJellyfin, maybeEmby)).IfNone(string.Empty),
-            show.ShowMetadata.HeadOrNone().Map(m => m.Genres.Map(g => g.Name).ToList()).IfNone(new List<string>()),
-            show.ShowMetadata.HeadOrNone().Map(m => m.Tags.Map(g => g.Name).ToList()).IfNone(new List<string>()),
-            show.ShowMetadata.HeadOrNone().Map(m => m.Studios.Map(s => s.Name).ToList())
-                .IfNone(new List<string>()),
+            show.ShowMetadata.HeadOrNone().Map(m => m.Genres.Map(g => g.Name).ToList()).IfNone([]),
+            show.ShowMetadata.HeadOrNone().Map(m =>
+                m.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId)).Map(g => g.Name).ToList()).IfNone([]),
+            show.ShowMetadata.HeadOrNone().Map(m => m.Studios.Map(s => s.Name).ToList()).IfNone([]),
+            show.ShowMetadata.HeadOrNone().Map(m =>
+                m.Tags.Where(t => t.ExternalTypeId == Tag.PlexNetworkTypeId).Map(g => g.Name).ToList()).IfNone([]),
             show.ShowMetadata.HeadOrNone()
-                .Map(
-                    m => (m.ContentRating ?? string.Empty).Split("/").Map(s => s.Trim())
-                        .Where(x => !string.IsNullOrWhiteSpace(x)).ToList()).IfNone(new List<string>()),
+                .Map(m => (m.ContentRating ?? string.Empty).Split("/").Map(s => s.Trim())
+                    .Where(x => !string.IsNullOrWhiteSpace(x)).ToList()).IfNone([]),
             LanguagesForShow(languages),
             show.ShowMetadata.HeadOrNone()
-                .Map(
-                    m => m.Actors.OrderBy(a => a.Order).ThenBy(a => a.Id)
-                        .Map(a => MediaCards.Mapper.ProjectToViewModel(a, maybeJellyfin, maybeEmby))
-                        .ToList())
-                .IfNone(new List<ActorCardViewModel>()));
+                .Map(m => m.Actors.OrderBy(a => a.Order).ThenBy(a => a.Id)
+                    .Map(a => MediaCards.Mapper.ProjectToViewModel(a, maybeJellyfin, maybeEmby))
+                    .ToList())
+                .IfNone([]));
+    }
 
     internal static TelevisionSeasonViewModel ProjectToViewModel(
         Season season,
@@ -104,9 +115,10 @@ internal static class Mapper
         CultureInfo[] allCultures = CultureInfo.GetCultures(CultureTypes.NeutralCultures);
 
         return languages
-            .Map(
-                lang => allCultures.Filter(
-                    ci => string.Equals(ci.ThreeLetterISOLanguageName, lang, StringComparison.OrdinalIgnoreCase)))
+            .Map(lang => allCultures.Filter(ci => string.Equals(
+                ci.ThreeLetterISOLanguageName,
+                lang,
+                StringComparison.OrdinalIgnoreCase)))
             .Flatten()
             .Distinct()
             .ToList();

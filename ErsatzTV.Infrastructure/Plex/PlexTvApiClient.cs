@@ -41,15 +41,14 @@ public class PlexTvApiClient : IPlexTvApiClient
                     clientIdentifier,
                     token.AuthToken);
 
-                var allServers = httpResources.Filter(resource => resource.HttpsRequired == false)
+                var allServers = httpResources.Filter(resource => !resource.HttpsRequired)
                     .Append(httpsResources.Filter(resource => resource.HttpsRequired))
                     .Filter(r => r.Provides.Split(",").Any(p => p == "server"))
                     .ToList();
 
                 IEnumerable<PlexResource> ownedServers = allServers;
 
-                string allowSharedServers = Environment.GetEnvironmentVariable("ETV_ALLOW_SHARED_PLEX_SERVERS");
-                if (string.IsNullOrWhiteSpace(allowSharedServers))
+                if (!SystemEnvironment.AllowSharedPlexServers)
                 {
                     ownedServers = ownedServers.Filter(r => r.Owned);
                 }

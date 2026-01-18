@@ -1,5 +1,6 @@
-using ErsatzTV.Core.Domain;
 using System.Net;
+using ErsatzTV.Application.Artworks;
+using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.Application.Channels;
 
@@ -10,10 +11,12 @@ public record ChannelViewModel(
     string Group,
     string Categories,
     int FFmpegProfileId,
-    string Logo,
+    ArtworkContentTypeModel Logo,
+    ChannelStreamSelectorMode StreamSelectorMode,
+    string StreamSelector,
     string PreferredAudioLanguageCode,
     string PreferredAudioTitle,
-    ChannelProgressMode ProgressMode,
+    ChannelPlayoutMode PlayoutMode,
     StreamingMode StreamingMode,
     int? WatermarkId,
     int? FallbackFillerId,
@@ -22,7 +25,11 @@ public record ChannelViewModel(
     ChannelSubtitleMode SubtitleMode,
     ChannelMusicVideoCreditsMode MusicVideoCreditsMode,
     string MusicVideoCreditsTemplate,
-    ChannelSongVideoMode SongVideoMode)
+    ChannelSongVideoMode SongVideoMode,
+    ChannelTranscodeMode TranscodeMode,
+    ChannelIdleBehavior IdleBehavior,
+    bool IsEnabled,
+    bool ShowInEpg)
 {
     public string WebEncodedName => WebUtility.UrlEncode(Name);
 }

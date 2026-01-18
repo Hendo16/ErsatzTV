@@ -25,10 +25,24 @@ public class QueueLibraryScanByLibraryIdHandler(
 
         Option<Library> maybeLibrary = await dbContext.Libraries
             .AsNoTracking()
-            .SelectOneAsync(l => l.Id, l => l.Id == request.LibraryId);
+            .SelectOneAsync(l => l.Id, l => l.Id == request.LibraryId, cancellationToken);
 
         foreach (Library library in maybeLibrary)
         {
+            bool shouldSyncItems = library switch
+            {
+                PlexLibrary plexLibrary => plexLibrary.ShouldSyncItems,
+                JellyfinLibrary jellyfinLibrary => jellyfinLibrary.ShouldSyncItems,
+                EmbyLibrary embyLibrary => embyLibrary.ShouldSyncItems,
+                _ => true
+            };
+
+            if (!shouldSyncItems)
+            {
+                logger.LogWarning("Library sync is disabled for library id {Id}", library.Id);
+                return false;
+            }
+
             if (locker.LockLibrary(library.Id))
             {
                 logger.LogDebug("Queued library scan for library id {Id}", library.Id);

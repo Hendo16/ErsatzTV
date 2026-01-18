@@ -21,17 +21,17 @@ public class CreateBlockHandler(IDbContextFactory<TvContext> dbContextFactory)
     {
         await dbContext.Blocks.AddAsync(block);
         await dbContext.SaveChangesAsync();
+        await dbContext.Entry(block).Reference(b => b.BlockGroup).LoadAsync();
         return Mapper.ProjectToViewModel(block);
     }
 
     private static async Task<Validation<BaseError, Block>> Validate(TvContext dbContext, CreateBlock request) =>
-        await ValidateBlockName(dbContext, request).MapT(
-            name => new Block
-            {
-                BlockGroupId = request.BlockGroupId,
-                Name = name,
-                Minutes = 30
-            });
+        await ValidateBlockName(dbContext, request).MapT(name => new Block
+        {
+            BlockGroupId = request.BlockGroupId,
+            Name = name,
+            Minutes = 30
+        });
 
     private static async Task<Validation<BaseError, string>> ValidateBlockName(
         TvContext dbContext,

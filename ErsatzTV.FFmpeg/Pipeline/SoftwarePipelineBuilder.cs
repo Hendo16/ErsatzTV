@@ -22,6 +22,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         string reportsFolder,
         string fontsFolder,
         ILogger logger) : base(
@@ -32,6 +33,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
         watermarkInputFile,
         subtitleInputFile,
         concatInputFile,
+        graphicsEngineInput,
         reportsFolder,
         fontsFolder,
         logger) =>
@@ -76,6 +78,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
         VideoStream videoStream,
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         PipelineContext context,
         Option<IDecoder> maybeDecoder,
         FFmpegState ffmpegState,
@@ -85,6 +88,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
     {
         var watermarkOverlayFilterSteps = new List<IPipelineFilterStep>();
         var subtitleOverlayFilterSteps = new List<IPipelineFilterStep>();
+        var graphicsEngineOverlayFilterSteps = new List<IPipelineFilterStep>();
 
         FrameState currentState = desiredState with
         {
@@ -105,6 +109,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
             SetDeinterlace(videoInputFile, context, currentState);
 
             currentState = SetScale(videoInputFile, videoStream, desiredState, currentState);
+            currentState = SetTonemap(videoInputFile, videoStream, ffmpegState, desiredState, currentState);
             currentState = SetPad(videoInputFile, videoStream, desiredState, currentState);
             currentState = SetCrop(videoInputFile, desiredState, currentState);
             SetStillImageLoop(videoInputFile, videoStream, ffmpegState, desiredState, pipelineSteps);
@@ -123,6 +128,10 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
                 desiredState,
                 currentState,
                 watermarkOverlayFilterSteps);
+            SetGraphicsEngine(
+                graphicsEngineInput,
+                desiredState,
+                graphicsEngineOverlayFilterSteps);
         }
 
         // after everything else is done, apply the encoder
@@ -149,10 +158,12 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
 
         return new FilterChain(
             videoInputFile.FilterSteps,
-            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
-            subtitleInputFile.Map(st => st.FilterSteps).IfNone(new List<IPipelineFilterStep>()),
+            watermarkInputFile.Map(wm => wm.FilterSteps).IfNone([]),
+            subtitleInputFile.Map(st => st.FilterSteps).IfNone([]),
+            graphicsEngineInput.Map(ge => ge.FilterSteps).IfNone([]),
             watermarkOverlayFilterSteps,
             subtitleOverlayFilterSteps,
+            graphicsEngineOverlayFilterSteps,
             pixelFormatFilterSteps);
     }
 
@@ -206,7 +217,7 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
 
             foreach (VideoStream watermarkStream in watermark.VideoStreams)
             {
-                if (watermarkStream.StillImage == false)
+                if (!watermarkStream.StillImage)
                 {
                     watermark.AddOption(new DoNotIgnoreLoopInputOption());
                 }
@@ -267,8 +278,6 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
         {
             if (context.HasSubtitleText)
             {
-                videoInputFile.AddOption(new CopyTimestampInputOption());
-
                 var subtitlesFilter = new SubtitlesFilter(fontsFolder, subtitle);
                 videoInputFile.FilterSteps.Add(subtitlesFilter);
             }
@@ -301,6 +310,29 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
         }
     }
 
+    private static void SetGraphicsEngine(
+        Option<GraphicsEngineInput> graphicsEngineInput,
+        FrameState desiredState,
+        List<IPipelineFilterStep> graphicsEngineOverlayFilterSteps)
+    {
+        foreach (GraphicsEngineInput _ in graphicsEngineInput)
+        {
+            foreach (IPixelFormat desiredPixelFormat in desiredState.PixelFormat)
+            {
+                IPixelFormat pf = desiredPixelFormat;
+                if (desiredPixelFormat is PixelFormatNv12 nv12)
+                {
+                    foreach (IPixelFormat availablePixelFormat in AvailablePixelFormats.ForPixelFormat(nv12.Name, null))
+                    {
+                        pf = availablePixelFormat;
+                    }
+                }
+
+                graphicsEngineOverlayFilterSteps.Add(new OverlayGraphicsEngineFilter(pf));
+            }
+        }
+    }
+
     private static FrameState SetPad(
         VideoInputFile videoInputFile,
         VideoStream videoStream,
@@ -312,6 +344,27 @@ public class SoftwarePipelineBuilder : PipelineBuilderBase
             var padStep = new PadFilter(currentState, desiredState.PaddedSize);
             currentState = padStep.NextState(currentState);
             videoInputFile.FilterSteps.Add(padStep);
+        }
+
+        return currentState;
+    }
+
+    private static FrameState SetTonemap(
+        VideoInputFile videoInputFile,
+        VideoStream videoStream,
+        FFmpegState ffmpegState,
+        FrameState desiredState,
+        FrameState currentState)
+    {
+        if (videoStream.ColorParams.IsHdr)
+        {
+            foreach (IPixelFormat pixelFormat in desiredState.PixelFormat)
+            {
+                var tonemapStep = new TonemapFilter(ffmpegState, currentState, pixelFormat);
+                currentState = tonemapStep.NextState(currentState);
+                videoStream.ResetColorParams(ColorParams.Default);
+                videoInputFile.FilterSteps.Add(tonemapStep);
+            }
         }
 
         return currentState;

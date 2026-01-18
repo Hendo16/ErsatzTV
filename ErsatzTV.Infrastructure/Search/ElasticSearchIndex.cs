@@ -1,6 +1,5 @@
 using System.Globalization;
 using Bugsnag;
-using Elastic.Clients.Elasticsearch;
 using Elastic.Clients.Elasticsearch.Aggregations;
 using Elastic.Clients.Elasticsearch.Core.Bulk;
 using Elastic.Clients.Elasticsearch.IndexManagement;
@@ -18,18 +17,21 @@ using Microsoft.Extensions.Logging;
 using ExistsResponse = Elastic.Clients.Elasticsearch.IndexManagement.ExistsResponse;
 using MediaStream = ErsatzTV.Core.Domain.MediaStream;
 using Query = Lucene.Net.Search.Query;
+using ES = Elastic.Clients.Elasticsearch;
 
 namespace ErsatzTV.Infrastructure.Search;
 
 public class ElasticSearchIndex : ISearchIndex
 {
     private readonly List<CultureInfo> _cultureInfos;
-
     private readonly ILogger<ElasticSearchIndex> _logger;
-    private ElasticsearchClient _client;
 
-    public ElasticSearchIndex(ILogger<ElasticSearchIndex> logger)
+    private readonly SearchQueryParser _searchQueryParser;
+    private ES.ElasticsearchClient _client;
+
+    public ElasticSearchIndex(SearchQueryParser searchQueryParser, ILogger<ElasticSearchIndex> logger)
     {
+        _searchQueryParser = searchQueryParser;
         _logger = logger;
         _cultureInfos = CultureInfo.GetCultures(CultureTypes.NeutralCultures).ToList();
     }
@@ -48,15 +50,16 @@ public class ElasticSearchIndex : ISearchIndex
         return exists.IsValidResponse;
     }
 
-    public int Version => 45;
+    public int Version => 48;
 
     public async Task<bool> Initialize(
         ILocalFileSystem localFileSystem,
-        IConfigElementRepository configElementRepository)
+        IConfigElementRepository configElementRepository,
+        CancellationToken cancellationToken)
     {
         _client ??= CreateClient();
 
-        ExistsResponse exists = await _client.Indices.ExistsAsync(IndexName);
+        ExistsResponse exists = await _client.Indices.ExistsAsync(IndexName, cancellationToken);
         if (!exists.IsValidResponse)
         {
             CreateIndexResponse createResponse = await CreateIndex();
@@ -68,9 +71,10 @@ public class ElasticSearchIndex : ISearchIndex
 
     public async Task<Unit> Rebuild(
         ICachingSearchRepository searchRepository,
-        IFallbackMetadataProvider fallbackMetadataProvider)
+        IFallbackMetadataProvider fallbackMetadataProvider,
+        CancellationToken cancellationToken)
     {
-        DeleteIndexResponse deleteResponse = await _client.Indices.DeleteAsync(IndexName);
+        DeleteIndexResponse deleteResponse = await _client.Indices.DeleteAsync(IndexName, cancellationToken);
         if (!deleteResponse.IsValidResponse)
         {
             return Unit.Default;
@@ -82,7 +86,7 @@ public class ElasticSearchIndex : ISearchIndex
             return Unit.Default;
         }
 
-        await foreach (MediaItem mediaItem in searchRepository.GetAllMediaItems())
+        await foreach (MediaItem mediaItem in searchRepository.GetAllMediaItems().WithCancellation(cancellationToken))
         {
             await RebuildItem(searchRepository, fallbackMetadataProvider, mediaItem);
         }
@@ -93,11 +97,12 @@ public class ElasticSearchIndex : ISearchIndex
     public async Task<Unit> RebuildItems(
         ICachingSearchRepository searchRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
-        IEnumerable<int> itemIds)
+        IEnumerable<int> itemIds,
+        CancellationToken cancellationToken)
     {
         foreach (int id in itemIds)
         {
-            foreach (MediaItem mediaItem in await searchRepository.GetItemToIndex(id))
+            foreach (MediaItem mediaItem in await searchRepository.GetItemToIndex(id, cancellationToken))
             {
                 await RebuildItem(searchRepository, fallbackMetadataProvider, mediaItem);
             }
@@ -153,30 +158,37 @@ public class ElasticSearchIndex : ISearchIndex
 
     public async Task<bool> RemoveItems(IEnumerable<int> ids)
     {
-        var deleteBulkRequest = new BulkRequest { Operations = [] };
+        var deleteBulkRequest = new ES.BulkRequest { Operations = [] };
         foreach (int id in ids)
         {
-            var deleteOperation = new BulkDeleteOperation<ElasticSearchItem>(new Id(id)) { Index = IndexName };
+            var deleteOperation = new BulkDeleteOperation<ElasticSearchItem>(new ES.Id(id)) { Index = IndexName };
             deleteBulkRequest.Operations.Add(deleteOperation);
         }
 
-        BulkResponse deleteResponse = await _client.BulkAsync(deleteBulkRequest).ConfigureAwait(false);
+        ES.BulkResponse deleteResponse = await _client.BulkAsync(deleteBulkRequest).ConfigureAwait(false);
         return deleteResponse.IsValidResponse;
     }
 
-    public async Task<SearchResult> Search(IClient client, string query, int skip, int limit)
+    public async Task<SearchResult> Search(
+        IClient client,
+        string query,
+        string smartCollectionName,
+        int skip,
+        int limit,
+        CancellationToken cancellationToken)
     {
         var items = new List<MinimalElasticSearchItem>();
         var totalCount = 0;
 
-        Query parsedQuery = SearchQueryParser.ParseQuery(query);
+        Query parsedQuery = await _searchQueryParser.ParseQuery(query, smartCollectionName, cancellationToken);
 
-        SearchResponse<MinimalElasticSearchItem> response = await _client.SearchAsync<MinimalElasticSearchItem>(
-            s => s.Index(IndexName)
-                .Sort(ss => ss.Field(f => f.SortTitle, fs => fs.Order(SortOrder.Asc)))
+        ES.SearchResponse<MinimalElasticSearchItem> response = await _client.SearchAsync<MinimalElasticSearchItem>(
+            s => s.Indices(IndexName)
+                .Sort(ss => ss.Field(f => f.SortTitle, fs => fs.Order(ES.SortOrder.Asc)))
                 .From(skip)
                 .Size(limit)
-                .QueryLuceneSyntax(parsedQuery.ToString()));
+                .QueryLuceneSyntax(parsedQuery.ToString()),
+            cancellationToken);
 
         if (response.IsValidResponse)
         {
@@ -199,61 +211,61 @@ public class ElasticSearchIndex : ISearchIndex
         // do nothing
     }
 
-    private static ElasticsearchClient CreateClient()
+    private static ES.ElasticsearchClient CreateClient()
     {
-        ElasticsearchClientSettings settings = new ElasticsearchClientSettings(Uri).DefaultIndex(IndexName);
-        return new ElasticsearchClient(settings);
+        ES.ElasticsearchClientSettings settings = new ES.ElasticsearchClientSettings(Uri).DefaultIndex(IndexName);
+        return new ES.ElasticsearchClient(settings);
     }
 
     private async Task<CreateIndexResponse> CreateIndex() =>
         await _client.Indices.CreateAsync<ElasticSearchItem>(
             IndexName,
-            i => i.Mappings(
-                m => m.Properties(
-                    p => p
-                        .Keyword(t => t.Type, t => t.Store())
-                        .Text(t => t.Title, t => t.Store(false))
-                        .Keyword(t => t.SortTitle, t => t.Store(false))
-                        .Text(t => t.LibraryName, t => t.Store(false))
-                        .Keyword(t => t.LibraryId, t => t.Store(false))
-                        .Keyword(t => t.TitleAndYear, t => t.Store(false))
-                        .Keyword(t => t.JumpLetter, t => t.Store())
-                        .Keyword(t => t.State, t => t.Store(false))
-                        .Text(t => t.MetadataKind, t => t.Store(false))
-                        .Text(t => t.Language, t => t.Store(false))
-                        .Text(t => t.LanguageTag, t => t.Store(false))
-                        .Text(t => t.SubLanguage, t => t.Store(false))
-                        .Text(t => t.SubLanguageTag, t => t.Store(false))
-                        .IntegerNumber(t => t.Height, t => t.Store(false))
-                        .IntegerNumber(t => t.Width, t => t.Store(false))
-                        .Keyword(t => t.VideoCodec, t => t.Store(false))
-                        .IntegerNumber(t => t.VideoBitDepth, t => t.Store(false))
-                        .Keyword(t => t.VideoDynamicRange, t => t.Store(false))
-                        .Keyword(t => t.ContentRating, t => t.Store(false))
-                        .Keyword(t => t.ReleaseDate, t => t.Store(false))
-                        .Keyword(t => t.AddedDate, t => t.Store(false))
-                        .Text(t => t.Plot, t => t.Store(false))
-                        .Text(t => t.Genre, t => t.Store(false))
-                        .Text(t => t.Tag, t => t.Store(false))
-                        .Keyword(t => t.TagFull, t => t.Store(false))
-                        .Text(t => t.Studio, t => t.Store(false))
-                        .Text(t => t.Actor, t => t.Store(false))
-                        .Text(t => t.Director, t => t.Store(false))
-                        .Text(t => t.Writer, t => t.Store(false))
-                        .Keyword(t => t.TraktList, t => t.Store(false))
-                        .IntegerNumber(t => t.SeasonNumber, t => t.Store(false))
-                        .Text(t => t.ShowTitle, t => t.Store(false))
-                        .Text(t => t.ShowGenre, t => t.Store(false))
-                        .Text(t => t.ShowTag, t => t.Store(false))
-                        .Text(t => t.ShowStudio, t => t.Store(false))
-                        .Keyword(t => t.ShowContentRating, t => t.Store(false))
-                        .Text(t => t.Style, t => t.Store(false))
-                        .Text(t => t.Mood, t => t.Store(false))
-                        .Text(t => t.Album, t => t.Store(false))
-                        .Text(t => t.Artist, t => t.Store(false))
-                        .IntegerNumber(t => t.EpisodeNumber, t => t.Store(false))
-                        .Text(t => t.AlbumArtist, t => t.Store(false))
-                )));
+            i => i.Mappings(m => m.Properties(p => p
+                .Keyword(t => t.Type, t => t.Store())
+                .Text(t => t.Title, t => t.Store(false))
+                .Keyword(t => t.SortTitle, t => t.Store(false))
+                .Text(t => t.LibraryName, t => t.Store(false))
+                .Keyword(t => t.LibraryId, t => t.Store(false))
+                .Keyword(t => t.TitleAndYear, t => t.Store(false))
+                .Keyword(t => t.JumpLetter, t => t.Store())
+                .Keyword(t => t.State, t => t.Store(false))
+                .Text(t => t.MetadataKind, t => t.Store(false))
+                .Text(t => t.Language, t => t.Store(false))
+                .Text(t => t.LanguageTag, t => t.Store(false))
+                .Text(t => t.SubLanguage, t => t.Store(false))
+                .Text(t => t.SubLanguageTag, t => t.Store(false))
+                .IntegerNumber(t => t.Height, t => t.Store(false))
+                .IntegerNumber(t => t.Width, t => t.Store(false))
+                .Keyword(t => t.VideoCodec, t => t.Store(false))
+                .IntegerNumber(t => t.VideoBitDepth, t => t.Store(false))
+                .Keyword(t => t.VideoDynamicRange, t => t.Store(false))
+                .Keyword(t => t.ContentRating, t => t.Store(false))
+                .Keyword(t => t.ReleaseDate, t => t.Store(false))
+                .Keyword(t => t.AddedDate, t => t.Store(false))
+                .Text(t => t.Plot, t => t.Store(false))
+                .Text(t => t.Genre, t => t.Store(false))
+                .Text(t => t.Tag, t => t.Store(false))
+                .Keyword(t => t.TagFull, t => t.Store(false))
+                .Text(t => t.Studio, t => t.Store(false))
+                .Text(t => t.Network, t => t.Store(false))
+                .Text(t => t.Actor, t => t.Store(false))
+                .Text(t => t.Director, t => t.Store(false))
+                .Text(t => t.Writer, t => t.Store(false))
+                .Keyword(t => t.TraktList, t => t.Store(false))
+                .IntegerNumber(t => t.SeasonNumber, t => t.Store(false))
+                .Text(t => t.ShowTitle, t => t.Store(false))
+                .Text(t => t.ShowGenre, t => t.Store(false))
+                .Text(t => t.ShowTag, t => t.Store(false))
+                .Text(t => t.ShowStudio, t => t.Store(false))
+                .Text(t => t.ShowNetwork, t => t.Store(false))
+                .Keyword(t => t.ShowContentRating, t => t.Store(false))
+                .Text(t => t.Style, t => t.Store(false))
+                .Text(t => t.Mood, t => t.Store(false))
+                .Text(t => t.Album, t => t.Store(false))
+                .Text(t => t.Artist, t => t.Store(false))
+                .IntegerNumber(t => t.EpisodeNumber, t => t.Store(false))
+                .Text(t => t.AlbumArtist, t => t.Store(false))
+            )));
 
     private async Task RebuildItem(
         ISearchRepository searchRepository,
@@ -319,8 +331,12 @@ public class ElasticSearchIndex : ISearchIndex
                     AddedDate = GetAddedDate(metadata.DateAdded),
                     Plot = metadata.Plot ?? string.Empty,
                     Genre = metadata.Genres.Map(g => g.Name).ToList(),
-                    Tag = metadata.Tags.Map(t => t.Name).ToList(),
-                    TagFull = metadata.Tags.Map(t => t.Name).ToList(),
+                    Tag = metadata.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId)).Map(t => t.Name)
+                        .ToList(),
+                    TagFull = metadata.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId)).Map(t => t.Name)
+                        .ToList(),
+                    Country = metadata.Tags.Where(t => t.ExternalTypeId == Tag.NfoCountryTypeId).Map(t => t.Name)
+                        .ToList(),
                     Studio = metadata.Studios.Map(s => s.Name).ToList(),
                     Actor = metadata.Actors.Map(a => a.Name).ToList(),
                     Director = metadata.Directors.Map(d => d.Name).ToList(),
@@ -330,13 +346,14 @@ public class ElasticSearchIndex : ISearchIndex
                 };
 
                 AddStatistics(doc, movie.MediaVersions);
+                AddCollections(doc, movie.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -375,9 +392,13 @@ public class ElasticSearchIndex : ISearchIndex
                     AddedDate = GetAddedDate(metadata.DateAdded),
                     Plot = metadata.Plot ?? string.Empty,
                     Genre = metadata.Genres.Map(g => g.Name).ToList(),
-                    Tag = metadata.Tags.Map(t => t.Name).ToList(),
-                    TagFull = metadata.Tags.Map(t => t.Name).ToList(),
+                    Tag = metadata.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId)).Map(t => t.Name)
+                        .ToList(),
+                    TagFull = metadata.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId)).Map(t => t.Name)
+                        .ToList(),
                     Studio = metadata.Studios.Map(s => s.Name).ToList(),
+                    Network = metadata.Tags.Where(t => t.ExternalTypeId == Tag.PlexNetworkTypeId).Map(t => t.Name)
+                        .ToList(),
                     Actor = metadata.Actors.Map(a => a.Name).ToList(),
                     TraktList = show.TraktListItems.Map(t => t.TraktList.TraktId.ToString(CultureInfo.InvariantCulture))
                         .ToList()
@@ -388,7 +409,7 @@ public class ElasticSearchIndex : ISearchIndex
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -450,7 +471,7 @@ public class ElasticSearchIndex : ISearchIndex
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -497,7 +518,7 @@ public class ElasticSearchIndex : ISearchIndex
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -557,13 +578,14 @@ public class ElasticSearchIndex : ISearchIndex
                 doc.Artist = artists.ToList();
 
                 AddStatistics(doc, musicVideo.MediaVersions);
+                AddCollections(doc, musicVideo.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -630,19 +652,23 @@ public class ElasticSearchIndex : ISearchIndex
                 {
                     doc.ShowTitle = showMetadata.Title;
                     doc.ShowGenre = showMetadata.Genres.Map(g => g.Name).ToList();
-                    doc.ShowTag = showMetadata.Tags.Map(t => t.Name).ToList();
+                    doc.ShowTag = showMetadata.Tags.Where(t => string.IsNullOrWhiteSpace(t.ExternalTypeId))
+                        .Map(t => t.Name).ToList();
                     doc.ShowStudio = showMetadata.Studios.Map(s => s.Name).ToList();
+                    doc.ShowNetwork = showMetadata.Tags.Where(t => t.ExternalTypeId == Tag.PlexNetworkTypeId)
+                        .Map(t => t.Name).ToList();
                     doc.ShowContentRating = GetContentRatings(showMetadata.ContentRating);
                 }
 
                 AddStatistics(doc, episode.MediaVersions);
+                AddCollections(doc, episode.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -735,13 +761,14 @@ public class ElasticSearchIndex : ISearchIndex
                 };
 
                 AddStatistics(doc, otherVideo.MediaVersions);
+                AddCollections(doc, otherVideo.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -783,13 +810,14 @@ public class ElasticSearchIndex : ISearchIndex
                 };
 
                 AddStatistics(doc, song.MediaVersions);
+                AddCollections(doc, song.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -837,13 +865,14 @@ public class ElasticSearchIndex : ISearchIndex
                 }
 
                 AddStatistics(doc, image.MediaVersions);
+                AddCollections(doc, image.Collections);
 
                 foreach ((string key, List<string> value) in GetMetadataGuids(metadata))
                 {
                     doc.AdditionalProperties.Add(key, value);
                 }
 
-                await _client.IndexAsync(doc, index: IndexName);
+                await _client.IndexAsync(doc, IndexName, ES.Id.From(doc));
             }
             catch (Exception ex)
             {
@@ -920,8 +949,10 @@ public class ElasticSearchIndex : ISearchIndex
         var englishNames = new System.Collections.Generic.HashSet<string>();
         foreach (string code in await searchRepository.GetAllThreeLetterLanguageCodes(mediaCodes))
         {
-            Option<CultureInfo> maybeCultureInfo = _cultureInfos.Find(
-                ci => string.Equals(ci.ThreeLetterISOLanguageName, code, StringComparison.OrdinalIgnoreCase));
+            Option<CultureInfo> maybeCultureInfo = _cultureInfos.Find(ci => string.Equals(
+                ci.ThreeLetterISOLanguageName,
+                code,
+                StringComparison.OrdinalIgnoreCase));
             foreach (CultureInfo cultureInfo in maybeCultureInfo)
             {
                 englishNames.Add(cultureInfo.EnglishName);
@@ -941,10 +972,9 @@ public class ElasticSearchIndex : ISearchIndex
 
     private static List<string> GetSubLanguageTags(IEnumerable<MediaVersion> mediaVersions) =>
         mediaVersions
-            .Map(
-                mv => mv.Streams
-                    .Filter(ms => ms.MediaStreamKind is MediaStreamKind.Subtitle or MediaStreamKind.ExternalSubtitle)
-                    .Map(ms => ms.Language))
+            .Map(mv => mv.Streams
+                .Filter(ms => ms.MediaStreamKind is MediaStreamKind.Subtitle or MediaStreamKind.ExternalSubtitle)
+                .Map(ms => ms.Language))
             .Flatten()
             .Filter(s => !string.IsNullOrWhiteSpace(s))
             .Distinct()
@@ -954,6 +984,7 @@ public class ElasticSearchIndex : ISearchIndex
     {
         foreach (MediaVersion version in mediaVersions.HeadOrNone())
         {
+            doc.Chapters = (version.Chapters ?? []).Count;
             doc.Minutes = (int)Math.Ceiling(version.Duration.TotalMinutes);
             doc.Seconds = (int)Math.Ceiling(version.Duration.TotalSeconds);
 
@@ -992,6 +1023,14 @@ public class ElasticSearchIndex : ISearchIndex
         }
     }
 
+    private static void AddCollections(ElasticSearchItem doc, IEnumerable<Collection> collections)
+    {
+        foreach (Collection collection in collections)
+        {
+            doc.Collection.Add(collection.Name);
+        }
+    }
+
     private static Dictionary<string, List<string>> GetMetadataGuids(Core.Domain.Metadata metadata)
     {
         var result = new Dictionary<string, List<string>>();
@@ -1013,10 +1052,11 @@ public class ElasticSearchIndex : ISearchIndex
 
     private async Task<SearchPageMap> GetSearchPageMap(string query, int limit)
     {
-        SearchResponse<MinimalElasticSearchItem> response = await _client.SearchAsync<MinimalElasticSearchItem>(
-            s => s.Index(IndexName)
+        ES.SearchResponse<MinimalElasticSearchItem> response = await _client.SearchAsync<MinimalElasticSearchItem>(s =>
+            s
+                .Indices(IndexName)
                 .Size(0)
-                .Sort(ss => ss.Field(f => f.SortTitle, fs => fs.Order(SortOrder.Asc)))
+                .Sort(ss => ss.Field(f => f.SortTitle, fs => fs.Order(ES.SortOrder.Asc)))
                 .Aggregations(a => a.Add("count", agg => agg.Terms(v => v.Field(i => i.JumpLetter).Size(30))))
                 .QueryLuceneSyntax(query));
 

@@ -9,6 +9,7 @@ public class ConfigElementKey
     public static ConfigElementKey MinimumLogLevel => new("log.minimum_level");
     public static ConfigElementKey MinimumLogLevelScanning => new("log.minimum_level.scanning");
     public static ConfigElementKey MinimumLogLevelScheduling => new("log.minimum_level.scheduling");
+    public static ConfigElementKey MinimumLogLevelSearching => new("log.minimum_level.searching");
     public static ConfigElementKey MinimumLogLevelStreaming => new("log.minimum_level.streaming");
     public static ConfigElementKey MinimumLogLevelHttp => new("log.minimum_level.http");
     public static ConfigElementKey FFmpegPath => new("ffmpeg.ffmpeg_path");
@@ -28,6 +29,7 @@ public class ConfigElementKey
     public static ConfigElementKey SearchIndexVersion => new("search_index.version");
     public static ConfigElementKey HDHRTunerCount => new("hdhr.tuner_count");
     public static ConfigElementKey HDHRUUID => new("hdhr.uuid");
+    public static ConfigElementKey PagesIsDarkMode => new("pages.is_dark_mode");
     public static ConfigElementKey ChannelsPageSize => new("pages.channels.page_size");
     public static ConfigElementKey CollectionsPageSize => new("pages.collections.page_size");
     public static ConfigElementKey MultiCollectionsPageSize => new("pages.multi_collections.page_size");
@@ -45,4 +47,5 @@ public class ConfigElementKey
     public static ConfigElementKey PlayoutSkipMissingItems => new("playout.skip_missing_items");
     public static ConfigElementKey XmltvTimeZone => new("xmltv.time_zone");
     public static ConfigElementKey XmltvDaysToBuild => new("xmltv.days_to_build");
+    public static ConfigElementKey XmltvBlockBehavior => new("xmltv.block_behavior");
 }

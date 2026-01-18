@@ -11,7 +11,8 @@ internal static class Mapper
             programSchedule.KeepMultiPartEpisodesTogether,
             programSchedule.TreatCollectionsAsShows,
             programSchedule.ShuffleScheduleItems,
-            programSchedule.RandomStartPoint);
+            programSchedule.RandomStartPoint,
+            programSchedule.FixedStartTimeBehavior);
 
     internal static ProgramScheduleItemViewModel ProjectToViewModel(ProgramScheduleItem programScheduleItem) =>
         programScheduleItem switch
@@ -22,6 +23,7 @@ internal static class Mapper
                     duration.Index,
                     duration.StartType,
                     duration.StartTime,
+                    duration.FixedStartTimeBehavior,
                     duration.CollectionType,
                     duration.Collection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(duration.Collection)
@@ -64,9 +66,8 @@ internal static class Mapper
                     duration.FallbackFiller != null
                         ? Filler.Mapper.ProjectToViewModel(duration.FallbackFiller)
                         : null,
-                    duration.Watermark != null
-                        ? Watermarks.Mapper.ProjectToViewModel(duration.Watermark)
-                        : null,
+                    duration.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
                     duration.PreferredAudioLanguageCode,
                     duration.PreferredAudioTitle,
                     duration.PreferredSubtitleLanguageCode,
@@ -77,6 +78,7 @@ internal static class Mapper
                     flood.Index,
                     flood.StartType,
                     flood.StartTime,
+                    flood.FixedStartTimeBehavior,
                     flood.CollectionType,
                     flood.Collection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(flood.Collection)
@@ -116,9 +118,8 @@ internal static class Mapper
                     flood.FallbackFiller != null
                         ? Filler.Mapper.ProjectToViewModel(flood.FallbackFiller)
                         : null,
-                    flood.Watermark != null
-                        ? Watermarks.Mapper.ProjectToViewModel(flood.Watermark)
-                        : null,
+                    flood.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
                     flood.PreferredAudioLanguageCode,
                     flood.PreferredAudioTitle,
                     flood.PreferredSubtitleLanguageCode,
@@ -129,6 +130,7 @@ internal static class Mapper
                     multiple.Index,
                     multiple.StartType,
                     multiple.StartTime,
+                    multiple.FixedStartTimeBehavior,
                     multiple.CollectionType,
                     multiple.Collection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(multiple.Collection)
@@ -151,6 +153,7 @@ internal static class Mapper
                     },
                     multiple.PlaybackOrder,
                     multiple.FillWithGroupMode,
+                    multiple.MultipleMode,
                     multiple.Count,
                     multiple.CustomTitle,
                     multiple.GuideMode,
@@ -169,9 +172,8 @@ internal static class Mapper
                     multiple.FallbackFiller != null
                         ? Filler.Mapper.ProjectToViewModel(multiple.FallbackFiller)
                         : null,
-                    multiple.Watermark != null
-                        ? Watermarks.Mapper.ProjectToViewModel(multiple.Watermark)
-                        : null,
+                    multiple.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
                     multiple.PreferredAudioLanguageCode,
                     multiple.PreferredAudioTitle,
                     multiple.PreferredSubtitleLanguageCode,
@@ -182,6 +184,7 @@ internal static class Mapper
                     one.Index,
                     one.StartType,
                     one.StartTime,
+                    one.FixedStartTimeBehavior,
                     one.CollectionType,
                     one.Collection != null
                         ? MediaCollections.Mapper.ProjectToViewModel(one.Collection)
@@ -221,9 +224,8 @@ internal static class Mapper
                     one.FallbackFiller != null
                         ? Filler.Mapper.ProjectToViewModel(one.FallbackFiller)
                         : null,
-                    one.Watermark != null
-                        ? Watermarks.Mapper.ProjectToViewModel(one.Watermark)
-                        : null,
+                    one.ProgramScheduleItemWatermarks.Map(wm => Watermarks.Mapper.ProjectToViewModel(wm.Watermark))
+                        .ToList(),
                     one.PreferredAudioLanguageCode,
                     one.PreferredAudioTitle,
                     one.PreferredSubtitleLanguageCode,

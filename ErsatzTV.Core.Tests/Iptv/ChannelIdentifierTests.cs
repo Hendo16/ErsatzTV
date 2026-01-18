@@ -1,6 +1,6 @@
 using ErsatzTV.Core.Iptv;
-using FluentAssertions;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Core.Tests.Iptv;
 
@@ -16,7 +16,7 @@ public class ChannelIdentifierTests
     public void TestLegacy(string channelNumber, string expected)
     {
         string actual = ChannelIdentifier.LegacyFromNumber(channelNumber);
-        actual.Should().Be(expected);
+        actual.ShouldBe(expected);
     }
 
     [TestCase("1.23", "C1.23.150.ersatztv.org")]
@@ -27,7 +27,7 @@ public class ChannelIdentifierTests
     [TestCase("124", "C124.247.ersatztv.org")]
     public void TestNew(string channelNumber, string expected)
     {
-         string actual = ChannelIdentifier.FromNumber(channelNumber);
-         actual.Should().Be(expected);
+        string actual = ChannelIdentifier.FromNumber(channelNumber);
+        actual.ShouldBe(expected);
     }
 }

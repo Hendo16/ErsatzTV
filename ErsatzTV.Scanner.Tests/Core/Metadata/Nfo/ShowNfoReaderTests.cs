@@ -2,11 +2,11 @@
 using Bugsnag;
 using ErsatzTV.Core;
 using ErsatzTV.Scanner.Core.Metadata.Nfo;
-using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IO;
 using NSubstitute;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Scanner.Tests.Core.Metadata.Nfo;
 
@@ -27,9 +27,9 @@ public class ShowNfoReaderTests
         await using var stream =
             new MemoryStream(Encoding.UTF8.GetBytes(@"https://www.themoviedb.org/movie/11-star-wars"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsLeft.Should().BeTrue();
+        result.IsLeft.ShouldBeTrue();
     }
 
     [Test]
@@ -37,9 +37,9 @@ public class ShowNfoReaderTests
     {
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(@"<tvshow></tvshow>"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
     }
 
     [Test]
@@ -50,9 +50,9 @@ public class ShowNfoReaderTests
                 @"<tvshow></tvshow>
 https://www.themoviedb.org/movie/11-star-wars"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
     }
 
     [Test]
@@ -153,20 +153,20 @@ https://www.themoviedb.org/movie/11-star-wars"));
     </seasons>
 </tvshow>"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
 
         foreach (ShowNfo nfo in result.RightToSeq())
         {
-            nfo.Title.Should().Be("WandaVision");
-            nfo.Year.Should().Be(2021);
-            nfo.Plot.Should().Be(
+            nfo.Title.ShouldBe("WandaVision");
+            nfo.Year.ShouldBe(2021);
+            nfo.Plot.ShouldBe(
                 "Wanda Maximoff and Vision—two super-powered beings living idealized suburban lives—begin to suspect that everything is not as it seems.");
-            nfo.ContentRating.Should().Be("Australia:M");
-            nfo.Genres.Should().BeEquivalentTo(new List<string> { "SuperHero" });
-            nfo.Studios.Should().BeEquivalentTo(new List<string> { "Disney+" });
-            nfo.Actors.Should().BeEquivalentTo(
+            nfo.ContentRating.ShouldBe("Australia:M");
+            nfo.Genres.ShouldBeEquivalentTo(new List<string> { "SuperHero" });
+            nfo.Studios.ShouldBeEquivalentTo(new List<string> { "Disney+" });
+            nfo.Actors.ShouldBeEquivalentTo(
                 new List<ActorNfo>
                 {
                     new()
@@ -180,17 +180,17 @@ https://www.themoviedb.org/movie/11-star-wars"));
                         Thumb = "https://image.tmdb.org/t/p/original/vcAVrAOZrpqmi37qjFdztRAv1u9.jpg"
                     }
                 });
-            nfo.UniqueIds.Should().BeEquivalentTo(
+            nfo.UniqueIds.ShouldBeEquivalentTo(
                 new List<UniqueIdNfo>
                 {
                     new() { Type = "imdb", Guid = "tt9140560", Default = false },
                     new() { Type = "tmdb", Guid = "85271", Default = true },
                     new() { Type = "tvdb", Guid = "362392", Default = false }
                 });
-            nfo.Premiered.IsSome.Should().BeTrue();
+            nfo.Premiered.IsSome.ShouldBeTrue();
             foreach (DateTime premiered in nfo.Premiered)
             {
-                premiered.Should().Be(new DateTime(2021, 1, 15));
+                premiered.ShouldBe(new DateTime(2021, 1, 15));
             }
         }
     }
@@ -201,12 +201,12 @@ https://www.themoviedb.org/movie/11-star-wars"));
         await using var stream =
             new MemoryStream(Encoding.UTF8.GetBytes(@"<tvshow><outline>Test Outline</outline></tvshow>"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
         foreach (ShowNfo nfo in result.RightToSeq())
         {
-            nfo.Outline.Should().Be("Test Outline");
+            nfo.Outline.ShouldBe("Test Outline");
         }
     }
 
@@ -216,12 +216,12 @@ https://www.themoviedb.org/movie/11-star-wars"));
         await using var stream =
             new MemoryStream(Encoding.UTF8.GetBytes(@"<tvshow><tagline>Test Tagline</tagline></tvshow>"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
         foreach (ShowNfo nfo in result.RightToSeq())
         {
-            nfo.Tagline.Should().Be("Test Tagline");
+            nfo.Tagline.ShouldBe("Test Tagline");
         }
     }
 
@@ -230,12 +230,12 @@ https://www.themoviedb.org/movie/11-star-wars"));
     {
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(@"<tvshow><tag>Test Tag</tag></tvshow>"));
 
-        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream);
+        Either<BaseError, ShowNfo> result = await _showNfoReader.Read(stream, string.Empty);
 
-        result.IsRight.Should().BeTrue();
+        result.IsRight.ShouldBeTrue();
         foreach (ShowNfo nfo in result.RightToSeq())
         {
-            nfo.Tags.Should().BeEquivalentTo(new List<string> { "Test Tag" });
+            nfo.Tags.ShouldBeEquivalentTo(new List<string> { "Test Tag" });
         }
     }
 }

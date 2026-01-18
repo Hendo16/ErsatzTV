@@ -32,10 +32,61 @@ internal static class HistoryDetails
 
     public static string KeyForYamlContent(YamlPlayoutContentItem contentItem)
     {
+        var key = new Dictionary<string, object>
+        {
+            { "Key", contentItem.Key },
+            { "Order", contentItem.Order }
+        };
+
+        // we need to ignore history when any of these properties change
+        if (contentItem is YamlPlayoutContentMarathonItem marathonItem)
+        {
+            key["ItemOrder"] = marathonItem.ItemOrder;
+            //key.ShuffleGroups = marathonItem.ShuffleGroups;
+            key["GroupBy"] = marathonItem.GroupBy;
+            //key.PlayAllItems = marathonItem.PlayAllItems;
+        }
+
+        return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
+    }
+
+    public static string KeyForSchedulingContent(string key, PlaybackOrder playbackOrder)
+    {
+        var historyKey = new Dictionary<string, object>
+        {
+            { "Key", key },
+            { "Order", playbackOrder.ToString() }
+        };
+
+        return JsonConvert.SerializeObject(historyKey, Formatting.None, JsonSettings);
+    }
+
+    public static string KeyForSchedulingMarathonContent(string key, PlaybackOrder itemPlaybackOrder, string groupBy)
+    {
+        var historyKey = new Dictionary<string, object>
+        {
+            { "Key", key },
+            { "Order", nameof(PlaybackOrder.None) },
+
+            // we need to ignore history when any of these properties change
+            { "ItemOrder", itemPlaybackOrder.ToString() },
+            { "GroupBy", groupBy }
+        };
+
+        return JsonConvert.SerializeObject(historyKey, Formatting.None, JsonSettings);
+    }
+
+    public static string KeyForCollectionKey(CollectionKey collectionKey)
+    {
         dynamic key = new
         {
-            contentItem.Key,
-            contentItem.Order
+            collectionKey.CollectionType,
+            collectionKey.CollectionId,
+            collectionKey.MultiCollectionId,
+            collectionKey.SmartCollectionId,
+            collectionKey.MediaItemId,
+            collectionKey.PlaylistId,
+            collectionKey.FakeCollectionKey
         };
 
         return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
@@ -50,7 +101,7 @@ internal static class HistoryDetails
             CollectionType = deco.DefaultFillerCollectionType,
             CollectionId = deco.DefaultFillerCollectionId,
             MultiCollectionId = deco.DefaultFillerMultiCollectionId,
-            SmartCollectionId = deco.DefaultFillerSmartCollectionId,
+            SmartCollectionId = deco.DefaultFillerSmartCollectionId
         };
 
         return JsonConvert.SerializeObject(key, Formatting.None, JsonSettings);
@@ -72,7 +123,8 @@ internal static class HistoryDetails
         List<MediaItem> collectionItems,
         string detailsString,
         IMediaCollectionEnumerator enumerator,
-        PlaybackOrder playbackOrder)
+        PlaybackOrder playbackOrder,
+        bool current = false)
     {
         if (playbackOrder is PlaybackOrder.Random)
         {
@@ -116,7 +168,8 @@ internal static class HistoryDetails
                 maybeMatchedItem = fakeItem;
             }
         }
-        else if (maybeMatchedItem.IsNone && playbackOrder is PlaybackOrder.Chronological && details.ReleaseDate.HasValue)
+        else if (maybeMatchedItem.IsNone && playbackOrder is PlaybackOrder.Chronological &&
+                 details.ReleaseDate.HasValue)
         {
             maybeMatchedItem = Optional(collectionItems.Find(ci => MatchReleaseDate(ci, details.ReleaseDate.Value)));
 
@@ -144,7 +197,11 @@ internal static class HistoryDetails
                 Index = copy.IndexOf(matchedItem)
             };
             enumerator.ResetState(state);
-            enumerator.MoveNext();
+
+            if (!current)
+            {
+                enumerator.MoveNext();
+            }
         }
     }
 

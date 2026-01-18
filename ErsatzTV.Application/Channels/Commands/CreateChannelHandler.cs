@@ -22,7 +22,7 @@ public class CreateChannelHandler(
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Channel> validation = await Validate(dbContext, request);
+        Validation<BaseError, Channel> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(c => PersistChannel(dbContext, c));
     }
 
@@ -35,63 +35,77 @@ public class CreateChannelHandler(
         return new CreateChannelResult(channel.Id);
     }
 
-    private static async Task<Validation<BaseError, Channel>> Validate(TvContext dbContext, CreateChannel request) =>
-        (ValidateName(request), await ValidateNumber(dbContext, request),
-            await FFmpegProfileMustExist(dbContext, request),
-            await WatermarkMustExist(dbContext, request),
-            await FillerPresetMustExist(dbContext, request))
-        .Apply(
-            (
-                name,
-                number,
-                ffmpegProfileId,
-                watermarkId,
-                fillerPresetId) =>
+    private static async Task<Validation<BaseError, Channel>> Validate(TvContext dbContext, CreateChannel request, CancellationToken cancellationToken) =>
+        (ValidateName(request), await ValidateNumber(dbContext, request, cancellationToken),
+            await FFmpegProfileMustExist(dbContext, request, cancellationToken),
+            await WatermarkMustExist(dbContext, request, cancellationToken),
+            await FillerPresetMustExist(dbContext, request, cancellationToken))
+        .Apply((
+            name,
+            number,
+            ffmpegProfileId,
+            watermarkId,
+            fillerPresetId) =>
+        {
+            var artwork = new List<Artwork>();
+            if (!string.IsNullOrWhiteSpace(request.Logo?.Path))
             {
-                var artwork = new List<Artwork>();
-                if (!string.IsNullOrWhiteSpace(request.Logo))
+                string logo = request.Logo.Path;
+                if (logo.StartsWith("iptv/logos/", StringComparison.Ordinal))
                 {
-                    artwork.Add(
-                        new Artwork
-                        {
-                            Path = request.Logo,
-                            ArtworkKind = ArtworkKind.Logo,
-                            DateAdded = DateTime.UtcNow,
-                            DateUpdated = DateTime.UtcNow
-                        });
+                    logo = logo.Replace("iptv/logos/", string.Empty);
                 }
 
-                var channel = new Channel(Guid.NewGuid())
-                {
-                    Name = name,
-                    Number = number,
-                    Group = request.Group,
-                    Categories = request.Categories,
-                    FFmpegProfileId = ffmpegProfileId,
-                    ProgressMode = request.ProgressMode,
-                    StreamingMode = request.StreamingMode,
-                    Artwork = artwork,
-                    PreferredAudioLanguageCode = request.PreferredAudioLanguageCode,
-                    PreferredAudioTitle = request.PreferredAudioTitle,
-                    PreferredSubtitleLanguageCode = request.PreferredSubtitleLanguageCode,
-                    SubtitleMode = request.SubtitleMode,
-                    MusicVideoCreditsMode = request.MusicVideoCreditsMode,
-                    MusicVideoCreditsTemplate = request.MusicVideoCreditsTemplate,
-                    SongVideoMode = request.SongVideoMode
-                };
+                artwork.Add(
+                    new Artwork
+                    {
+                        Path = logo,
+                        ArtworkKind = ArtworkKind.Logo,
+                        OriginalContentType = !string.IsNullOrEmpty(request.Logo.ContentType)
+                            ? request.Logo.ContentType
+                            : null,
+                        DateAdded = DateTime.UtcNow,
+                        DateUpdated = DateTime.UtcNow
+                    });
+            }
 
-                foreach (int id in watermarkId)
-                {
-                    channel.WatermarkId = id;
-                }
+            var channel = new Channel(Guid.NewGuid())
+            {
+                Name = name,
+                Number = number,
+                Group = request.Group,
+                Categories = request.Categories,
+                FFmpegProfileId = ffmpegProfileId,
+                PlayoutMode = request.PlayoutMode,
+                StreamingMode = request.StreamingMode,
+                Artwork = artwork,
+                StreamSelectorMode = request.StreamSelectorMode,
+                StreamSelector = request.StreamSelector,
+                PreferredAudioLanguageCode = request.PreferredAudioLanguageCode,
+                PreferredAudioTitle = request.PreferredAudioTitle,
+                PreferredSubtitleLanguageCode = request.PreferredSubtitleLanguageCode,
+                SubtitleMode = request.SubtitleMode,
+                MusicVideoCreditsMode = request.MusicVideoCreditsMode,
+                MusicVideoCreditsTemplate = request.MusicVideoCreditsTemplate,
+                SongVideoMode = request.SongVideoMode,
+                TranscodeMode = request.TranscodeMode,
+                IdleBehavior = request.IdleBehavior,
+                IsEnabled = request.IsEnabled,
+                ShowInEpg = request.IsEnabled && request.ShowInEpg
+            };
 
-                foreach (int id in fillerPresetId)
-                {
-                    channel.FallbackFillerId = id;
-                }
+            foreach (int id in watermarkId)
+            {
+                channel.WatermarkId = id;
+            }
 
-                return channel;
-            });
+            foreach (int id in fillerPresetId)
+            {
+                channel.FallbackFillerId = id;
+            }
+
+            return channel;
+        });
 
     private static Validation<BaseError, string> ValidateName(CreateChannel createChannel) =>
         createChannel.NotEmpty(c => c.Name)
@@ -99,10 +113,11 @@ public class CreateChannelHandler(
 
     private static async Task<Validation<BaseError, string>> ValidateNumber(
         TvContext dbContext,
-        CreateChannel createChannel)
+        CreateChannel createChannel,
+        CancellationToken cancellationToken)
     {
         Option<Channel> maybeExistingChannel = await dbContext.Channels
-            .SelectOneAsync(c => c.Number, c => c.Number == createChannel.Number);
+            .SelectOneAsync(c => c.Number, c => c.Number == createChannel.Number, cancellationToken);
         return maybeExistingChannel.Match<Validation<BaseError, string>>(
             _ => BaseError.New("Channel number must be unique"),
             () =>
@@ -118,9 +133,10 @@ public class CreateChannelHandler(
 
     private static Task<Validation<BaseError, int>> FFmpegProfileMustExist(
         TvContext dbContext,
-        CreateChannel createChannel) =>
+        CreateChannel createChannel,
+        CancellationToken cancellationToken) =>
         dbContext.FFmpegProfiles
-            .CountAsync(p => p.Id == createChannel.FFmpegProfileId)
+            .CountAsync(p => p.Id == createChannel.FFmpegProfileId, cancellationToken)
             .Map(Optional)
             .Filter(c => c > 0)
             .MapT(_ => createChannel.FFmpegProfileId)
@@ -128,7 +144,8 @@ public class CreateChannelHandler(
 
     private static async Task<Validation<BaseError, Option<int>>> WatermarkMustExist(
         TvContext dbContext,
-        CreateChannel createChannel)
+        CreateChannel createChannel,
+        CancellationToken cancellationToken)
     {
         if (createChannel.WatermarkId is null)
         {
@@ -136,7 +153,7 @@ public class CreateChannelHandler(
         }
 
         return await dbContext.ChannelWatermarks
-            .CountAsync(w => w.Id == createChannel.WatermarkId)
+            .CountAsync(w => w.Id == createChannel.WatermarkId, cancellationToken)
             .Map(Optional)
             .Filter(c => c > 0)
             .MapT(_ => Optional(createChannel.WatermarkId))
@@ -145,7 +162,8 @@ public class CreateChannelHandler(
 
     private static async Task<Validation<BaseError, Option<int>>> FillerPresetMustExist(
         TvContext dbContext,
-        CreateChannel createChannel)
+        CreateChannel createChannel,
+        CancellationToken cancellationToken)
     {
         if (createChannel.FallbackFillerId is null)
         {
@@ -154,12 +172,11 @@ public class CreateChannelHandler(
 
         return await dbContext.FillerPresets
             .Filter(fp => fp.FillerKind == FillerKind.Fallback)
-            .CountAsync(w => w.Id == createChannel.FallbackFillerId)
+            .CountAsync(w => w.Id == createChannel.FallbackFillerId, cancellationToken)
             .Map(Optional)
             .Filter(c => c > 0)
             .MapT(_ => Optional(createChannel.FallbackFillerId))
-            .Map(
-                o => o.ToValidation<BaseError>(
-                    $"Fallback filler {createChannel.FallbackFillerId} does not exist."));
+            .Map(o => o.ToValidation<BaseError>(
+                $"Fallback filler {createChannel.FallbackFillerId} does not exist."));
     }
 }

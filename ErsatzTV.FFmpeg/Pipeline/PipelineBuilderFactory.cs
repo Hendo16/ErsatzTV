@@ -23,6 +23,7 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
         Option<WatermarkInputFile> watermarkInputFile,
         Option<SubtitleInputFile> subtitleInputFile,
         Option<ConcatInputFile> concatInputFile,
+        Option<GraphicsEngineInput> graphicsEngineInput,
         Option<string> vaapiDisplay,
         Option<string> vaapiDriver,
         Option<string> vaapiDevice,
@@ -40,20 +41,10 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
             vaapiDriver,
             vaapiDevice);
 
+        bool isHdrContent = videoInputFile.Any(vif => vif.VideoStreams.Any(vs => vs.ColorParams.IsHdr));
+
         return hardwareAccelerationMode switch
         {
-            HardwareAccelerationMode.Nvenc when capabilities is not NoHardwareCapabilities => new NvidiaPipelineBuilder(
-                ffmpegCapabilities,
-                capabilities,
-                hardwareAccelerationMode,
-                videoInputFile,
-                audioInputFile,
-                watermarkInputFile,
-                subtitleInputFile,
-                concatInputFile,
-                reportsFolder,
-                fontsFolder,
-                _logger),
             HardwareAccelerationMode.Vaapi when capabilities is not NoHardwareCapabilities => new VaapiPipelineBuilder(
                 ffmpegCapabilities,
                 capabilities,
@@ -63,9 +54,25 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                 watermarkInputFile,
                 subtitleInputFile,
                 concatInputFile,
+                graphicsEngineInput,
                 reportsFolder,
                 fontsFolder,
                 _logger),
+
+            HardwareAccelerationMode.Nvenc when capabilities is not NoHardwareCapabilities => new NvidiaPipelineBuilder(
+                ffmpegCapabilities,
+                capabilities,
+                hardwareAccelerationMode,
+                videoInputFile,
+                audioInputFile,
+                watermarkInputFile,
+                subtitleInputFile,
+                concatInputFile,
+                graphicsEngineInput,
+                reportsFolder,
+                fontsFolder,
+                _logger),
+
             HardwareAccelerationMode.Qsv when capabilities is not NoHardwareCapabilities => new QsvPipelineBuilder(
                 ffmpegCapabilities,
                 capabilities,
@@ -75,9 +82,25 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                 watermarkInputFile,
                 subtitleInputFile,
                 concatInputFile,
+                graphicsEngineInput,
                 reportsFolder,
                 fontsFolder,
                 _logger),
+
+            // force software pipeline when content is HDR (and not VAAPI or NVENC or QSV)
+            _ when isHdrContent => new SoftwarePipelineBuilder(
+                ffmpegCapabilities,
+                HardwareAccelerationMode.None,
+                videoInputFile,
+                audioInputFile,
+                watermarkInputFile,
+                subtitleInputFile,
+                concatInputFile,
+                graphicsEngineInput,
+                reportsFolder,
+                fontsFolder,
+                _logger),
+
             HardwareAccelerationMode.VideoToolbox when capabilities is not NoHardwareCapabilities => new
                 VideoToolboxPipelineBuilder(
                     ffmpegCapabilities,
@@ -88,9 +111,11 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                     watermarkInputFile,
                     subtitleInputFile,
                     concatInputFile,
+                    graphicsEngineInput,
                     reportsFolder,
                     fontsFolder,
                     _logger),
+
             HardwareAccelerationMode.Amf when capabilities is not NoHardwareCapabilities => new AmfPipelineBuilder(
                 ffmpegCapabilities,
                 capabilities,
@@ -100,9 +125,11 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                 watermarkInputFile,
                 subtitleInputFile,
                 concatInputFile,
+                graphicsEngineInput,
                 reportsFolder,
                 fontsFolder,
                 _logger),
+
             _ => new SoftwarePipelineBuilder(
                 ffmpegCapabilities,
                 HardwareAccelerationMode.None,
@@ -111,6 +138,7 @@ public class PipelineBuilderFactory : IPipelineBuilderFactory
                 watermarkInputFile,
                 subtitleInputFile,
                 concatInputFile,
+                graphicsEngineInput,
                 reportsFolder,
                 fontsFolder,
                 _logger)

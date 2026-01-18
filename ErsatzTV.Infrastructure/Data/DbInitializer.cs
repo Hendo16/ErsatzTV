@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Reflection;
+using Dapper;
 using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.Infrastructure.Data;
@@ -8,6 +9,15 @@ public static class DbInitializer
 {
     public static async Task<Unit> Initialize(TvContext context, CancellationToken cancellationToken)
     {
+        if (TvContext.IsSqlite)
+        {
+            await context.Connection.ExecuteAsync("PRAGMA journal_mode=WAL", cancellationToken);
+        }
+        else
+        {
+            await context.Connection.ExecuteAsync("SET GLOBAL local_infile = true", cancellationToken);
+        }
+
         if (!context.LanguageCodes.Any())
         {
             var assembly = Assembly.GetEntryAssembly();
@@ -42,6 +52,18 @@ public static class DbInitializer
                 }
             }
 
+            await context.SaveChangesAsync(cancellationToken);
+        }
+
+        if (!context.PlaylistGroups.Any(pg => pg.IsSystem))
+        {
+            var pg = new PlaylistGroup
+            {
+                Name = "Trakt Lists",
+                IsSystem = true
+            };
+
+            await context.PlaylistGroups.AddAsync(pg, cancellationToken);
             await context.SaveChangesAsync(cancellationToken);
         }
 
@@ -85,7 +107,9 @@ public static class DbInitializer
             Number = "1",
             Name = "ErsatzTV",
             FFmpegProfile = defaultProfile,
-            StreamingMode = StreamingMode.TransportStreamHybrid
+            StreamingMode = StreamingMode.TransportStreamHybrid,
+            IsEnabled = true,
+            ShowInEpg = true
         };
         await context.Channels.AddAsync(defaultChannel, cancellationToken);
         await context.SaveChangesAsync(cancellationToken);

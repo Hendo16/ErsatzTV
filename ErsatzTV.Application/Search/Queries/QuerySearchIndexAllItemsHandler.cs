@@ -4,32 +4,27 @@ using ErsatzTV.Infrastructure.Search;
 
 namespace ErsatzTV.Application.Search;
 
-public class QuerySearchIndexAllItemsHandler : IRequestHandler<QuerySearchIndexAllItems, SearchResultAllItemsViewModel>
+public class QuerySearchIndexAllItemsHandler(IClient client, ISearchIndex searchIndex)
+    : IRequestHandler<QuerySearchIndexAllItems, SearchResultAllItemsViewModel>
 {
-    private readonly IClient _client;
-    private readonly ISearchIndex _searchIndex;
-
-    public QuerySearchIndexAllItemsHandler(IClient client, ISearchIndex searchIndex)
-    {
-        _client = client;
-        _searchIndex = searchIndex;
-    }
-
     public async Task<SearchResultAllItemsViewModel> Handle(
         QuerySearchIndexAllItems request,
         CancellationToken cancellationToken) =>
         new(
-            await GetIds(LuceneSearchIndex.MovieType, request.Query),
-            await GetIds(LuceneSearchIndex.ShowType, request.Query),
-            await GetIds(LuceneSearchIndex.SeasonType, request.Query),
-            await GetIds(LuceneSearchIndex.EpisodeType, request.Query),
-            await GetIds(LuceneSearchIndex.ArtistType, request.Query),
-            await GetIds(LuceneSearchIndex.MusicVideoType, request.Query),
-            await GetIds(LuceneSearchIndex.OtherVideoType, request.Query),
-            await GetIds(LuceneSearchIndex.FillerType, request.Query),
-            await GetIds(LuceneSearchIndex.SongType, request.Query),
-            await GetIds(LuceneSearchIndex.ImageType, request.Query));
+            await GetIds(LuceneSearchIndex.MovieType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.ShowType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.SeasonType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.EpisodeType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.ArtistType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.MusicVideoType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.OtherVideoType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.FillerType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.SongType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.ImageType, request.Query, cancellationToken),
+            await GetIds(LuceneSearchIndex.RemoteStreamType, request.Query, cancellationToken));
 
-    private async Task<List<int>> GetIds(string type, string query) =>
-        (await _searchIndex.Search(_client, $"type:{type} AND ({query})", 0, 0)).Items.Map(i => i.Id).ToList();
+    private async Task<List<int>> GetIds(string type, string query, CancellationToken cancellationToken) =>
+        (await searchIndex.Search(client, $"type:{type} AND ({query})", string.Empty, 0, 0, cancellationToken)).Items
+        .Map(i => i.Id)
+        .ToList();
 }

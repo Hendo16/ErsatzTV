@@ -19,17 +19,15 @@ public class GetAllPlayoutsHandler : IRequestHandler<GetAllPlayouts, List<Playou
             .AsNoTracking()
             .Include(p => p.ProgramSchedule)
             .Filter(p => p.Channel != null)
-            .Map(
-                p => new PlayoutNameViewModel(
-                    p.Id,
-                    p.ProgramSchedulePlayoutType,
-                    p.Channel.Name,
-                    p.Channel.Number,
-                    p.Channel.ProgressMode,
-                    p.ProgramScheduleId == null ? string.Empty : p.ProgramSchedule.Name,
-                    p.TemplateFile,
-                    p.ExternalJsonFile,
-                    p.DailyRebuildTime))
+            .Map(p => new PlayoutNameViewModel(
+                p.Id,
+                p.ScheduleKind,
+                p.Channel.Name,
+                p.Channel.Number,
+                p.Channel.PlayoutMode,
+                p.ProgramScheduleId == null ? string.Empty : p.ProgramSchedule.Name,
+                p.ScheduleFile,
+                p.DailyRebuildTime))
             .ToListAsync(cancellationToken);
     }
 }

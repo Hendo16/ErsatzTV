@@ -16,7 +16,9 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly ILogger<PlexOtherVideoRepository> _logger;
 
-    public PlexOtherVideoRepository(IDbContextFactory<TvContext> dbContextFactory, ILogger<PlexOtherVideoRepository> logger)
+    public PlexOtherVideoRepository(
+        IDbContextFactory<TvContext> dbContextFactory,
+        ILogger<PlexOtherVideoRepository> logger)
     {
         _dbContextFactory = dbContextFactory;
         _logger = logger;
@@ -147,9 +149,10 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
     public async Task<Either<BaseError, MediaItemScanResult<PlexOtherVideo>>> GetOrAdd(
         PlexLibrary library,
         PlexOtherVideo item,
-        bool deepScan)
+        bool deepScan,
+        CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         Option<PlexOtherVideo> maybeExisting = await dbContext.PlexOtherVideos
             .AsNoTracking()
             .Include(i => i.OtherVideoMetadata)
@@ -177,7 +180,7 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
             .ThenInclude(lp => lp.Library)
             .Include(i => i.TraktListItems)
             .ThenInclude(tli => tli.TraktList)
-            .SelectOneAsync(i => i.Key, i => i.Key == item.Key);
+            .SelectOneAsync(i => i.Key, i => i.Key == item.Key, cancellationToken);
 
         foreach (PlexOtherVideo plexOtherVideo in maybeExisting)
         {
@@ -191,7 +194,7 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
             return result;
         }
 
-        return await AddOtherVideo(dbContext, library, item);
+        return await AddOtherVideo(dbContext, library, item, cancellationToken);
     }
 
     public async Task<Unit> SetEtag(PlexOtherVideo otherVideo, string etag)
@@ -205,11 +208,17 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
     private async Task<Either<BaseError, MediaItemScanResult<PlexOtherVideo>>> AddOtherVideo(
         TvContext dbContext,
         PlexLibrary library,
-        PlexOtherVideo item)
+        PlexOtherVideo item,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (await MediaItemRepository.MediaFileAlreadyExists(item, library.Paths.Head().Id, dbContext, _logger))
+            if (await MediaItemRepository.MediaFileAlreadyExists(
+                    item,
+                    library.Paths.Head().Id,
+                    dbContext,
+                    _logger,
+                    cancellationToken))
             {
                 return new MediaFileAlreadyExists();
             }
@@ -220,14 +229,14 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
 
             item.LibraryPathId = library.Paths.Head().Id;
 
-            await dbContext.PlexOtherVideos.AddAsync(item);
-            await dbContext.SaveChangesAsync();
+            await dbContext.PlexOtherVideos.AddAsync(item, cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
 
             // restore etag
             item.Etag = etag;
 
-            await dbContext.Entry(item).Reference(i => i.LibraryPath).LoadAsync();
-            await dbContext.Entry(item.LibraryPath).Reference(lp => lp.Library).LoadAsync();
+            await dbContext.Entry(item).Reference(i => i.LibraryPath).LoadAsync(cancellationToken);
+            await dbContext.Entry(item.LibraryPath).Reference(lp => lp.Library).LoadAsync(cancellationToken);
             return new MediaItemScanResult<PlexOtherVideo>(item) { IsAdded = true };
         }
         catch (Exception ex)
@@ -236,7 +245,10 @@ public class PlexOtherVideoRepository : IPlexOtherVideoRepository
         }
     }
 
-    private static async Task UpdateOtherVideoPath(TvContext dbContext, PlexOtherVideo existing, PlexOtherVideo incoming)
+    private static async Task UpdateOtherVideoPath(
+        TvContext dbContext,
+        PlexOtherVideo existing,
+        PlexOtherVideo incoming)
     {
         // library path is used for search indexing later
         incoming.LibraryPath = existing.LibraryPath;

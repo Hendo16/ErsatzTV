@@ -16,6 +16,7 @@ public interface ILocalMetadataProvider
     Task<bool> RefreshSidecarMetadata(FillerMediaItem filler, string nfoFileName);
     Task<bool> RefreshTagMetadata(Song song);
     Task<bool> RefreshTagMetadata(Image image, double? durationSeconds);
+    Task<bool> RefreshTagMetadata(RemoteStream remoteStream, CancellationToken cancellationToken);
     Task<bool> RefreshFallbackMetadata(Movie movie);
     Task<bool> RefreshFallbackMetadata(Episode episode);
     Task<bool> RefreshFallbackMetadata(Artist artist, string artistFolder);
@@ -24,5 +25,6 @@ public interface ILocalMetadataProvider
     Task<bool> RefreshFallbackMetadata(FillerMediaItem filler);
     Task<bool> RefreshFallbackMetadata(Song song);
     Task<bool> RefreshFallbackMetadata(Image image);
+    Task<bool> RefreshFallbackMetadata(RemoteStream remoteStream, CancellationToken cancellationToken);
     Task<bool> RefreshFallbackMetadata(Show televisionShow, string showFolder);
 }

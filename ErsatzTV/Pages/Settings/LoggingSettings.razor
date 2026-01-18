@@ -1,0 +1,127 @@
+@page "/settings/logging"
+@using ErsatzTV.Application.Configuration
+@using Serilog.Events
+@implements IDisposable
+@inject IMediator Mediator
+@inject ISnackbar Snackbar
+@inject ILogger<LoggingSettings> Logger
+
+<MudForm Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(_ => SaveLoggingSettings())" Class="ml-6" StartIcon="@Icons.Material.Filled.Save">Save Settings</MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">Logging</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Default Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.DefaultMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Scanning Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.ScanningMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Scheduling Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.SchedulingMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Searching Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.SearchingMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Streaming Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.StreamingMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Request Logging Minimum Log Level</MudText>
+                </div>
+                <MudSelect @bind-Value="_loggingSettings.HttpMinimumLogLevel">
+                    <MudSelectItem Value="@LogEventLevel.Debug">Debug</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Information">Information</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Warning">Warning</MudSelectItem>
+                    <MudSelectItem Value="@LogEventLevel.Error">Error</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+        </MudContainer>
+    </div>
+</MudForm>
+
+@code {
+    private CancellationTokenSource _cts;
+
+    private LoggingSettingsViewModel _loggingSettings = new();
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        try
+        {
+            _loggingSettings = await Mediator.Send(new GetLoggingSettings(), token);
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
+        }
+    }
+
+    private async Task SaveLoggingSettings()
+    {
+        Either<BaseError, Unit> result = await Mediator.Send(new UpdateLoggingSettings(_loggingSettings), _cts.Token);
+        result.Match(
+            Left: error =>
+            {
+                Snackbar.Add(error.Value, Severity.Error);
+                Logger.LogError("Unexpected error saving logging settings: {Error}", error.Value);
+            },
+            Right: _ => Snackbar.Add("Successfully saved logging settings", Severity.Success));
+    }
+
+}

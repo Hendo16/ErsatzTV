@@ -1,0 +1,307 @@
+@page "/system/troubleshooting/playback"
+@using ErsatzTV.Application.FFmpegProfiles
+@using ErsatzTV.Application.Graphics
+@using ErsatzTV.Application.MediaItems
+@using ErsatzTV.Application.Troubleshooting
+@using ErsatzTV.Application.Troubleshooting.Queries
+@using ErsatzTV.Application.Watermarks
+@using ErsatzTV.Core.Notifications
+@using MediatR.Courier
+@implements IDisposable
+@inject IMediator Mediator
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JsRuntime
+@inject IEntityLocker Locker
+@inject ICourier Courier;
+@inject ISnackbar Snackbar;
+
+<MudForm Style="max-height: 100%">
+    <MudPaper Square="true" Style="display: flex; height: 64px; min-height: 64px; width: 100%; z-index: 100; align-items: center">
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Secondary"
+                   Class="ml-6"
+                   StartIcon="@Icons.Material.Filled.Download"
+                   Disabled="@(!_hasPlayed || Locker.IsTroubleshootingPlaybackLocked())"
+                   OnClick="@DownloadResults">
+            Download Results
+        </MudButton>
+    </MudPaper>
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">Media Item</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Media Item ID</MudText>
+                </div>
+                <MudTextField T="int?" Value="MediaItemId" ValueChanged="@(async x => await OnMediaItemIdChanged(x, CancellationToken.None))"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Title</MudText>
+                </div>
+                <MudTextField Value="@(_info?.Title)" Disabled="true"/>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">Playback Settings</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>FFmpeg Profile</MudText>
+                </div>
+                <MudSelect @bind-Value="_ffmpegProfileId" For="@(() => _ffmpegProfileId)">
+                    @foreach (FFmpegProfileViewModel profile in _ffmpegProfiles)
+                    {
+                        <MudSelectItem Value="@profile.Id">@profile.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Subtitle</MudText>
+                </div>
+                <MudSelect @bind-Value="_subtitleId" For="@(() => _subtitleId)" Clearable="true">
+                    <MudSelectItem T="int?" Value="@((int?)null)">(none)</MudSelectItem>
+                    @foreach (SubtitleViewModel subtitleStream in _subtitleStreams)
+                    {
+                        <MudSelectItem T="int?" Value="@subtitleStream.Id">@($"{subtitleStream.Id}: {subtitleStream.Language} - {subtitleStream.Title} ({subtitleStream.Codec})")</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Watermarks</MudText>
+                </div>
+                <MudSelect T="string" @bind-SelectedValues="_watermarkNames" Clearable="true" MultiSelection="true">
+                    @foreach (WatermarkViewModel watermark in _watermarks)
+                    {
+                        <MudSelectItem T="string" Value="@watermark.Name">@watermark.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Graphics Elements</MudText>
+                </div>
+                <MudSelect T="string" @bind-SelectedValues="_graphicsElementNames" Clearable="true" MultiSelection="true">
+                    @foreach (GraphicsElementViewModel graphicsElement in _graphicsElements)
+                    {
+                        <MudSelectItem T="string" Value="@graphicsElement.Name">@graphicsElement.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Start From Beginning</MudText>
+                </div>
+                <MudCheckBox T="bool"
+                             Dense="true"
+                             Disabled="@(string.Equals(_info?.Kind, "RemoteStream", StringComparison.OrdinalIgnoreCase))"
+                             ValueChanged="@(c => OnStartFromBeginningChanged(c))"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
+                    <MudText>Seek Seconds</MudText>
+                </div>
+                <MudTextField @bind-Value="@(_seekSeconds)" Disabled="@(_startFromBeginning)"/>
+            </MudStack>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">Preview</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex"></div>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.PlayCircle"
+                           Disabled="@(Locker.IsTroubleshootingPlaybackLocked() || MediaItemId is null)"
+                           OnClick="@PreviewChannel">
+                    Play
+                </MudButton>
+            </MudStack>
+            <div class="d-flex" style="width: 100%">
+                <media-controller style="aspect-ratio: 16/9; width: 100%">
+                    <video id="video" slot="media"></video>
+                    <media-control-bar>
+                        <media-play-button></media-play-button>
+                        <media-mute-button></media-mute-button>
+                        <media-volume-range></media-volume-range>
+                        <media-fullscreen-button></media-fullscreen-button>
+                    </media-control-bar>
+                </media-controller>
+                <div class="d-none d-md-flex" style="width: 400px"></div>
+            </div>
+            <div class="mb-6">
+                <br/>
+                <br/>
+            </div>
+        </MudContainer>
+    </div>
+</MudForm>
+
+@code {
+    private CancellationTokenSource _cts;
+
+    private readonly List<FFmpegProfileViewModel> _ffmpegProfiles = [];
+    private readonly List<WatermarkViewModel> _watermarks = [];
+    private readonly List<SubtitleViewModel> _subtitleStreams = [];
+    private readonly List<GraphicsElementViewModel> _graphicsElements = [];
+    private MediaItemInfo _info;
+    private int _ffmpegProfileId;
+    private IEnumerable<string> _watermarkNames = new System.Collections.Generic.HashSet<string>();
+    private IEnumerable<string> _graphicsElementNames = new System.Collections.Generic.HashSet<string>();
+    private bool _startFromBeginning;
+    private int? _subtitleId;
+    private int _seekSeconds;
+    private bool _hasPlayed;
+
+    [SupplyParameterFromQuery(Name = "mediaItem")]
+    public int? MediaItemId { get; set; }
+
+    public void Dispose()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    protected override void OnInitialized()
+    {
+        Locker.OnTroubleshootingPlaybackChanged += LockChanged;
+        Courier.Subscribe<PlaybackTroubleshootingCompletedNotification>(HandleTroubleshootingCompleted);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        try
+        {
+            _ffmpegProfiles.Clear();
+            _ffmpegProfiles.AddRange(await Mediator.Send(new GetAllFFmpegProfiles(), token));
+            if (_ffmpegProfiles.Count > 0)
+            {
+                _ffmpegProfileId = _ffmpegProfiles.Map(f => f.Id).Head();
+            }
+
+            _watermarks.Clear();
+            _watermarks.AddRange(await Mediator.Send(new GetAllWatermarks(), token));
+
+            await Mediator.Send(new RefreshGraphicsElements(), token);
+            _graphicsElements.Clear();
+            _graphicsElements.AddRange(await Mediator.Send(new GetAllGraphicsElements(), token));
+
+            if (MediaItemId is not null)
+            {
+                await OnMediaItemIdChanged(MediaItemId, token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
+        }
+    }
+
+    private void OnStartFromBeginningChanged(bool value)
+    {
+        _startFromBeginning = value;
+        _seekSeconds = value ? 0 : (int)Math.Round((_info?.Duration.TotalSeconds ?? 0) / 2.0);
+    }
+
+    private void LockChanged(object sender, EventArgs e) => InvokeAsync(StateHasChanged);
+
+    private async Task PreviewChannel()
+    {
+        var uri = new UriBuilder(NavigationManager.ToAbsoluteUri(NavigationManager.Uri));
+        uri.Path = uri.Path.Replace("/system/troubleshooting/playback", "/api/troubleshoot/playback.m3u8");
+        uri.Query = $"?mediaItem={MediaItemId}&ffmpegProfile={_ffmpegProfileId}&seekSeconds={_seekSeconds}";
+        foreach (string watermarkName in _watermarkNames)
+        {
+            foreach (WatermarkViewModel watermark in _watermarks.Where(wm => wm.Name == watermarkName))
+            {
+                uri.Query += $"&watermark={watermark.Id}";
+            }
+        }
+
+        foreach (string graphicsElementName in _graphicsElementNames)
+        {
+            foreach (GraphicsElementViewModel graphicsElement in _graphicsElements.Where(ge => ge.Name == graphicsElementName))
+            {
+                uri.Query += $"&graphicsElement={graphicsElement.Id}";
+            }
+        }
+
+        if (_subtitleId is not null)
+        {
+            uri.Query += $"&subtitleId={_subtitleId.Value}";
+        }
+
+        await JsRuntime.InvokeVoidAsync("previewChannel", uri.ToString());
+
+        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        _hasPlayed = true;
+    }
+
+    private async Task OnMediaItemIdChanged(int? mediaItemId, CancellationToken cancellationToken)
+    {
+        MediaItemId = mediaItemId;
+        _hasPlayed = false;
+
+        foreach (int id in Optional(mediaItemId))
+        {
+            Either<BaseError, MediaItemInfo> maybeInfo = await Mediator.Send(new GetMediaItemInfo(id), cancellationToken);
+            foreach (MediaItemInfo info in maybeInfo.RightToSeq())
+            {
+                _info = info;
+                OnStartFromBeginningChanged(string.Equals(info.Kind, "RemoteStream", StringComparison.OrdinalIgnoreCase));
+
+                _subtitleId = null;
+                _subtitleStreams.Clear();
+                _subtitleStreams.AddRange(await Mediator.Send(new GetTroubleshootingSubtitles(id), cancellationToken));
+            }
+
+            if (maybeInfo.IsLeft)
+            {
+                MediaItemId = null;
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task DownloadResults()
+    {
+        var uri = $"api/troubleshoot/playback/archive?mediaItem={MediaItemId ?? 0}&ffmpegProfile={_ffmpegProfileId}&seekSeconds={_seekSeconds}";
+
+        foreach (string watermarkName in _watermarkNames)
+        {
+            foreach (WatermarkViewModel watermark in _watermarks.Where(wm => wm.Name == watermarkName))
+            {
+                uri += $"&watermark={watermark.Id}";
+            }
+        }
+
+        foreach (string graphicsElementName in _graphicsElementNames)
+        {
+            foreach (GraphicsElementViewModel graphicsElement in _graphicsElements.Where(ge => ge.Name == graphicsElementName))
+            {
+                uri += $"&graphicsElement={graphicsElement.Id}";
+            }
+        }
+
+        await JsRuntime.InvokeVoidAsync("window.open", uri);
+    }
+
+    private void HandleTroubleshootingCompleted(PlaybackTroubleshootingCompletedNotification result)
+    {
+        if (result.ExitCode == 0)
+        {
+            Snackbar.Add("FFmpeg troubleshooting process exited successfully", Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add($"FFmpeg troubleshooting process exited with code {result.ExitCode}", Severity.Warning);
+        }
+    }
+
+}

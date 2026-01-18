@@ -7,8 +7,10 @@ using CliWrap;
 using CliWrap.Buffered;
 using ErsatzTV.FFmpeg.Capabilities.Qsv;
 using ErsatzTV.FFmpeg.Capabilities.Vaapi;
+using ErsatzTV.FFmpeg.Capabilities.VideoToolbox;
 using ErsatzTV.FFmpeg.GlobalOption.HardwareAcceleration;
 using ErsatzTV.FFmpeg.Runtime;
+using Hardware.Info;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
@@ -105,6 +107,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             HardwareAccelerationMode.Nvenc => await GetNvidiaCapabilities(ffmpegPath, ffmpegCapabilities),
             HardwareAccelerationMode.Qsv => await GetQsvCapabilities(ffmpegPath, vaapiDevice),
             HardwareAccelerationMode.Vaapi => await GetVaapiCapabilities(vaapiDisplay, vaapiDriver, vaapiDevice),
+            HardwareAccelerationMode.VideoToolbox => new VideoToolboxHardwareCapabilities(ffmpegCapabilities, _logger),
             HardwareAccelerationMode.Amf => new AmfHardwareCapabilities(),
             _ => new DefaultHardwareCapabilities()
         };
@@ -112,6 +115,11 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
     public async Task<string> GetNvidiaOutput(string ffmpegPath)
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return string.Empty;
+        }
+
         string[] arguments =
         {
             "-f", "lavfi",
@@ -135,7 +143,12 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
     public async Task<QsvOutput> GetQsvOutput(string ffmpegPath, Option<string> qsvDevice)
     {
-        var option = new QsvHardwareAccelerationOption(qsvDevice);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return new QsvOutput(0, string.Empty);
+        }
+
+        var option = new QsvHardwareAccelerationOption(qsvDevice, FFmpegCapability.Software);
         var arguments = option.GlobalOptions.ToList();
 
         arguments.AddRange(QsvArguments);
@@ -154,6 +167,11 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
 
     public async Task<Option<string>> GetVaapiOutput(string display, Option<string> vaapiDriver, string vaapiDevice)
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return Option<string>.None;
+        }
+
         BufferedCommandResult whichResult = await Cli.Wrap("which")
             .WithArguments("vainfo")
             .WithValidation(CommandResultValidation.None)
@@ -208,6 +226,57 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
             ? ["drm"]
             : result.StandardOutput.Trim().Split("\n").Skip(1).Map(s => s.Trim()).ToList();
     }
+
+    public List<CpuModel> GetCpuList()
+    {
+        try
+        {
+            var hardwareInfo = new HardwareInfo();
+            hardwareInfo.RefreshCPUList();
+            return hardwareInfo.CpuList.Map(c => new CpuModel(c.Manufacturer, c.Name)).ToList();
+        }
+        catch (Exception)
+        {
+            // do nothing
+        }
+
+        return [];
+    }
+
+    public List<VideoControllerModel> GetVideoControllerList()
+    {
+        try
+        {
+            var hardwareInfo = new HardwareInfo();
+            hardwareInfo.RefreshVideoControllerList();
+            return hardwareInfo.VideoControllerList
+                .Map(v => new VideoControllerModel(v.Manufacturer, v.Name))
+                .ToList();
+        }
+        catch (Exception)
+        {
+            // do nothing
+        }
+
+        return [];
+    }
+
+    public List<string> GetVideoToolboxDecoders()
+    {
+        var result = new List<string>();
+
+        foreach (string fourCC in FourCC.AllVideoToolbox)
+        {
+            if (VideoToolboxUtil.IsHardwareDecoderSupported(fourCC, _logger))
+            {
+                result.Add(fourCC);
+            }
+        }
+
+        return result;
+    }
+
+    public List<string> GetVideoToolboxEncoders() => VideoToolboxUtil.GetAvailableEncoders(_logger);
 
     private async Task<IReadOnlySet<string>> GetFFmpegCapabilities(
         string ffmpegPath,
@@ -342,6 +411,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
                         display,
                         driver);
                 }
+
                 _memoryCache.Set(cacheKey, profileEntrypoints);
                 return new VaapiHardwareCapabilities(profileEntrypoints, _logger);
             }
@@ -445,7 +515,7 @@ public class HardwareCapabilitiesFactory : IHardwareCapabilitiesFactory
         Option<string> maybeLine = Optional(output.Split("\n").FirstOrDefault(x => x.Contains("GPU")));
         foreach (string line in maybeLine)
         {
-            const string ARCHITECTURE_PATTERN = @"SM\s+(\d\.\d)";
+            const string ARCHITECTURE_PATTERN = @"SM\s+(\d+\.\d+)";
             Match match = Regex.Match(line, ARCHITECTURE_PATTERN);
             if (match.Success && int.TryParse(match.Groups[1].Value.Replace(".", string.Empty), out int architecture))
             {

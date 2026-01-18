@@ -1,7 +1,7 @@
 ﻿using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Scheduling;
-using FluentAssertions;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Core.Tests.Scheduling;
 
@@ -23,8 +23,8 @@ public class SeasonEpisodeContentTests
 
         for (var i = 1; i <= 10; i++)
         {
-            chronologicalContent.Current.IsSome.Should().BeTrue();
-            chronologicalContent.Current.Map(x => x.Id).IfNone(-1).Should().Be(i);
+            chronologicalContent.Current.IsSome.ShouldBeTrue();
+            chronologicalContent.Current.Map(x => x.Id).IfNone(-1).ShouldBe(i);
             chronologicalContent.MoveNext();
         }
     }
@@ -39,7 +39,7 @@ public class SeasonEpisodeContentTests
 
         for (var i = 0; i < 10; i++)
         {
-            chronologicalContent.State.Index.Should().Be(i % 10);
+            chronologicalContent.State.Index.ShouldBe(i % 10);
             chronologicalContent.MoveNext();
         }
     }
@@ -54,9 +54,9 @@ public class SeasonEpisodeContentTests
 
         for (var i = 6; i <= 10; i++)
         {
-            chronologicalContent.Current.IsSome.Should().BeTrue();
-            chronologicalContent.Current.Map(x => x.Id).IfNone(-1).Should().Be(i);
-            chronologicalContent.State.Index.Should().Be(i - 1);
+            chronologicalContent.Current.IsSome.ShouldBeTrue();
+            chronologicalContent.Current.Map(x => x.Id).IfNone(-1).ShouldBe(i);
+            chronologicalContent.State.Index.ShouldBe(i - 1);
             chronologicalContent.MoveNext();
         }
     }
@@ -69,24 +69,23 @@ public class SeasonEpisodeContentTests
 
         var chronologicalContent = new SeasonEpisodeMediaCollectionEnumerator(contents, state);
 
-        chronologicalContent.State.Index.Should().Be(0);
-        chronologicalContent.State.Seed.Should().Be(0);
+        chronologicalContent.State.Index.ShouldBe(0);
+        chronologicalContent.State.Seed.ShouldBe(0);
     }
 
     private static List<MediaItem> Episodes(int count) =>
-        Range(1, count).Map(
-                i => (MediaItem)new Episode
+        Range(1, count).Map(i => (MediaItem)new Episode
+            {
+                Id = i,
+                EpisodeMetadata = new List<EpisodeMetadata>
                 {
-                    Id = i,
-                    EpisodeMetadata = new List<EpisodeMetadata>
+                    new()
                     {
-                        new()
-                        {
-                            ReleaseDate = new DateTime(2020, 1, 20 - i),
-                            EpisodeNumber = i
-                        }
+                        ReleaseDate = new DateTime(2020, 1, 20 - i),
+                        EpisodeNumber = i
                     }
-                })
+                }
+            })
             .Reverse()
             .ToList();
 }

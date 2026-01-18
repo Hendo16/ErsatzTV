@@ -35,6 +35,10 @@ public class FileNotFoundHealthCheck : BaseHealthCheck, IFileNotFoundHealthCheck
             .ThenInclude(mv => mv.MediaFiles)
             .Include(mi => (mi as Song).MediaVersions)
             .ThenInclude(mv => mv.MediaFiles)
+            .Include(mi => (mi as Image).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Include(mi => (mi as RemoteStream).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
             .Include(mi => (mi as Show).ShowMetadata)
             .Include(mi => (mi as Season).Show)
             .ThenInclude(s => s.ShowMetadata)
@@ -47,13 +51,12 @@ public class FileNotFoundHealthCheck : BaseHealthCheck, IFileNotFoundHealthCheck
 
         if (mediaItems.Any())
         {
-            IEnumerable<string> paths = five.Map(
-                mi => mi switch
-                {
-                    Show s => s.ShowMetadata.Head().Title,
-                    Season s => $"{s.Show.ShowMetadata.Head().Title} Season {s.SeasonNumber}",
-                    _ => mi.GetHeadVersion().MediaFiles.Head().Path
-                });
+            IEnumerable<string> paths = five.Map(mi => mi switch
+            {
+                Show s => s.ShowMetadata.Head().Title,
+                Season s => $"{s.Show.ShowMetadata.Head().Title} Season {s.SeasonNumber}",
+                _ => mi.GetHeadVersion().MediaFiles.Head().Path
+            });
 
             var files = string.Join(", ", paths);
 
@@ -61,7 +64,8 @@ public class FileNotFoundHealthCheck : BaseHealthCheck, IFileNotFoundHealthCheck
 
             return WarningResult(
                 $"There are {count} items that do not exist on disk, including the following: {files}",
-                "media/trash");
+                $"There are {count} items that do not exist on disk",
+                new HealthCheckLink("media/trash"));
         }
 
         return OkResult();

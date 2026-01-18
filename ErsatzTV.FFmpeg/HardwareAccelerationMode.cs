@@ -7,5 +7,7 @@ public enum HardwareAccelerationMode
     Nvenc = 2,
     Vaapi = 3,
     VideoToolbox = 4,
-    Amf = 5
+    Amf = 5,
+    OpenCL = 6,
+    Vulkan = 7
 }

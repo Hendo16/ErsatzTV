@@ -36,6 +36,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
     private readonly IFillerNfoReader _fillerNfoReader;
     private readonly IOtherVideoRepository _otherVideoRepository;
     private readonly IFillerRepository _fillerRepository;
+    private readonly IRemoteStreamRepository _remoteStreamRepository;
     private readonly IShowNfoReader _showNfoReader;
     private readonly ISongRepository _songRepository;
     private readonly ITelevisionRepository _televisionRepository;
@@ -50,6 +51,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         IFillerRepository fillerRepository,
         ISongRepository songRepository,
         IImageRepository imageRepository,
+        IRemoteStreamRepository remoteStreamRepository,
         IFallbackMetadataProvider fallbackMetadataProvider,
         ILocalFileSystem localFileSystem,
         IMovieNfoReader movieNfoReader,
@@ -72,6 +74,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         _fillerRepository = fillerRepository;
         _songRepository = songRepository;
         _imageRepository = imageRepository;
+        _remoteStreamRepository = remoteStreamRepository;
         _fallbackMetadataProvider = fallbackMetadataProvider;
         _localFileSystem = localFileSystem;
         _movieNfoReader = movieNfoReader;
@@ -223,7 +226,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                 string diff = Path.GetRelativePath(parent, folder);
 
                 var tags = diff.Split(Path.DirectorySeparatorChar)
-                    .Filter(t => metadata.Tags.Any(mt => mt.Name == t) == false)
+                    .Filter(t => metadata.Tags.All(mt => mt.Name != t))
                     .Map(t => new Tag { Name = t })
                     .ToList();
 
@@ -257,6 +260,14 @@ public class LocalMetadataProvider : ILocalMetadataProvider
 
         return await RefreshFallbackMetadata(image);
     }
+
+    public async Task<bool> RefreshTagMetadata(RemoteStream remoteStream, CancellationToken cancellationToken) =>
+        // Option<RemoteStreamMetadata> maybeMetadata = LoadRemoteStreamMetadata(remoteStream);
+        // foreach (RemoteStreamMetadata metadata in maybeMetadata)
+        // {
+        //     return await ApplyMetadataUpdate(remoteStream, metadata);
+        // }
+        await RefreshFallbackMetadata(remoteStream, cancellationToken);
 
     public Task<bool> RefreshFallbackMetadata(Movie movie) =>
         ApplyMetadataUpdate(movie, _fallbackMetadataProvider.GetFallbackMetadata(movie));
@@ -306,6 +317,17 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         foreach (ImageMetadata metadata in maybeMetadata)
         {
             return await ApplyMetadataUpdate(image, metadata);
+        }
+
+        return false;
+    }
+
+    public async Task<bool> RefreshFallbackMetadata(RemoteStream remoteStream, CancellationToken cancellationToken)
+    {
+        Option<RemoteStreamMetadata> maybeMetadata = _fallbackMetadataProvider.GetFallbackMetadata(remoteStream);
+        foreach (RemoteStreamMetadata metadata in maybeMetadata)
+        {
+            return await ApplyMetadataUpdate(remoteStream, metadata, cancellationToken);
         }
 
         return false;
@@ -517,6 +539,74 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         catch (Exception ex)
         {
             _logger.LogInformation(ex, "Failed to read embedded song metadata from {Path}", path);
+            _client.Notify(ex);
+            return None;
+        }
+    }
+
+    private Option<RemoteStreamMetadata> LoadRemoteStreamMetadata(RemoteStream remoteStream)
+    {
+        string path = remoteStream.GetHeadVersion().MediaFiles.Head().Path;
+
+        try
+        {
+            Either<BaseError, List<SongTag>> maybeTags = _localStatisticsProvider.GetSongTags(remoteStream);
+
+            foreach (List<SongTag> tags in maybeTags.RightToSeq())
+            {
+                Option<RemoteStreamMetadata> maybeFallbackMetadata =
+                    _fallbackMetadataProvider.GetFallbackMetadata(remoteStream);
+
+                var result = new RemoteStreamMetadata
+                {
+                    MetadataKind = MetadataKind.Embedded,
+                    DateAdded = DateTime.UtcNow,
+                    DateUpdated = File.GetLastWriteTimeUtc(path),
+
+                    Artwork = [],
+                    Actors = [],
+                    Genres = [],
+                    Studios = [],
+                    Tags = []
+                };
+
+                foreach (SongTag tag in tags)
+                {
+                    switch (tag.Tag)
+                    {
+                        case MetadataSongTag.Genre:
+                            result.Genres.Add(new Genre { Name = tag.Value });
+                            break;
+                        case MetadataSongTag.Title:
+                            result.Title = tag.Value;
+                            break;
+                    }
+                }
+
+                foreach (RemoteStreamMetadata fallbackMetadata in maybeFallbackMetadata)
+                {
+                    if (string.IsNullOrWhiteSpace(result.Title))
+                    {
+                        result.Title = fallbackMetadata.Title;
+                    }
+
+                    result.OriginalTitle = fallbackMetadata.OriginalTitle;
+
+                    // preserve folder tagging
+                    foreach (Tag tag in fallbackMetadata.Tags)
+                    {
+                        result.Tags.Add(tag);
+                    }
+                }
+
+                return result;
+            }
+
+            return Option<RemoteStreamMetadata>.None;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogInformation(ex, "Failed to read embedded remote stream metadata from {Path}", path);
             _client.Notify(ex);
             return None;
         }
@@ -1259,6 +1349,51 @@ public class LocalMetadataProvider : ILocalMetadataProvider
         return await _metadataRepository.Add(metadata);
     }
 
+    private async Task<bool> ApplyMetadataUpdate(
+        RemoteStream remoteStream,
+        RemoteStreamMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        Option<RemoteStreamMetadata> maybeMetadata = Optional(remoteStream.RemoteStreamMetadata).Flatten().HeadOrNone();
+        foreach (RemoteStreamMetadata existing in maybeMetadata)
+        {
+            existing.Title = metadata.Title;
+
+            if (existing.DateAdded == SystemTime.MinValueUtc)
+            {
+                existing.DateAdded = metadata.DateAdded;
+            }
+
+            existing.DateUpdated = metadata.DateUpdated;
+            existing.MetadataKind = metadata.MetadataKind;
+            existing.OriginalTitle = metadata.OriginalTitle;
+            existing.ReleaseDate = metadata.ReleaseDate;
+            existing.Year = metadata.Year;
+            existing.SortTitle = string.IsNullOrWhiteSpace(metadata.SortTitle)
+                ? SortTitle.GetSortTitle(metadata.Title)
+                : metadata.SortTitle;
+            existing.OriginalTitle = metadata.OriginalTitle;
+
+            bool updated = await UpdateMetadataCollections(
+                existing,
+                metadata,
+                (_, _) => Task.FromResult(false),
+                (metadata1, tag) => _remoteStreamRepository.AddTag(metadata1, tag, cancellationToken),
+                (_, _) => Task.FromResult(false),
+                (_, _) => Task.FromResult(false));
+
+            return await _metadataRepository.Update(existing) || updated;
+        }
+
+        metadata.SortTitle = string.IsNullOrWhiteSpace(metadata.SortTitle)
+            ? SortTitle.GetSortTitle(metadata.Title)
+            : metadata.SortTitle;
+        metadata.RemoteStreamId = remoteStream.Id;
+        remoteStream.RemoteStreamMetadata = [metadata];
+
+        return await _metadataRepository.Add(metadata);
+    }
+
     private async Task<Option<ShowMetadata>> LoadTelevisionShowMetadata(string nfoFileName)
     {
         try
@@ -1443,6 +1578,17 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                     releaseDate = premiered;
                 }
 
+                var tags = nfo.Tags.Map(t => new Tag { Name = t }).ToList();
+                foreach (string country in nfo.Countries)
+                {
+                    tags.Add(
+                        new Tag
+                        {
+                            Name = country,
+                            ExternalTypeId = Tag.NfoCountryTypeId
+                        });
+                }
+
                 return new MovieMetadata
                 {
                     MetadataKind = MetadataKind.Sidecar,
@@ -1457,7 +1603,7 @@ public class LocalMetadataProvider : ILocalMetadataProvider
                     Outline = nfo.Outline,
                     // Tagline = nfo.Tagline,
                     Genres = nfo.Genres.Map(g => new Genre { Name = g }).ToList(),
-                    Tags = nfo.Tags.Map(t => new Tag { Name = t }).ToList(),
+                    Tags = tags,
                     Studios = nfo.Studios.Map(s => new Studio { Name = s }).ToList(),
                     Actors = Actors(nfo.Actors, dateAdded, dateUpdated),
                     Directors = nfo.Directors.Map(d => new Director { Name = d }).ToList(),

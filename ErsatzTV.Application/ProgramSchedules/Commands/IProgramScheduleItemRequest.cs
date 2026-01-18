@@ -1,10 +1,12 @@
 ﻿using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
 public interface IProgramScheduleItemRequest
 {
     TimeSpan? StartTime { get; }
+    FixedStartTimeBehavior? FixedStartTimeBehavior { get; }
     ProgramScheduleItemCollectionType CollectionType { get; }
     int? CollectionId { get; }
     int? MultiCollectionId { get; }
@@ -14,6 +16,7 @@ public interface IProgramScheduleItemRequest
     PlayoutMode PlayoutMode { get; }
     PlaybackOrder PlaybackOrder { get; }
     FillWithGroupMode FillWithGroupMode { get; }
+    MultipleMode MultipleMode { get; }
     int? MultipleCount { get; }
     TimeSpan? PlayoutDuration { get; }
     TailMode TailMode { get; }
@@ -25,7 +28,7 @@ public interface IProgramScheduleItemRequest
     int? PostRollFillerId { get; }
     int? TailFillerId { get; }
     int? FallbackFillerId { get; }
-    int? WatermarkId { get; }
+    List<int> WatermarkIds { get; }
     string PreferredAudioLanguageCode { get; }
     string PreferredAudioTitle { get; }
     string PreferredSubtitleLanguageCode { get; }

@@ -58,9 +58,9 @@ public class TelevisionRepository : ITelevisionRepository
             .ToListAsync();
     }
 
-    public async Task<Option<Show>> GetShow(int showId)
+    public async Task<Option<Show>> GetShow(int showId, CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await dbContext.Shows
             .AsNoTracking()
             .Filter(s => s.Id == showId)
@@ -77,63 +77,32 @@ public class TelevisionRepository : ITelevisionRepository
             .ThenInclude(a => a.Artwork)
             .Include(s => s.ShowMetadata)
             .ThenInclude(sm => sm.Guids)
-            .OrderBy(s => s.Id)
-            .SingleOrDefaultAsync()
-            .Map(Optional);
+            .SelectOneAsync(s => s.Id, s => s.Id == showId, cancellationToken);
     }
 
-    public async Task<List<ShowMetadata>> GetShowsForCards(List<int> ids)
+    public async Task<Option<int>> GetShowIdByTitle(int libraryId, string title)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
         return await dbContext.ShowMetadata
             .AsNoTracking()
-            .Filter(sm => ids.Contains(sm.ShowId))
-            .Include(sm => sm.Artwork)
-            .Include(sm => sm.Show)
-            .OrderBy(sm => sm.SortTitle)
-            .ToListAsync();
+            .Where(sm => sm.Show.LibraryPath.LibraryId == libraryId)
+            .Where(sm => EF.Functions.Like(
+                EF.Functions.Collate(sm.Title, TvContext.CaseInsensitiveCollation),
+                $"%{title}%"))
+            .Map(sm => sm.ShowId)
+            .FirstOrDefaultAsync()
+            .Map(showId => showId > 0 ? Option<int>.Some(showId) : Option<int>.None);
     }
 
-    public async Task<List<SeasonMetadata>> GetSeasonsForCards(List<int> ids)
+    public async Task<List<int>> GetEpisodeIdsForShow(int showId)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.SeasonMetadata
-            .AsNoTracking()
-            .Filter(s => ids.Contains(s.SeasonId))
-            .Include(s => s.Season.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .Include(sm => sm.Artwork)
-            .ToListAsync()
-            .Map(
-                list => list
-                    .OrderBy(s => s.Season.Show.ShowMetadata.HeadOrNone().Match(sm => sm.SortTitle, () => string.Empty))
-                    .ThenBy(s => s.Season.SeasonNumber)
-                    .ToList());
-    }
-
-    public async Task<List<EpisodeMetadata>> GetEpisodesForCards(List<int> ids)
-    {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
-        return await dbContext.EpisodeMetadata
-            .AsNoTracking()
-            .Filter(em => ids.Contains(em.EpisodeId))
-            .Include(em => em.Artwork)
-            .Include(em => em.Directors)
-            .Include(em => em.Writers)
-            .Include(em => em.Episode)
-            .ThenInclude(e => e.Season)
-            .ThenInclude(s => s.SeasonMetadata)
-            .ThenInclude(sm => sm.Artwork)
-            .Include(em => em.Episode)
-            .ThenInclude(e => e.Season)
-            .ThenInclude(s => s.Show)
-            .ThenInclude(s => s.ShowMetadata)
-            .ThenInclude(sm => sm.Artwork)
-            .Include(em => em.Episode)
-            .ThenInclude(e => e.MediaVersions)
-            .ThenInclude(mv => mv.MediaFiles)
-            .OrderBy(em => em.SortTitle)
-            .ToListAsync();
+        return (await dbContext.Connection.QueryAsync<int>(
+            @"SELECT Episode.Id FROM `Show`
+            INNER JOIN Season ON Season.ShowId = `Show`.Id
+            INNER JOIN Episode ON Episode.SeasonId = Season.Id
+            WHERE `Show`.Id = @ShowId",
+            new { ShowId = showId })).ToList();
     }
 
     public async Task<List<Season>> GetAllSeasons()
@@ -172,21 +141,25 @@ public class TelevisionRepository : ITelevisionRepository
             .CountAsync(s => s.ShowId == showId);
     }
 
-    public async Task<List<Season>> GetPagedSeasons(int televisionShowId, int pageNumber, int pageSize)
+    public async Task<List<Season>> GetPagedSeasons(
+        int televisionShowId,
+        int pageNumber,
+        int pageSize,
+        CancellationToken cancellationToken)
     {
         var result = new List<Season>();
 
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Option<ShowMetadata> maybeShowMetadata = await dbContext.ShowMetadata
-            .SelectOneAsync(sm => sm.Id, sm => sm.ShowId == televisionShowId);
+            .SelectOneAsync(sm => sm.Id, sm => sm.ShowId == televisionShowId, cancellationToken);
 
         foreach (ShowMetadata showMetadata in maybeShowMetadata)
         {
             List<int> showIds = await dbContext.ShowMetadata
                 .Filter(sm => sm.Title == showMetadata.Title && sm.Year == showMetadata.Year)
                 .Map(sm => sm.ShowId)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             result.AddRange(
                 await dbContext.Seasons
@@ -199,7 +172,7 @@ public class TelevisionRepository : ITelevisionRepository
                     .OrderBy(s => s.SeasonNumber)
                     .Skip((pageNumber - 1) * pageSize)
                     .Take(pageSize)
-                    .ToListAsync());
+                    .ToListAsync(cancellationToken));
         }
 
         return result;
@@ -250,12 +223,9 @@ public class TelevisionRepository : ITelevisionRepository
         if (maybeId.IsNone)
         {
             List<int> maybeShowIds = await dbContext.Episodes
-                .Where(
-                    e => e.MediaVersions.Any(
-                        mv => mv.MediaFiles.Any(
-                            mf => EF.Functions.Like(
-                                EF.Functions.Collate(mf.Path, TvContext.CaseInsensitiveCollation),
-                                $"{showFolder}%"))))
+                .Where(e => e.MediaVersions.Any(mv => mv.MediaFiles.Any(mf => EF.Functions.Like(
+                    EF.Functions.Collate(mf.Path, TvContext.CaseInsensitiveCollation),
+                    $"{showFolder}%"))))
                 .Map(e => e.Season.ShowId)
                 .Distinct()
                 .ToListAsync();
@@ -357,9 +327,10 @@ public class TelevisionRepository : ITelevisionRepository
         Season season,
         LibraryPath libraryPath,
         LibraryFolder libraryFolder,
-        string path)
+        string path,
+        CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
         Option<Episode> maybeExisting = await dbContext.Episodes
             .Filter(e => !(e is PlexEpisode) && !(e is JellyfinEpisode) && !(e is EmbyEpisode))
             .Include(i => i.EpisodeMetadata)
@@ -389,7 +360,7 @@ public class TelevisionRepository : ITelevisionRepository
             .Include(i => i.TraktListItems)
             .ThenInclude(tli => tli.TraktList)
             .OrderBy(i => i.MediaVersions.First().MediaFiles.First().Path)
-            .SingleOrDefaultAsync(i => i.MediaVersions.First().MediaFiles.First().Path == path);
+            .SingleOrDefaultAsync(i => i.MediaVersions.First().MediaFiles.First().Path == path, cancellationToken);
 
         return await maybeExisting.Match<Task<Either<BaseError, Episode>>>(
             async episode =>
@@ -408,7 +379,7 @@ public class TelevisionRepository : ITelevisionRepository
 
                 return episode;
             },
-            async () => await AddEpisode(dbContext, season, libraryPath.Id, libraryFolder.Id, path));
+            async () => await AddEpisode(dbContext, season, libraryPath.Id, libraryFolder.Id, path, cancellationToken));
     }
 
     public async Task<IEnumerable<string>> FindEpisodePaths(LibraryPath libraryPath)
@@ -734,11 +705,17 @@ public class TelevisionRepository : ITelevisionRepository
         Season season,
         int libraryPathId,
         int libraryFolderId,
-        string path)
+        string path,
+        CancellationToken cancellationToken)
     {
         try
         {
-            if (await MediaItemRepository.MediaFileAlreadyExists(path, libraryPathId, dbContext, _logger))
+            if (await MediaItemRepository.MediaFileAlreadyExists(
+                    path,
+                    libraryPathId,
+                    dbContext,
+                    _logger,
+                    cancellationToken))
             {
                 return new MediaFileAlreadyExists();
             }
@@ -767,17 +744,23 @@ public class TelevisionRepository : ITelevisionRepository
                 [
                     new MediaVersion
                     {
-                        MediaFiles = [new MediaFile { Path = path, LibraryFolderId = libraryFolderId }],
+                        MediaFiles =
+                        [
+                            new MediaFile
+                            {
+                                Path = path, PathHash = PathUtils.GetPathHash(path), LibraryFolderId = libraryFolderId
+                            }
+                        ],
                         Streams = []
                     }
                 ],
                 TraktListItems = []
             };
-            await dbContext.Episodes.AddAsync(episode);
-            await dbContext.SaveChangesAsync();
-            await dbContext.Entry(episode).Reference(i => i.LibraryPath).LoadAsync();
-            await dbContext.Entry(episode.LibraryPath).Reference(lp => lp.Library).LoadAsync();
-            await dbContext.Entry(episode).Reference(e => e.Season).LoadAsync();
+            await dbContext.Episodes.AddAsync(episode, cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.Entry(episode).Reference(i => i.LibraryPath).LoadAsync(cancellationToken);
+            await dbContext.Entry(episode.LibraryPath).Reference(lp => lp.Library).LoadAsync(cancellationToken);
+            await dbContext.Entry(episode).Reference(e => e.Season).LoadAsync(cancellationToken);
             return episode;
         }
         catch (Exception ex)

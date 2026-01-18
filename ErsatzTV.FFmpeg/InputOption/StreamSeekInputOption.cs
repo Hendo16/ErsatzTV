@@ -8,18 +8,20 @@ public class StreamSeekInputOption : IInputOption
 
     public StreamSeekInputOption(TimeSpan start) => _start = start;
 
-    public EnvironmentVariable[] EnvironmentVariables => Array.Empty<EnvironmentVariable>();
-    public string[] GlobalOptions => Array.Empty<string>();
-    public string[] InputOptions(InputFile inputFile) => new[] { "-ss", $"{_start:c}" };
-    public string[] FilterOptions => Array.Empty<string>();
-    public string[] OutputOptions => Array.Empty<string>();
+    public EnvironmentVariable[] EnvironmentVariables => [];
+    public string[] GlobalOptions => [];
+    public string[] InputOptions(InputFile inputFile) => ["-ss", $"{_start:c}"];
+    public string[] FilterOptions => [];
+    public string[] OutputOptions => [];
     public FrameState NextState(FrameState currentState) => currentState;
 
-    public bool AppliesTo(AudioInputFile audioInputFile) => true;
+    public bool AppliesTo(AudioInputFile audioInputFile) => audioInputFile is not NullAudioInputFile;
 
     // don't seek into a still image
     public bool AppliesTo(VideoInputFile videoInputFile) => videoInputFile.VideoStreams.All(s => !s.StillImage);
 
     // never seek when concatenating
     public bool AppliesTo(ConcatInputFile concatInputFile) => false;
+
+    public bool AppliesTo(GraphicsEngineInput graphicsEngineInput) => false;
 }

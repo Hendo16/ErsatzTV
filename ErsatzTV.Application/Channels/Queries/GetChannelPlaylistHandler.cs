@@ -12,22 +12,26 @@ public class GetChannelPlaylistHandler : IRequestHandler<GetChannelPlaylist, Cha
         _channelRepository = channelRepository;
 
     public Task<ChannelPlaylist> Handle(GetChannelPlaylist request, CancellationToken cancellationToken) =>
-        _channelRepository.GetAll()
+        _channelRepository.GetAll(cancellationToken)
             .Map(channels => EnsureMode(channels, request.Mode))
-            .Map(
-                channels => new ChannelPlaylist(
-                    request.Scheme,
-                    request.Host,
-                    request.BaseUrl,
-                    channels,
-                    request.UserAgent,
-                    request.AccessToken));
+            .Map(channels => new ChannelPlaylist(
+                request.Scheme,
+                request.Host,
+                request.BaseUrl,
+                channels,
+                request.UserAgent,
+                request.AccessToken));
 
     private static List<Channel> EnsureMode(IEnumerable<Channel> channels, string mode)
     {
         var result = new List<Channel>();
         foreach (Channel channel in channels)
         {
+            if (!channel.IsEnabled)
+            {
+                continue;
+            }
+
             switch (mode.ToLowerInvariant())
             {
                 case "segmenter":

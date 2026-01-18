@@ -1,5 +1,6 @@
 ﻿using System.Threading.Channels;
 using ErsatzTV.Application.Playouts;
+using ErsatzTV.Application.Search;
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
@@ -16,15 +17,18 @@ public class AddMovieToCollectionHandler :
     private readonly ChannelWriter<IBackgroundServiceRequest> _channel;
     private readonly IDbContextFactory<TvContext> _dbContextFactory;
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
+    private readonly ChannelWriter<ISearchIndexBackgroundServiceRequest> _searchChannel;
 
     public AddMovieToCollectionHandler(
         IDbContextFactory<TvContext> dbContextFactory,
         IMediaCollectionRepository mediaCollectionRepository,
-        ChannelWriter<IBackgroundServiceRequest> channel)
+        ChannelWriter<IBackgroundServiceRequest> channel,
+        ChannelWriter<ISearchIndexBackgroundServiceRequest> searchChannel)
     {
         _dbContextFactory = dbContextFactory;
         _mediaCollectionRepository = mediaCollectionRepository;
         _channel = channel;
+        _searchChannel = searchChannel;
     }
 
     public async Task<Either<BaseError, Unit>> Handle(
@@ -32,7 +36,7 @@ public class AddMovieToCollectionHandler :
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, Parameters> validation = await Validate(dbContext, request);
+        Validation<BaseError, Parameters> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(parameters => ApplyAddMovieRequest(dbContext, parameters));
     }
 
@@ -41,6 +45,8 @@ public class AddMovieToCollectionHandler :
         parameters.Collection.MediaItems.Add(parameters.Movie);
         if (await dbContext.SaveChangesAsync() > 0)
         {
+            await _searchChannel.WriteAsync(new ReindexMediaItems([parameters.Movie.Id]));
+
             // refresh all playouts that use this collection
             foreach (int playoutId in await _mediaCollectionRepository
                          .PlayoutIdsUsingCollection(parameters.Collection.Id))
@@ -54,23 +60,27 @@ public class AddMovieToCollectionHandler :
 
     private static async Task<Validation<BaseError, Parameters>> Validate(
         TvContext dbContext,
-        AddMovieToCollection request) =>
-        (await CollectionMustExist(dbContext, request), await ValidateMovie(dbContext, request))
+        AddMovieToCollection request,
+        CancellationToken cancellationToken) =>
+        (await CollectionMustExist(dbContext, request, cancellationToken),
+            await ValidateMovie(dbContext, request, cancellationToken))
         .Apply((collection, episode) => new Parameters(collection, episode));
 
     private static Task<Validation<BaseError, Collection>> CollectionMustExist(
         TvContext dbContext,
-        AddMovieToCollection request) =>
+        AddMovieToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.Collections
             .Include(c => c.MediaItems)
-            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId)
+            .SelectOneAsync(c => c.Id, c => c.Id == request.CollectionId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Collection does not exist."));
 
     private static Task<Validation<BaseError, Movie>> ValidateMovie(
         TvContext dbContext,
-        AddMovieToCollection request) =>
+        AddMovieToCollection request,
+        CancellationToken cancellationToken) =>
         dbContext.Movies
-            .SelectOneAsync(m => m.Id, e => e.Id == request.MovieId)
+            .SelectOneAsync(m => m.Id, e => e.Id == request.MovieId, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Movie does not exist"));
 
     private sealed record Parameters(Collection Collection, Movie Movie);

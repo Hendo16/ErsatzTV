@@ -1,6 +1,7 @@
 using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
+using ErsatzTV.Core.Errors;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
@@ -30,7 +31,7 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
                 .ThenInclude(l => l.MediaSource)
                 // TODO: support all media types here
                 .Include(i => (i as Movie).MovieMetadata)
-                .ThenInclude(mv => mv.Subtitles)
+                .ThenInclude(mm => mm.Subtitles)
                 .Include(i => (i as Movie).MediaVersions)
                 .ThenInclude(mv => mv.Chapters)
                 .Include(i => (i as Movie).MediaVersions)
@@ -40,17 +41,52 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
                 .Include(i => (i as Episode).MediaVersions)
                 .ThenInclude(mv => mv.Streams)
                 .Include(i => (i as Episode).EpisodeMetadata)
-                .ThenInclude(mv => mv.Subtitles)
+                .ThenInclude(em => em.Subtitles)
                 .Include(i => (i as FillerMediaItem).FillerMetadata)
                 .ThenInclude(mv => mv.Subtitles)
                 .Include(i => (i as FillerMediaItem).MediaVersions)
                 .ThenInclude(mv => mv.Chapters)
                 .Include(i => (i as FillerMediaItem).MediaVersions)
                 .ThenInclude(mv => mv.Streams)
-                .SelectOneAsync(i => i.Id, i => i.Id == request.Id)
+                .Include(i => (i as Episode).Season)
+                .ThenInclude(s => s.Show)
+                .ThenInclude(s => s.ShowMetadata)
+                .Include(i => (i as OtherVideo).OtherVideoMetadata)
+                .ThenInclude(ovm => ovm.Subtitles)
+                .Include(i => (i as OtherVideo).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as OtherVideo).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
+                .Include(i => (i as Image).ImageMetadata)
+                .ThenInclude(im => im.Subtitles)
+                .Include(i => (i as Image).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as Image).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
+                .Include(i => (i as RemoteStream).RemoteStreamMetadata)
+                .ThenInclude(rsm => rsm.Subtitles)
+                .Include(i => (i as RemoteStream).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as RemoteStream).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
+                .Include(i => (i as Song).SongMetadata)
+                .ThenInclude(sm => sm.Subtitles)
+                .Include(i => (i as Song).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as Song).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
+                .Include(i => (i as MusicVideo).MusicVideoMetadata)
+                .ThenInclude(mvm => mvm.Subtitles)
+                .Include(i => (i as MusicVideo).MediaVersions)
+                .ThenInclude(mv => mv.Chapters)
+                .Include(i => (i as MusicVideo).MediaVersions)
+                .ThenInclude(mv => mv.Streams)
+                .Include(i => (i as MusicVideo).Artist)
+                .ThenInclude(a => a.ArtistMetadata)
+                .SelectOneAsync(i => i.Id, i => i.Id == request.Id, cancellationToken)
                 .MapT(Project);
 
-            return mediaItem.ToEither(BaseError.New("Unable to locate media item"));
+            return mediaItem.ToEither<BaseError>(new UnableToLocateMediaItem());
         }
         catch (Exception ex)
         {
@@ -60,6 +96,8 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
 
     private static MediaItemInfo Project(MediaItem mediaItem)
     {
+        string displayTitle = Playouts.Mapper.GetDisplayTitle(mediaItem, Option<string>.None);
+
         MediaVersion version = mediaItem.GetHeadVersion();
 
         string serverName = mediaItem.LibraryPath.Library.MediaSource switch
@@ -75,7 +113,9 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
         List<Subtitle> subtitles = mediaItem switch
         {
             Movie m => m.MovieMetadata.Map(mm => mm.Subtitles).Flatten().ToList(),
-            Episode e => e.EpisodeMetadata.Map(mm => mm.Subtitles).Flatten().ToList(),
+            Episode e => e.EpisodeMetadata.Map(em => em.Subtitles).Flatten().ToList(),
+            MusicVideo mv => mv.MusicVideoMetadata.Map(mvm => mvm.Subtitles).Flatten().ToList(),
+            Song s => s.SongMetadata.Map(sm => sm.Subtitles).Flatten().ToList(),
             _ => []
         };
 
@@ -103,6 +143,7 @@ public class GetMediaItemInfoHandler : IRequestHandler<GetMediaItemInfo, Either<
 
         return new MediaItemInfo(
             mediaItem.Id,
+            displayTitle,
             mediaItem.GetType().Name,
             mediaItem.LibraryPath.Library.GetType().Name,
             serverName,

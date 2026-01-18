@@ -46,7 +46,7 @@ public class SynchronizePlexLibraryByIdHandler : IRequestHandler<SynchronizePlex
         SynchronizePlexLibraryById request,
         CancellationToken cancellationToken)
     {
-        Validation<BaseError, RequestParameters> validation = await Validate(request);
+        Validation<BaseError, RequestParameters> validation = await Validate(request, cancellationToken);
         return await validation.Match(
             parameters => Synchronize(parameters, cancellationToken),
             error => Task.FromResult<Either<BaseError, string>>(error.Join()));
@@ -117,17 +117,19 @@ public class SynchronizePlexLibraryByIdHandler : IRequestHandler<SynchronizePlex
         return parameters.Library.Name;
     }
 
-    private async Task<Validation<BaseError, RequestParameters>> Validate(SynchronizePlexLibraryById request) =>
-        (await ValidateConnection(request), await PlexLibraryMustExist(request), await ValidateLibraryRefreshInterval())
-        .Apply(
-            (connectionParameters, plexLibrary, libraryRefreshInterval) =>
-                new RequestParameters(
-                    connectionParameters,
-                    plexLibrary,
-                    request.ForceScan,
-                    libraryRefreshInterval,
-                    request.DeepScan
-                ));
+    private async Task<Validation<BaseError, RequestParameters>> Validate(
+        SynchronizePlexLibraryById request,
+        CancellationToken cancellationToken) =>
+        (await ValidateConnection(request), await PlexLibraryMustExist(request),
+            await ValidateLibraryRefreshInterval(cancellationToken))
+        .Apply((connectionParameters, plexLibrary, libraryRefreshInterval) =>
+            new RequestParameters(
+                connectionParameters,
+                plexLibrary,
+                request.ForceScan,
+                libraryRefreshInterval,
+                request.DeepScan
+            ));
 
     private Task<Validation<BaseError, ConnectionParameters>> ValidateConnection(
         SynchronizePlexLibraryById request) =>
@@ -138,9 +140,8 @@ public class SynchronizePlexLibraryByIdHandler : IRequestHandler<SynchronizePlex
     private Task<Validation<BaseError, PlexMediaSource>> PlexMediaSourceMustExist(
         SynchronizePlexLibraryById request) =>
         _mediaSourceRepository.GetPlexByLibraryId(request.PlexLibraryId)
-            .Map(
-                v => v.ToValidation<BaseError>(
-                    $"Plex media source for library {request.PlexLibraryId} does not exist."));
+            .Map(v => v.ToValidation<BaseError>(
+                $"Plex media source for library {request.PlexLibraryId} does not exist."));
 
     private Validation<BaseError, ConnectionParameters> MediaSourceMustHaveActiveConnection(
         PlexMediaSource plexMediaSource)
@@ -165,8 +166,8 @@ public class SynchronizePlexLibraryByIdHandler : IRequestHandler<SynchronizePlex
         _mediaSourceRepository.GetPlexLibrary(request.PlexLibraryId)
             .Map(v => v.ToValidation<BaseError>($"Plex library {request.PlexLibraryId} does not exist."));
 
-    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval() =>
-        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval)
+    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval(CancellationToken cancellationToken) =>
+        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval, cancellationToken)
             .FilterT(lri => lri is >= 0 and < 1_000_000)
             .Map(lri => lri.ToValidation<BaseError>("Library refresh interval is invalid"));
 

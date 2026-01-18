@@ -10,7 +10,8 @@ public class YamlPlayoutPadToNextHandler(EnumeratorCache enumeratorCache) : Yaml
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutPadToNextInstruction padToNext)
@@ -36,7 +37,9 @@ public class YamlPlayoutPadToNextHandler(EnumeratorCache enumeratorCache) : Yaml
 
         // ensure filler works for content less than one minute
         if (targetTime <= context.CurrentTime)
+        {
             targetTime = targetTime.AddMinutes(padToNext.PadToNext);
+        }
 
         Option<IMediaCollectionEnumerator> maybeEnumerator = await GetContentEnumerator(
             context,
@@ -52,18 +55,22 @@ public class YamlPlayoutPadToNextHandler(EnumeratorCache enumeratorCache) : Yaml
 
         foreach (IMediaCollectionEnumerator enumerator in maybeEnumerator)
         {
-            context.CurrentTime = Schedule(
+            context.CurrentTime = await Schedule(
                 context,
                 padToNext.Content,
                 padToNext.Fallback,
                 targetTime,
+                stopBeforeEnd: true,
                 padToNext.DiscardAttempts,
                 padToNext.Trim,
-                offlineTail: true,
-                GetFillerKind(padToNext),
+                true,
+                GetFillerKind(padToNext, context),
                 padToNext.CustomTitle,
+                padToNext.DisableWatermarks,
                 enumerator,
-                fallbackEnumerator);
+                fallbackEnumerator,
+                executeSequence,
+                logger);
 
             return true;
         }

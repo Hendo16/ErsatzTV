@@ -7,7 +7,8 @@ public interface IPlexServerApiClient
 {
     Task<bool> Ping(
         PlexConnection connection,
-        PlexServerAuthToken token);
+        PlexServerAuthToken token,
+        CancellationToken cancellationToken);
 
     Task<Either<BaseError, List<PlexLibrary>>> GetLibraries(
         PlexConnection connection,
@@ -75,4 +76,28 @@ public interface IPlexServerApiClient
         PlexServerAuthToken token,
         string key,
         CancellationToken cancellationToken);
+
+    IAsyncEnumerable<Tuple<PlexTag, int>> GetAllTags(
+        PlexConnection connection,
+        PlexServerAuthToken token,
+        int tagType,
+        CancellationToken cancellationToken);
+
+    IAsyncEnumerable<Tuple<PlexShow, int>> GetTagShowContents(
+        PlexLibrary library,
+        PlexConnection connection,
+        PlexServerAuthToken token,
+        PlexTag tag);
+
+    Task<Either<BaseError, List<PlexShow>>> SearchShowsByTitle(
+        PlexLibrary library,
+        string showTitle,
+        PlexConnection connection,
+        PlexServerAuthToken token);
+
+    Task<Either<BaseError, Option<PlexShow>>> GetSingleShow(
+        PlexLibrary library,
+        string showKey,
+        PlexConnection connection,
+        PlexServerAuthToken token);
 }

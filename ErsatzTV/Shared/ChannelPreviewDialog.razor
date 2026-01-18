@@ -22,7 +22,7 @@
 @code {
 
     [CascadingParameter]
-    MudDialogInstance MudDialog { get; set; }
+    IMudDialogInstance MudDialog { get; set; }
 
     [Parameter]
     public string StreamUri { get; set; }
@@ -43,10 +43,7 @@
         await base.OnAfterRenderAsync(true);
     }
 
-    private void Close()
-    {
-        MudDialog.Close(DialogResult.Ok(true));
-    }
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
 
     public void Dispose()
     {
@@ -58,7 +55,6 @@
         {
             // ignore
         }
-
-        MudDialog?.Dispose();
     }
+
 }

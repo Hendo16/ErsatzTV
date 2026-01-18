@@ -23,7 +23,7 @@ public class UpdateWatermarkHandler : IRequestHandler<UpdateWatermark, Either<Ba
         CancellationToken cancellationToken)
     {
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-        Validation<BaseError, ChannelWatermark> validation = await Validate(dbContext, request);
+        Validation<BaseError, ChannelWatermark> validation = await Validate(dbContext, request, cancellationToken);
         return await validation.Apply(p => ApplyUpdateRequest(dbContext, p, request));
     }
 
@@ -33,7 +33,15 @@ public class UpdateWatermarkHandler : IRequestHandler<UpdateWatermark, Either<Ba
         UpdateWatermark update)
     {
         p.Name = update.Name;
-        p.Image = update.ImageSource == ChannelWatermarkImageSource.Custom ? update.Image : null;
+
+        p.Image = null;
+        p.OriginalContentType = null;
+        if (update.ImageSource == ChannelWatermarkImageSource.Custom)
+        {
+            p.Image = update.Image?.Path;
+            p.OriginalContentType = update.Image?.ContentType;
+        }
+
         p.Mode = update.Mode;
         p.ImageSource = update.ImageSource;
         p.Location = update.Location;
@@ -45,6 +53,9 @@ public class UpdateWatermarkHandler : IRequestHandler<UpdateWatermark, Either<Ba
         p.DurationSeconds = update.DurationSeconds;
         p.Opacity = update.Opacity;
         p.PlaceWithinSourceContent = update.PlaceWithinSourceContent;
+        p.OpacityExpression = update.Mode is ChannelWatermarkMode.OpacityExpression ? update.OpacityExpression : null;
+        p.ZIndex = update.ZIndex;
+
         await dbContext.SaveChangesAsync();
         _searchTargets.SearchTargetsChanged();
         return new UpdateWatermarkResult(p.Id);
@@ -52,15 +63,17 @@ public class UpdateWatermarkHandler : IRequestHandler<UpdateWatermark, Either<Ba
 
     private static async Task<Validation<BaseError, ChannelWatermark>> Validate(
         TvContext dbContext,
-        UpdateWatermark request) =>
-        (await WatermarkMustExist(dbContext, request), ValidateName(request))
+        UpdateWatermark request,
+        CancellationToken cancellationToken) =>
+        (await WatermarkMustExist(dbContext, request, cancellationToken), ValidateName(request))
         .Apply((watermark, _) => watermark);
 
     private static Task<Validation<BaseError, ChannelWatermark>> WatermarkMustExist(
         TvContext dbContext,
-        UpdateWatermark updateWatermark) =>
+        UpdateWatermark updateWatermark,
+        CancellationToken cancellationToken) =>
         dbContext.ChannelWatermarks
-            .SelectOneAsync(p => p.Id, p => p.Id == updateWatermark.Id)
+            .SelectOneAsync(p => p.Id, p => p.Id == updateWatermark.Id, cancellationToken)
             .Map(o => o.ToValidation<BaseError>("Watermark does not exist."));
 
     private static Validation<BaseError, string> ValidateName(UpdateWatermark updateWatermark) =>

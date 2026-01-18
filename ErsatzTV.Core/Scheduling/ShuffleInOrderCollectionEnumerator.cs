@@ -12,7 +12,7 @@ public class ShuffleInOrderCollectionEnumerator : IMediaCollectionEnumerator
     private readonly int _mediaItemCount;
     private readonly bool _randomStartPoint;
     private Random _random;
-    private IList<MediaItem> _shuffled;
+    private MediaItem[] _shuffled;
 
     public ShuffleInOrderCollectionEnumerator(
         IList<CollectionWithItems> collections,
@@ -36,8 +36,8 @@ public class ShuffleInOrderCollectionEnumerator : IMediaCollectionEnumerator
         _random = new Random(state.Seed);
         _shuffled = Shuffle(_collections, _random);
         _lazyMinimumDuration =
-            new Lazy<Option<TimeSpan>>(
-                () => _shuffled.Bind(i => i.GetNonZeroDuration()).OrderBy(identity).HeadOrNone());
+            new Lazy<Option<TimeSpan>>(() =>
+                _shuffled.Bind(i => i.GetNonZeroDuration()).OrderBy(identity).HeadOrNone());
 
         State = new CollectionEnumeratorState { Seed = state.Seed };
         while (State.Index < state.Index)
@@ -60,12 +60,12 @@ public class ShuffleInOrderCollectionEnumerator : IMediaCollectionEnumerator
 
     public CollectionEnumeratorState State { get; }
 
-    public Option<MediaItem> Current => _shuffled.Any() ? _shuffled[State.Index % _mediaItemCount] : None;
+    public Option<MediaItem> Current => _shuffled.Length != 0 ? _shuffled[State.Index % _mediaItemCount] : None;
     public Option<bool> CurrentIncludeInProgramGuide { get; }
 
     public void MoveNext()
     {
-        if ((State.Index + 1) % _shuffled.Count == 0)
+        if ((State.Index + 1) % _shuffled.Length == 0)
         {
             Option<MediaItem> tail = Current;
 
@@ -83,12 +83,12 @@ public class ShuffleInOrderCollectionEnumerator : IMediaCollectionEnumerator
             State.Index++;
         }
 
-        State.Index %= _shuffled.Count;
+        State.Index %= _shuffled.Length;
     }
 
     public Option<TimeSpan> MinimumDuration => _lazyMinimumDuration.Value;
 
-    public int Count => _shuffled.Count;
+    public int Count => _shuffled.Length;
 
     private MediaItem[] Shuffle(IList<CollectionWithItems> collections, Random random)
     {

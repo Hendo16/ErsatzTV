@@ -1,6 +1,8 @@
-using System.Collections.Immutable;
+using System.Collections;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using ErsatzTV.Application.FFmpegProfiles;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
@@ -54,7 +56,7 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             .Map(r => new HealthCheckResultSummary(r.Title, r.Message))
             .ToList();
 
-        FFmpegSettingsViewModel ffmpegSettings = await GetFFmpegSettings();
+        FFmpegSettingsViewModel ffmpegSettings = await GetFFmpegSettings(cancellationToken);
 
         await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
@@ -62,24 +64,21 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
-        var channelFFmpegProfiles = channels
-            .Map(c => c.FFmpegProfileId)
-            .ToImmutableHashSet();
-
         List<FFmpegProfile> ffmpegProfiles = await dbContext.FFmpegProfiles
             .AsNoTracking()
             .Include(p => p.Resolution)
             .ToListAsync(cancellationToken);
 
-        var activeFFmpegProfiles = ffmpegProfiles
-            .Filter(f => channelFFmpegProfiles.Contains(f.Id))
-            .ToList();
+        List<ChannelWatermark> channelWatermarks = await dbContext.ChannelWatermarks
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
 
         string nvidiaCapabilities = null;
-        string qsvCapabilities = null;
-        string vaapiCapabilities = null;
+        StringBuilder qsvCapabilities = new();
+        StringBuilder vaapiCapabilities = new();
+        StringBuilder videoToolboxCapabilities = new();
         Option<ConfigElement> maybeFFmpegPath =
-            await _configElementRepository.GetConfigElement(ConfigElementKey.FFmpegPath);
+            await _configElementRepository.GetConfigElement(ConfigElementKey.FFmpegPath, cancellationToken);
         if (maybeFFmpegPath.IsNone)
         {
             nvidiaCapabilities = "Unable to locate ffmpeg";
@@ -103,10 +102,11 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
                 foreach (string qsvDevice in vaapiDevices)
                 {
                     QsvOutput output = await _hardwareCapabilitiesFactory.GetQsvOutput(ffmpegPath.Value, qsvDevice);
-                    qsvCapabilities += $"Checking device {qsvDevice}{Environment.NewLine}";
-                    qsvCapabilities += $"Exit Code: {output.ExitCode}{Environment.NewLine}{Environment.NewLine}";
-                    qsvCapabilities += output.Output;
-                    qsvCapabilities += Environment.NewLine + Environment.NewLine;
+                    qsvCapabilities.AppendLine(CultureInfo.InvariantCulture, $"Checking device {qsvDevice}");
+                    qsvCapabilities.AppendLine(CultureInfo.InvariantCulture, $"Exit Code: {output.ExitCode}");
+                    qsvCapabilities.AppendLine();
+                    qsvCapabilities.AppendLine(output.Output);
+                    qsvCapabilities.AppendLine();
                 }
 
                 if (_runtimeInfo.IsOSPlatform(OSPlatform.Linux))
@@ -123,54 +123,119 @@ public class GetTroubleshootingInfoHandler : IRequestHandler<GetTroubleshootingI
                                      Optional(GetDriverName(activeDriver)),
                                      vaapiDevice))
                         {
-                            vaapiCapabilities +=
-                                $"Checking display [{display}] driver [{activeDriver}] device [{vaapiDevice}]{Environment.NewLine}{Environment.NewLine}";
-                            vaapiCapabilities += output;
-                            vaapiCapabilities += Environment.NewLine + Environment.NewLine;
+                            vaapiCapabilities.AppendLine(
+                                CultureInfo.InvariantCulture,
+                                $"Checking display [{display}] driver [{activeDriver}] device [{vaapiDevice}]{Environment.NewLine}");
+                            vaapiCapabilities.AppendLine();
+                            vaapiCapabilities.AppendLine(output);
+                            vaapiCapabilities.AppendLine();
                         }
                     }
+                }
+
+                if (_runtimeInfo.IsOSPlatform(OSPlatform.OSX))
+                {
+                    List<string> decoders = _hardwareCapabilitiesFactory.GetVideoToolboxDecoders();
+                    videoToolboxCapabilities.AppendLine("VideoToolbox Decoders: ");
+                    videoToolboxCapabilities.AppendLine();
+                    foreach (string decoder in decoders)
+                    {
+                        videoToolboxCapabilities.AppendLine(CultureInfo.InvariantCulture, $"\t{decoder}");
+                    }
+
+                    videoToolboxCapabilities.AppendLine();
+                    videoToolboxCapabilities.AppendLine();
+
+                    List<string> encoders = _hardwareCapabilitiesFactory.GetVideoToolboxEncoders();
+                    videoToolboxCapabilities.AppendLine("VideoToolbox Encoders: ");
+                    videoToolboxCapabilities.AppendLine();
+                    foreach (string encoder in encoders)
+                    {
+                        videoToolboxCapabilities.AppendLine(CultureInfo.InvariantCulture, $"\t{encoder}");
+                    }
+
+                    videoToolboxCapabilities.AppendLine();
+                    videoToolboxCapabilities.AppendLine();
                 }
             }
         }
 
+        var environment = new Dictionary<string, string>();
+        foreach (DictionaryEntry de in Environment.GetEnvironmentVariables())
+        {
+            if (de is { Key: string key, Value: string value })
+            {
+                if (key.StartsWith("ETV_", StringComparison.OrdinalIgnoreCase)
+                    || key.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)
+                    || key.StartsWith("ASPNETCORE_", StringComparison.OrdinalIgnoreCase)
+                    || key.Equals("PROVIDER", StringComparison.OrdinalIgnoreCase)
+                    || key.StartsWith("ELASTICSEARCH", StringComparison.OrdinalIgnoreCase))
+                {
+                    environment[key] = value;
+                }
+            }
+        }
+
+        List<CpuModel> cpuList = _hardwareCapabilitiesFactory.GetCpuList();
+        List<VideoControllerModel> videoControllerList = _hardwareCapabilitiesFactory.GetVideoControllerList();
+
         return new TroubleshootingInfo(
             version,
+            environment,
+            cpuList,
+            videoControllerList,
             healthCheckSummaries,
             ffmpegSettings,
-            activeFFmpegProfiles,
+            ffmpegProfiles,
             channels,
+            channelWatermarks,
             nvidiaCapabilities,
-            qsvCapabilities,
-            vaapiCapabilities);
+            qsvCapabilities.ToString(),
+            vaapiCapabilities.ToString(),
+            videoToolboxCapabilities.ToString());
     }
 
     // lifted from GetFFmpegSettingsHandler
-    private async Task<FFmpegSettingsViewModel> GetFFmpegSettings()
+    private async Task<FFmpegSettingsViewModel> GetFFmpegSettings(CancellationToken cancellationToken)
     {
-        Option<string> ffmpegPath = await _configElementRepository.GetValue<string>(ConfigElementKey.FFmpegPath);
-        Option<string> ffprobePath = await _configElementRepository.GetValue<string>(ConfigElementKey.FFprobePath);
+        Option<string> ffmpegPath = await _configElementRepository.GetValue<string>(
+            ConfigElementKey.FFmpegPath,
+            cancellationToken);
+        Option<string> ffprobePath = await _configElementRepository.GetValue<string>(
+            ConfigElementKey.FFprobePath,
+            cancellationToken);
         Option<int> defaultFFmpegProfileId =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegDefaultProfileId);
+            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegDefaultProfileId, cancellationToken);
         Option<bool> saveReports =
-            await _configElementRepository.GetValue<bool>(ConfigElementKey.FFmpegSaveReports);
+            await _configElementRepository.GetValue<bool>(ConfigElementKey.FFmpegSaveReports, cancellationToken);
         Option<string> preferredAudioLanguageCode =
-            await _configElementRepository.GetValue<string>(ConfigElementKey.FFmpegPreferredLanguageCode);
+            await _configElementRepository.GetValue<string>(
+                ConfigElementKey.FFmpegPreferredLanguageCode,
+                cancellationToken);
         Option<bool> useEmbeddedSubtitles =
-            await _configElementRepository.GetValue<bool>(ConfigElementKey.FFmpegUseEmbeddedSubtitles);
+            await _configElementRepository.GetValue<bool>(
+                ConfigElementKey.FFmpegUseEmbeddedSubtitles,
+                cancellationToken);
         Option<bool> extractEmbeddedSubtitles =
-            await _configElementRepository.GetValue<bool>(ConfigElementKey.FFmpegExtractEmbeddedSubtitles);
+            await _configElementRepository.GetValue<bool>(
+                ConfigElementKey.FFmpegExtractEmbeddedSubtitles,
+                cancellationToken);
         Option<int> watermark =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegGlobalWatermarkId);
+            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegGlobalWatermarkId, cancellationToken);
         Option<int> fallbackFiller =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegGlobalFallbackFillerId);
+            await _configElementRepository.GetValue<int>(
+                ConfigElementKey.FFmpegGlobalFallbackFillerId,
+                cancellationToken);
         Option<int> hlsSegmenterIdleTimeout =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout);
+            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout, cancellationToken);
         Option<int> workAheadSegmenterLimit =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegWorkAheadSegmenters);
+            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegWorkAheadSegmenters, cancellationToken);
         Option<int> initialSegmentCount =
-            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegInitialSegmentCount);
+            await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegInitialSegmentCount, cancellationToken);
         Option<OutputFormatKind> outputFormatKind =
-            await _configElementRepository.GetValue<OutputFormatKind>(ConfigElementKey.FFmpegHlsDirectOutputFormat);
+            await _configElementRepository.GetValue<OutputFormatKind>(
+                ConfigElementKey.FFmpegHlsDirectOutputFormat,
+                cancellationToken);
 
         var result = new FFmpegSettingsViewModel
         {

@@ -6,6 +6,7 @@ using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.ViewModels;
 
@@ -13,7 +14,9 @@ public class ProgramScheduleItemEditViewModel : INotifyPropertyChanged
 {
     private ProgramScheduleItemCollectionType _collectionType;
     private int? _discardToFillAttempts;
+    private FixedStartTimeBehavior? _fixedStartTimeBehavior;
     private int? _multipleCount;
+    private PlaybackOrder _playbackOrder;
     private TimeSpan? _playoutDuration;
     private int _playoutDurationHours;
     private int _playoutDurationMinutes;
@@ -29,10 +32,17 @@ public class ProgramScheduleItemEditViewModel : INotifyPropertyChanged
         set => _startTime = value;
     }
 
+    public FixedStartTimeBehavior? FixedStartTimeBehavior
+    {
+        get => StartType == StartType.Fixed ? _fixedStartTimeBehavior : null;
+        set => _fixedStartTimeBehavior = value;
+    }
+
     public FillWithGroupMode FillWithGroupMode { get; set; }
 
     public bool CanFillWithGroups =>
         PlayoutMode is PlayoutMode.Multiple or PlayoutMode.Duration
+        && PlaybackOrder is not PlaybackOrder.ShuffleInOrder
         && CollectionType is ProgramScheduleItemCollectionType.Collection
             or ProgramScheduleItemCollectionType.MultiCollection or ProgramScheduleItemCollectionType.SmartCollection;
 
@@ -52,10 +62,17 @@ public class ProgramScheduleItemEditViewModel : INotifyPropertyChanged
                 MediaItem = null;
                 SmartCollection = null;
 
+                if (_collectionType != ProgramScheduleItemCollectionType.Playlist &&
+                    MultipleMode is MultipleMode.PlaylistItemSize)
+                {
+                    MultipleMode = MultipleMode.Count;
+                }
+
                 OnPropertyChanged(nameof(Collection));
                 OnPropertyChanged(nameof(MultiCollection));
                 OnPropertyChanged(nameof(MediaItem));
                 OnPropertyChanged(nameof(SmartCollection));
+                OnPropertyChanged(nameof(MultiCollection));
             }
 
             if (_collectionType == ProgramScheduleItemCollectionType.MultiCollection)
@@ -75,7 +92,7 @@ public class ProgramScheduleItemEditViewModel : INotifyPropertyChanged
     public FillerPresetViewModel PostRollFiller { get; set; }
     public FillerPresetViewModel TailFiller { get; set; }
     public FillerPresetViewModel FallbackFiller { get; set; }
-    public WatermarkViewModel Watermark { get; set; }
+    public IEnumerable<WatermarkViewModel> Watermarks { get; set; }
     public string PreferredAudioLanguageCode { get; set; }
     public string PreferredAudioTitle { get; set; }
     public string PreferredSubtitleLanguageCode { get; set; }
@@ -93,7 +110,30 @@ public class ProgramScheduleItemEditViewModel : INotifyPropertyChanged
         _ => string.Empty
     };
 
-    public PlaybackOrder PlaybackOrder { get; set; }
+    public PlaybackOrder PlaybackOrder
+    {
+        get => _playbackOrder;
+        set
+        {
+            if (value == _playbackOrder)
+            {
+                return;
+            }
+
+            _playbackOrder = value;
+
+            if (_playbackOrder is not PlaybackOrder.Chronological && MultipleMode is MultipleMode.MultiEpisodeGroupSize)
+            {
+                MultipleMode = MultipleMode.Count;
+            }
+
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanFillWithGroups));
+            OnPropertyChanged(nameof(MultipleMode));
+        }
+    }
+
+    public MultipleMode MultipleMode { get; set; }
 
     public int? MultipleCount
     {

@@ -13,9 +13,8 @@ public class GetAllBlockGroupsHandler(IDbContextFactory<TvContext> dbContextFact
 
         List<BlockGroup> blockGroups = await dbContext.BlockGroups
             .AsNoTracking()
-            .Include(g => g.Blocks)
             .ToListAsync(cancellationToken);
 
-        return blockGroups.Map(Mapper.ProjectToViewModel).ToList();
+        return blockGroups.OrderBy(bg => bg.Name).Map(Mapper.ProjectToViewModel).ToList();
     }
 }

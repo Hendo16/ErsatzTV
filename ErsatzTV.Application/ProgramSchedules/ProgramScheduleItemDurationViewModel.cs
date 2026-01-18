@@ -3,6 +3,7 @@ using ErsatzTV.Application.MediaCollections;
 using ErsatzTV.Application.MediaItems;
 using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Scheduling;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
@@ -13,6 +14,7 @@ public record ProgramScheduleItemDurationViewModel : ProgramScheduleItemViewMode
         int index,
         StartType startType,
         TimeSpan? startTime,
+        FixedStartTimeBehavior? fixedStartTimeBehavior,
         ProgramScheduleItemCollectionType collectionType,
         MediaCollectionViewModel collection,
         MultiCollectionViewModel multiCollection,
@@ -31,7 +33,7 @@ public record ProgramScheduleItemDurationViewModel : ProgramScheduleItemViewMode
         FillerPresetViewModel postRollFiller,
         FillerPresetViewModel tailFiller,
         FillerPresetViewModel fallbackFiller,
-        WatermarkViewModel watermark,
+        List<WatermarkViewModel> watermarks,
         string preferredAudioLanguageCode,
         string preferredAudioTitle,
         string preferredSubtitleLanguageCode,
@@ -40,6 +42,7 @@ public record ProgramScheduleItemDurationViewModel : ProgramScheduleItemViewMode
         index,
         startType,
         startTime,
+        fixedStartTimeBehavior,
         PlayoutMode.Duration,
         collectionType,
         collection,
@@ -56,7 +59,7 @@ public record ProgramScheduleItemDurationViewModel : ProgramScheduleItemViewMode
         postRollFiller,
         tailFiller,
         fallbackFiller,
-        watermark,
+        watermarks,
         preferredAudioLanguageCode,
         preferredAudioTitle,
         preferredSubtitleLanguageCode,

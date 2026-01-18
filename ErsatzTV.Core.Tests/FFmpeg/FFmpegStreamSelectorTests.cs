@@ -1,12 +1,13 @@
+using System.Collections.Immutable;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Scripting;
-using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NUnit.Framework;
+using Shouldly;
 
 namespace ErsatzTV.Core.Tests.FFmpeg;
 
@@ -17,7 +18,8 @@ public class FFmpegStreamSelectorTests
     public class SelectAudioStream
     {
         [Test]
-        public async Task Should_Select_Audio_Stream_With_Preferred_Language()
+        [CancelAfter(1000)]
+        public async Task Should_Select_Audio_Stream_With_Preferred_Language(CancellationToken cancellationToken)
         {
             // skip movie/episode script paths by using other video
             var mediaItem = new OtherVideo();
@@ -31,7 +33,7 @@ public class FFmpegStreamSelectorTests
                         MediaStreamKind = MediaStreamKind.Audio,
                         Channels = 2,
                         Language = "ja",
-                        Title = "Some Title",
+                        Title = "Some Title"
                     },
                     new MediaStream
                     {
@@ -63,16 +65,23 @@ public class FFmpegStreamSelectorTests
                 Substitute.For<ILocalFileSystem>(),
                 Substitute.For<ILogger<FFmpegStreamSelector>>());
 
-            Option<MediaStream> selectedStream = await selector.SelectAudioStream(audioVersion, StreamingMode.TransportStream, channel, "jpn", "Whatever");
-            selectedStream.IsSome.Should().BeTrue();
+            Option<MediaStream> selectedStream = await selector.SelectAudioStream(
+                audioVersion,
+                StreamingMode.TransportStream,
+                channel,
+                "jpn",
+                "Whatever",
+                cancellationToken);
+            selectedStream.IsSome.ShouldBeTrue();
             foreach (MediaStream stream in selectedStream)
             {
-                stream.Language.Should().Be("ja");
+                stream.Language.ShouldBe("ja");
             }
         }
 
         [Test]
-        public async Task Should_Select_Audio_Stream_With_Preferred_Title()
+        [CancelAfter(1000)]
+        public async Task Should_Select_Audio_Stream_With_Preferred_Title(CancellationToken cancellationToken)
         {
             // skip movie/episode script paths by using other video
             var mediaItem = new OtherVideo();
@@ -86,7 +95,7 @@ public class FFmpegStreamSelectorTests
                         MediaStreamKind = MediaStreamKind.Audio,
                         Channels = 2,
                         Language = "ja",
-                        Title = "Some Title",
+                        Title = "Some Title"
                     },
                     new MediaStream
                     {
@@ -118,16 +127,23 @@ public class FFmpegStreamSelectorTests
                 Substitute.For<ILocalFileSystem>(),
                 Substitute.For<ILogger<FFmpegStreamSelector>>());
 
-            Option<MediaStream> selectedStream = await selector.SelectAudioStream(audioVersion, StreamingMode.TransportStream, channel, null, channel.PreferredAudioTitle);
-            selectedStream.IsSome.Should().BeTrue();
+            Option<MediaStream> selectedStream = await selector.SelectAudioStream(
+                audioVersion,
+                StreamingMode.TransportStream,
+                channel,
+                null,
+                channel.PreferredAudioTitle,
+                cancellationToken);
+            selectedStream.IsSome.ShouldBeTrue();
             foreach (MediaStream stream in selectedStream)
             {
-                stream.Language.Should().Be("ja");
+                stream.Language.ShouldBe("ja");
             }
         }
 
         [Test]
-        public async Task Should_Select_Subtitle_Stream_With_Preferred_Language()
+        [CancelAfter(1000)]
+        public async Task Should_Select_Subtitle_Stream_With_Preferred_Language(CancellationToken cancellationToken)
         {
             // skip movie/episode script paths by using other video
             var subtitles = new List<Subtitle>
@@ -143,8 +159,8 @@ public class FFmpegStreamSelectorTests
                 {
                     StreamIndex = 1,
                     SubtitleKind = SubtitleKind.Sidecar,
-                    Language = "he",
-                },
+                    Language = "he"
+                }
             };
 
             var channel = new Channel(Guid.NewGuid());
@@ -162,14 +178,15 @@ public class FFmpegStreamSelectorTests
                 Substitute.For<ILogger<FFmpegStreamSelector>>());
 
             Option<Subtitle> selectedStream = await selector.SelectSubtitleStream(
-                subtitles,
+                subtitles.ToImmutableList(),
                 channel,
                 "heb",
-                ChannelSubtitleMode.Any);
-            selectedStream.IsSome.Should().BeTrue();
+                ChannelSubtitleMode.Any,
+                cancellationToken);
+            selectedStream.IsSome.ShouldBeTrue();
             foreach (Subtitle stream in selectedStream)
             {
-                stream.Language.Should().Be("he");
+                stream.Language.ShouldBe("he");
             }
         }
     }

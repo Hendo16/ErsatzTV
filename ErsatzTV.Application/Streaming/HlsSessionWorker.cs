@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.IO.Pipelines;
 using System.Text;
 using System.Timers;
 using Bugsnag;
@@ -13,6 +14,7 @@ using ErsatzTV.Core.FFmpeg;
 using ErsatzTV.Core.Interfaces.FFmpeg;
 using ErsatzTV.Core.Interfaces.Metadata;
 using ErsatzTV.Core.Interfaces.Repositories;
+using ErsatzTV.Core.Interfaces.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Timer = System.Timers.Timer;
@@ -24,15 +26,17 @@ public class HlsSessionWorker : IHlsSessionWorker
     private static int _workAheadCount;
     private readonly IClient _client;
     private readonly IConfigElementRepository _configElementRepository;
+    private readonly IGraphicsEngine _graphicsEngine;
     private readonly IHlsPlaylistFilter _hlsPlaylistFilter;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILogger<HlsSessionWorker> _logger;
     private readonly IMediator _mediator;
     private readonly SemaphoreSlim _slim = new(1, 1);
-    private readonly object _sync = new();
+    private readonly Lock _sync = new();
     private readonly Option<int> _targetFramerate;
     private CancellationTokenSource _cancellationTokenSource;
     private string _channelNumber;
+    private DateTimeOffset _channelStart;
     private bool _disposedValue;
     private bool _hasWrittenSegments;
     private DateTimeOffset _lastAccess;
@@ -44,6 +48,7 @@ public class HlsSessionWorker : IHlsSessionWorker
 
     public HlsSessionWorker(
         IServiceScopeFactory serviceScopeFactory,
+        IGraphicsEngine graphicsEngine,
         IClient client,
         IHlsPlaylistFilter hlsPlaylistFilter,
         IConfigElementRepository configElementRepository,
@@ -53,6 +58,7 @@ public class HlsSessionWorker : IHlsSessionWorker
     {
         _serviceScope = serviceScopeFactory.CreateScope();
         _mediator = _serviceScope.ServiceProvider.GetRequiredService<IMediator>();
+        _graphicsEngine = graphicsEngine;
         _client = client;
         _hlsPlaylistFilter = hlsPlaylistFilter;
         _configElementRepository = configElementRepository;
@@ -146,7 +152,10 @@ public class HlsSessionWorker : IHlsSessionWorker
         GC.SuppressFinalize(this);
     }
 
-    public async Task Run(string channelNumber, TimeSpan idleTimeout, CancellationToken incomingCancellationToken)
+    public async Task Run(
+        string channelNumber,
+        Option<TimeSpan> idleTimeout,
+        CancellationToken incomingCancellationToken)
     {
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(incomingCancellationToken);
 
@@ -154,10 +163,13 @@ public class HlsSessionWorker : IHlsSessionWorker
         {
             _channelNumber = channelNumber;
 
-            lock (_sync)
+            foreach (TimeSpan timeout in idleTimeout)
             {
-                _timer = new Timer(idleTimeout.TotalMilliseconds) { AutoReset = false };
-                _timer.Elapsed += CancelRun;
+                lock (_sync)
+                {
+                    _timer = new Timer(timeout.TotalMilliseconds) { AutoReset = false };
+                    _timer.Elapsed += CancelRun;
+                }
             }
 
             CancellationToken cancellationToken = _cancellationTokenSource.Token;
@@ -172,11 +184,21 @@ public class HlsSessionWorker : IHlsSessionWorker
             Touch();
             _transcodedUntil = DateTimeOffset.Now;
             PlaylistStart = _transcodedUntil;
+            _channelStart = _transcodedUntil;
+
+            Option<int> maybePlayoutId = await _mediator.Send(
+                new GetPlayoutIdByChannelNumber(_channelNumber),
+                cancellationToken);
 
             // time shift on-demand playout if needed
-            await _mediator.Send(new TimeShiftOnDemandPlayout(_channelNumber, _transcodedUntil, true), cancellationToken);
+            foreach (int playoutId in maybePlayoutId)
+            {
+                await _mediator.Send(
+                    new TimeShiftOnDemandPlayout(playoutId, _transcodedUntil, true),
+                    cancellationToken);
+            }
 
-            bool initialWorkAhead = Volatile.Read(ref _workAheadCount) < await GetWorkAheadLimit();
+            bool initialWorkAhead = Volatile.Read(ref _workAheadCount) < await GetWorkAheadLimit(cancellationToken);
             _state = initialWorkAhead ? HlsSessionState.SeekAndWorkAhead : HlsSessionState.SeekAndRealtime;
 
             if (!await Transcode(!initialWorkAhead, cancellationToken))
@@ -186,10 +208,13 @@ public class HlsSessionWorker : IHlsSessionWorker
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (DateTimeOffset.Now - _lastAccess > idleTimeout)
+                foreach (TimeSpan timeout in idleTimeout)
                 {
-                    _logger.LogInformation("Stopping idle HLS session for channel {Channel}", channelNumber);
-                    return;
+                    if (DateTimeOffset.Now - _lastAccess > timeout)
+                    {
+                        _logger.LogInformation("Stopping idle HLS session for channel {Channel}", channelNumber);
+                        return;
+                    }
                 }
 
                 var transcodedBuffer = TimeSpan.FromSeconds(
@@ -199,7 +224,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                     // only use realtime encoding when we're at least 30 seconds ahead
                     bool realtime = transcodedBuffer >= TimeSpan.FromSeconds(30);
                     bool subsequentWorkAhead =
-                        !realtime && Volatile.Read(ref _workAheadCount) < await GetWorkAheadLimit();
+                        !realtime && Volatile.Read(ref _workAheadCount) < await GetWorkAheadLimit(cancellationToken);
                     if (!await Transcode(!subsequentWorkAhead, cancellationToken))
                     {
                         return;
@@ -214,9 +239,12 @@ public class HlsSessionWorker : IHlsSessionWorker
         }
         finally
         {
-            lock (_sync)
+            if (_timer is not null)
             {
-                _timer.Elapsed -= CancelRun;
+                lock (_sync)
+                {
+                    _timer.Elapsed -= CancelRun;
+                }
             }
 
             try
@@ -303,8 +331,11 @@ public class HlsSessionWorker : IHlsSessionWorker
         {
             if (disposing)
             {
-                _timer.Dispose();
-                _timer = null;
+                if (_timer is not null)
+                {
+                    _timer.Dispose();
+                    _timer = null;
+                }
 
                 _serviceScope.Dispose();
                 _serviceScope = null;
@@ -409,6 +440,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                 now,
                 startAtZero,
                 realtime,
+                _channelStart,
                 ptsOffset,
                 _targetFramerate);
 
@@ -432,15 +464,35 @@ public class HlsSessionWorker : IHlsSessionWorker
             {
                 await TrimAndDelete(cancellationToken);
 
+                Option<Pipe> maybePipe = Option<Pipe>.None;
+                var stdErrBuffer = new StringBuilder();
+
                 Command process = processModel.Process;
 
                 _logger.LogDebug("ffmpeg hls arguments {FFmpegArguments}", process.Arguments);
 
                 try
                 {
-                    BufferedCommandResult commandResult = await process
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+                    Command processWithPipe = process;
+                    foreach (GraphicsEngineContext graphicsEngineContext in processModel.GraphicsEngineContext)
+                    {
+                        var pipe = new Pipe();
+                        maybePipe = pipe;
+                        processWithPipe = process.WithStandardInputPipe(PipeSource.FromStream(pipe.Reader.AsStream()));
+
+                        // fire and forget graphics engine task
+                        _ = _graphicsEngine.Run(
+                            graphicsEngineContext,
+                            pipe.Writer,
+                            linkedCts.Token);
+                    }
+
+                    CommandResult commandResult = await processWithPipe
+                        .WithStandardErrorPipe(PipeTarget.ToStringBuilder(stdErrBuffer))
                         .WithValidation(CommandResultValidation.None)
-                        .ExecuteBufferedAsync(Encoding.UTF8, cancellationToken);
+                        .ExecuteAsync(linkedCts.Token);
 
                     if (commandResult.ExitCode == 0)
                     {
@@ -453,9 +505,10 @@ public class HlsSessionWorker : IHlsSessionWorker
                     }
                     else
                     {
-                        // detect the non-zero exit code and transcode the ffmpeg error message instead
+                        await linkedCts.CancelAsync();
 
-                        string errorMessage = commandResult.StandardError;
+                        // detect the non-zero exit code and transcode the ffmpeg error message instead
+                        var errorMessage = stdErrBuffer.ToString();
                         if (string.IsNullOrWhiteSpace(errorMessage))
                         {
                             errorMessage = $"Unknown FFMPEG error; exit code {commandResult.ExitCode}";
@@ -465,7 +518,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                             "HLS process for channel {Channel} has terminated unsuccessfully with exit code {ExitCode}: {StandardError}",
                             _channelNumber,
                             commandResult.ExitCode,
-                            commandResult.StandardError);
+                            stdErrBuffer.ToString());
 
                         Either<BaseError, PlayoutItemProcessModel> maybeOfflineProcess = await _mediator.Send(
                             new GetErrorProcess(
@@ -476,6 +529,7 @@ public class HlsSessionWorker : IHlsSessionWorker
                                 processModel.MaybeDuration,
                                 processModel.Until,
                                 errorMessage),
+                            // ReSharper disable once PossiblyMistakenUseOfCancellationToken
                             cancellationToken);
 
                         foreach (PlayoutItemProcessModel errorProcessModel in maybeOfflineProcess.RightAsEnumerable())
@@ -488,6 +542,7 @@ public class HlsSessionWorker : IHlsSessionWorker
 
                             commandResult = await errorProcess
                                 .WithValidation(CommandResultValidation.None)
+                                // ReSharper disable once PossiblyMistakenUseOfCancellationToken
                                 .ExecuteBufferedAsync(Encoding.UTF8, cancellationToken);
 
                             if (commandResult.ExitCode == 0)
@@ -508,6 +563,13 @@ public class HlsSessionWorker : IHlsSessionWorker
                 {
                     _logger.LogInformation("Terminating HLS session for channel {Channel}", _channelNumber);
                     return false;
+                }
+                finally
+                {
+                    foreach (Pipe pipe in maybePipe)
+                    {
+                        await pipe.Writer.CompleteAsync();
+                    }
                 }
             }
         }
@@ -583,15 +645,14 @@ public class HlsSessionWorker : IHlsSessionWorker
                 Directory.GetFiles(
                     Path.Combine(FileSystemLayout.TranscodeFolder, _channelNumber),
                     "live*.mp4"))
-            .Map(
-                file =>
-                {
-                    string fileName = Path.GetFileName(file);
-                    var sequenceNumber = int.Parse(
-                        fileName.Replace("live", string.Empty).Split('.')[0],
-                        CultureInfo.InvariantCulture);
-                    return new Segment(file, sequenceNumber);
-                })
+            .Map(file =>
+            {
+                string fileName = Path.GetFileName(file);
+                var sequenceNumber = int.Parse(
+                    fileName.Replace("live", string.Empty).Split('.')[0],
+                    CultureInfo.InvariantCulture);
+                return new Segment(file, sequenceNumber);
+            })
             .ToList();
 
         var toDelete = allSegments.Filter(s => s.SequenceNumber < trimResult.Sequence).ToList();
@@ -632,8 +693,8 @@ public class HlsSessionWorker : IHlsSessionWorker
                 return result;
             }
 
-            Either<BaseError, PtsAndDuration> queryResult = await _mediator.Send(
-                new GetLastPtsDuration(channelNumber),
+            Either<BaseError, PtsTime> queryResult = await _mediator.Send(
+                new GetLastPtsTime(channelNumber),
                 cancellationToken);
 
             foreach (BaseError error in queryResult.LeftToSeq())
@@ -641,9 +702,9 @@ public class HlsSessionWorker : IHlsSessionWorker
                 _logger.LogWarning("Unable to determine last pts offset - {Error}", error.ToString());
             }
 
-            foreach ((long pts, long duration) in queryResult.RightToSeq())
+            foreach (PtsTime pts in queryResult.RightToSeq())
             {
-                result = pts + duration + 1;
+                result = pts.Value;
             }
 
             return result;
@@ -654,8 +715,8 @@ public class HlsSessionWorker : IHlsSessionWorker
         }
     }
 
-    private async Task<int> GetWorkAheadLimit() =>
-        await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegWorkAheadSegmenters)
+    private async Task<int> GetWorkAheadLimit(CancellationToken cancellationToken) =>
+        await _configElementRepository.GetValue<int>(ConfigElementKey.FFmpegWorkAheadSegmenters, cancellationToken)
             .Map(maybeCount => maybeCount.Match(identity, () => 1));
 
     private async Task<Option<string[]>> ReadPlaylistLines(CancellationToken cancellationToken)

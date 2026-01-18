@@ -13,135 +13,154 @@
 @inject ChannelWriter<IScannerBackgroundServiceRequest> ScannerWorkerChannel;
 @inject ICourier Courier
 
-<MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-    <MudTable Hover="true" Items="_libraries" Dense="true">
-        <ToolBarContent>
-            <MudText Typo="Typo.h6">Libraries</MudText>
-        </ToolBarContent>
-        <ColGroup>
-            <col/>
-            @if (_showServerNames)
-            {
-                <col/>
-            }
-            <col/>
-            <col/>
-            <col style="width: 180px;"/>
-        </ColGroup>
-        <HeaderContent>
-            <MudTh>Library Kind</MudTh>
-            @if (_showServerNames)
-            {
-                <MudTh>Server Name</MudTh>
-            }
-            <MudTh>Library Name</MudTh>
-            <MudTh>Media Kind</MudTh>
-            <MudTh/>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd DataLabel="Library Kind">@context.LibraryKind</MudTd>
-            @if (_showServerNames)
-            {
-                <MudTd DataLabel="Server Name">@context.MediaSourceName</MudTd>
-            }
-            <MudTd DataLabel="Library Name">@context.Name</MudTd>
-            <MudTd DataLabel="Media Kind">@context.MediaKind</MudTd>
-            <MudTd>
-                <div style="align-items: center; display: flex;">
-                    @if (Locker.IsLibraryLocked(context.Id))
+<MudForm Style="max-height: 100%">
+    <div class="d-flex flex-column" style="height: 100vh; overflow-x: auto">
+        <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
+            <MudText Typo="Typo.h5" Class="mb-2">Libraries</MudText>
+            <MudDivider Class="mb-6"/>
+            <MudTable Hover="true" Items="_libraries" Dense="true" Class="mb-5">
+                <ColGroup>
+                    <MudHidden Breakpoint="Breakpoint.Xs">
+                        <col/>
+                        @if (_showServerNames)
+                        {
+                            <col/>
+                        }
+                        <col/>
+                        <col/>
+                        <col style="width: 180px;"/>
+                    </MudHidden>
+                </ColGroup>
+                <HeaderContent>
+                    <MudTh>Library Kind</MudTh>
+                    @if (_showServerNames)
                     {
-                        <div style="width: 48px">
-                            @if (_progressByLibrary[context.Id] > 0)
+                        <MudTh>Server Name</MudTh>
+                    }
+                    <MudTh>Library Name</MudTh>
+                    <MudTh>Media Kind</MudTh>
+                    <MudTh/>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Library Kind">@context.LibraryKind</MudTd>
+                    @if (_showServerNames)
+                    {
+                        <MudTd DataLabel="Server Name">@context.MediaSourceName</MudTd>
+                    }
+                    <MudTd DataLabel="Library Name">@context.Name</MudTd>
+                    <MudTd DataLabel="Media Kind">
+                        @switch (context.MediaKind)
+                        {
+                            case LibraryMediaKind.MusicVideos:
+                                @:Music Videos
+                                break;
+                            case LibraryMediaKind.OtherVideos:
+                                @:Other Videos
+                                break;
+                            case LibraryMediaKind.RemoteStreams:
+                                @:Remote Streams
+                                break;
+                            default:
+                                @(context.MediaKind)
+                                break;
+                        }
+                    </MudTd>
+                    <MudTd>
+                        <div style="align-items: center; display: flex;">
+                            @if (Locker.IsLibraryLocked(context.Id))
                             {
-                                <MudText Color="Color.Primary">
-                                    @($"{_progressByLibrary[context.Id]} %")
-                                </MudText>
+                                <div style="width: 48px">
+                                    @if (_progressByLibrary[context.Id] > 0)
+                                    {
+                                        <MudText Color="Color.Primary">
+                                            @($"{_progressByLibrary[context.Id]} %")
+                                        </MudText>
+                                    }
+                                </div>
+                                <div style="align-items: center; display: flex; height: 48px; justify-content: center; width: 48px;">
+                                    <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true"/>
+                                </div>
                             }
-                        </div>
-                        <div style="align-items: center; display: flex; height: 48px; justify-content: center; width: 48px;">
-                            <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true"/>
-                        </div>
-                    }
-                    else
-                    {
-                        if (context is PlexLibraryViewModel or EmbyLibraryViewModel or JellyfinLibraryViewModel)
-                        {
-                            <MudTooltip Text="Deep Scan Library">
-                                <MudIconButton Icon="@Icons.Material.Filled.FindReplace"
-                                               Disabled="@Locker.IsLibraryLocked(context.Id)"
-                                               OnClick="@(_ => ScanLibrary(context, true))">
+                            else
+                            {
+                                if (context is PlexLibraryViewModel or EmbyLibraryViewModel or JellyfinLibraryViewModel)
+                                {
+                                    <MudTooltip Text="Deep Scan Library">
+                                        <MudIconButton Icon="@Icons.Material.Filled.FindReplace"
+                                                       Disabled="@Locker.IsLibraryLocked(context.Id)"
+                                                       OnClick="@(_ => ScanLibrary(context, true))">
+                                        </MudIconButton>
+                                    </MudTooltip>
+                                }
+                                else
+                                {
+                                    <div style="width: 48px"></div>
+                                }
+
+                                <MudTooltip Text="Scan Library">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                                   Disabled="@Locker.IsLibraryLocked(context.Id)"
+                                                   OnClick="@(_ => ScanLibrary(context))">
+                                    </MudIconButton>
+                                </MudTooltip>
+                            }
+                            <MudTooltip Text="Search Library">
+                                <MudIconButton Icon="@Icons.Material.Filled.Search"
+                                               Href="@($"search?query=library_id%3a{context.Id}")">
                                 </MudIconButton>
                             </MudTooltip>
-                        }
-                        else
-                        {
-                            <div style="width: 48px"></div>
-                        }
-
-                        <MudTooltip Text="Scan Library">
-                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                           Disabled="@Locker.IsLibraryLocked(context.Id)"
-                                           OnClick="@(_ => ScanLibrary(context))">
-                            </MudIconButton>
-                        </MudTooltip>
-                    }
-                    <MudTooltip Text="Search Library">
-                        <MudIconButton Icon="@Icons.Material.Filled.Search"
-                                       Href="@($"search?query=library_id%3a{context.Id}")">
-                        </MudIconButton>
-                    </MudTooltip>
-                </div>
-            </MudTd>
-        </RowTemplate>
-    </MudTable>
-</MudContainer>
-
-@if (_externalCollections.Any())
-{
-    <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-8">
-        <MudTable Hover="true" Items="_externalCollections" Dense="true">
-            <ToolBarContent>
-                <MudText Typo="Typo.h6">External Collections</MudText>
-            </ToolBarContent>
-            <ColGroup>
-                <col/>
-                <col style="width: 180px;"/>
-            </ColGroup>
-            <HeaderContent>
-                <MudTh>Library Kind</MudTh>
-                <MudTh/>
-            </HeaderContent>
-            <RowTemplate>
-                <MudTd DataLabel="Library Kind">@context.LibraryKind</MudTd>
-                <MudTd>
-                    <div style="align-items: center; display: flex;">
-                        <div style="width: 48px"></div>
-                        @if (AreCollectionsLocked(context.LibraryKind))
-                        {
-                            <div style="align-items: center; display: flex; height: 48px; justify-content: center; width: 48px;">
-                                <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true"/>
+                        </div>
+                    </MudTd>
+                </RowTemplate>
+            </MudTable>
+            <MudText Typo="Typo.h5" Class="mt-10 mb-2">External Collections</MudText>
+            <MudDivider Class="mb-6"/>
+            @if (_externalCollections.Any())
+            {
+                <MudTable Hover="true" Items="_externalCollections" Dense="true">
+                    <ColGroup>
+                        <MudHidden Breakpoint="Breakpoint.Xs">
+                            <col/>
+                            <col style="width: 180px;"/>
+                        </MudHidden>
+                    </ColGroup>
+                    <HeaderContent>
+                        <MudTh>Library Kind</MudTh>
+                        <MudTh/>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>@context.LibraryKind</MudTd>
+                        <MudTd>
+                            <div style="align-items: center; display: flex;">
+                                <div style="width: 48px"></div>
+                                @if (AreCollectionsLocked(context.LibraryKind))
+                                {
+                                    <div style="align-items: center; display: flex; height: 48px; justify-content: center; width: 48px;">
+                                        <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true"/>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div style="width: 48px"></div>
+                                    <MudTooltip Text="Scan Collections">
+                                        <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                                       Disabled="@AreCollectionsLocked(context.LibraryKind)"
+                                                       OnClick="@(_ => ScanExternalCollections(context))">
+                                        </MudIconButton>
+                                    </MudTooltip>
+                                }
+                                <div style="width: 48px"></div>
                             </div>
-                        }
-                        else
-                        {
-                            <div style="width: 48px"></div>
-                            <MudTooltip Text="Scan Collections">
-                                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                               Disabled="@AreCollectionsLocked(context.LibraryKind)"
-                                               OnClick="@(_ => ScanExternalCollections(context))">
-                                </MudIconButton>
-                            </MudTooltip>
-                        }
-                        <div style="width: 48px"></div>
-                    </div>
-                </MudTd>
-            </RowTemplate>
-        </MudTable>
-    </MudContainer>
-}
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudContainer>
+    </div>
+</MudForm>
 
 @code {
-    private readonly CancellationTokenSource _cts = new();
+    private CancellationTokenSource _cts;
 
     private IList<LibraryViewModel> _libraries = new List<LibraryViewModel>();
     private IList<LibraryViewModel> _externalCollections = new List<LibraryViewModel>();
@@ -157,37 +176,51 @@
         Courier.Subscribe<LibraryScanProgress>(HandleScanProgress);
     }
 
-    protected override async Task OnParametersSetAsync() => await LoadLibraries(_cts.Token);
-
-    private async Task LoadLibraries(CancellationToken cancellationToken)
+    protected override async Task OnParametersSetAsync()
     {
-        _libraries = await Mediator.Send(new GetConfiguredLibraries(), cancellationToken);
-        _showServerNames = _libraries.Any(l => l is PlexLibraryViewModel);
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
 
-        _externalCollections = await Mediator.Send(new GetExternalCollections(), cancellationToken);
-        _progressByLibrary = _libraries.ToDictionary(vm => vm.Id, _ => 0);
+        try
+        {
+            _libraries = await Mediator.Send(new GetConfiguredLibraries(), token);
+            _showServerNames = _libraries.Any(l => l is PlexLibraryViewModel);
+            token.ThrowIfCancellationRequested();
+
+            _externalCollections = await Mediator.Send(new GetExternalCollections(), token);
+            _progressByLibrary = _libraries.ToDictionary(vm => vm.Id, _ => 0);
+        }
+        catch (OperationCanceledException)
+        {
+            // do nothing
+        }
     }
 
     private async Task ScanLibrary(LibraryViewModel library, bool deepScan = false)
     {
         if (Locker.LockLibrary(library.Id))
         {
+            var token = _cts?.Token ?? CancellationToken.None;
+
             switch (library)
             {
                 case LocalLibraryViewModel:
-                    await ScannerWorkerChannel.WriteAsync(new ForceScanLocalLibrary(library.Id), _cts.Token);
+                    await ScannerWorkerChannel.WriteAsync(new ForceScanLocalLibrary(library.Id), token);
                     break;
                 case PlexLibraryViewModel:
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizePlexLibraries(library.MediaSourceId), _cts.Token);
-                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizePlexLibraryById(library.Id, deepScan), _cts.Token);
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizePlexLibraries(library.MediaSourceId), token);
+                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizePlexLibraryById(library.Id, deepScan), token);
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizePlexNetworks(library.Id, true), token);
                     break;
                 case JellyfinLibraryViewModel:
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizeJellyfinLibraries(library.MediaSourceId), _cts.Token);
-                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizeJellyfinLibraryById(library.Id, deepScan), _cts.Token);
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizeJellyfinLibraries(library.MediaSourceId), token);
+                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizeJellyfinLibraryById(library.Id, deepScan), token);
                     break;
                 case EmbyLibraryViewModel:
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizeEmbyLibraries(library.MediaSourceId), _cts.Token);
-                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizeEmbyLibraryById(library.Id, deepScan), _cts.Token);
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizeEmbyLibraries(library.MediaSourceId), token);
+                    await ScannerWorkerChannel.WriteAsync(new ForceSynchronizeEmbyLibraryById(library.Id, deepScan), token);
                     break;
             }
 
@@ -197,26 +230,27 @@
 
     private async Task ScanExternalCollections(LibraryViewModel library)
     {
+        var token = _cts?.Token ?? CancellationToken.None;
         switch (library.LibraryKind.ToLowerInvariant())
         {
             case "emby":
                 if (Locker.LockEmbyCollections())
                 {
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizeEmbyCollections(library.MediaSourceId, true));
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizeEmbyCollections(library.MediaSourceId, true), token);
                 }
 
                 break;
             case "jellyfin":
                 if (Locker.LockJellyfinCollections())
                 {
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizeJellyfinCollections(library.MediaSourceId, true));
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizeJellyfinCollections(library.MediaSourceId, true), token);
                 }
 
                 break;
             case "plex":
                 if (Locker.LockPlexCollections())
                 {
-                    await ScannerWorkerChannel.WriteAsync(new SynchronizePlexCollections(library.MediaSourceId, true));
+                    await ScannerWorkerChannel.WriteAsync(new SynchronizePlexCollections(library.MediaSourceId, true), token);
                 }
 
                 break;
@@ -265,8 +299,7 @@
         Locker.OnPlexCollectionsChanged -= LockChanged;
         Courier.UnSubscribe<LibraryScanProgress>(HandleScanProgress);
 
-        _cts.Cancel();
-        _cts.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
     }
-
 }

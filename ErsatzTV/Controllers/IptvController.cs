@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using CliWrap;
 using ErsatzTV.Application.Channels;
@@ -82,10 +83,15 @@ public class IptvController : ControllerBase
         [FromQuery]
         string mode = null)
     {
+        Option<ChannelViewModel> maybeChannel = await _mediator.Send(new GetChannelByNumber(channelNumber));
+        if (maybeChannel.IsNone || !await maybeChannel.Map(c => c.IsEnabled).IfNoneAsync(false))
+        {
+            return NotFound();
+        }
+
         // if mode is "unspecified" - find the configured mode and set it or redirect
         if (string.IsNullOrWhiteSpace(mode) || mode == "mixed")
         {
-            Option<ChannelViewModel> maybeChannel = await _mediator.Send(new GetChannelByNumber(channelNumber));
             foreach (ChannelViewModel channel in maybeChannel)
             {
                 switch (channel.StreamingMode)
@@ -113,37 +119,36 @@ public class IptvController : ControllerBase
         };
 
         return await _mediator.Send(request)
-            .Map(
-                result => result.Match<IActionResult>(
-                    processModel =>
+            .Map(result => result.Match<IActionResult>(
+                processModel =>
+                {
+                    Command command = processModel.Process;
+
+                    _logger.LogInformation("Starting ts stream for channel {ChannelNumber}", channelNumber);
+                    _logger.LogDebug("ffmpeg arguments {FFmpegArguments}", command.Arguments);
+                    var process = new FFmpegProcess
                     {
-                        Command command = processModel.Process;
-
-                        _logger.LogInformation("Starting ts stream for channel {ChannelNumber}", channelNumber);
-                        _logger.LogDebug("ffmpeg arguments {FFmpegArguments}", command.Arguments);
-                        var process = new FFmpegProcess
+                        StartInfo = new ProcessStartInfo
                         {
-                            StartInfo = new ProcessStartInfo
-                            {
-                                FileName = command.TargetFilePath,
-                                Arguments = command.Arguments,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = false,
-                                UseShellExecute = false,
-                                CreateNoWindow = true
-                            }
-                        };
-                        HttpContext.Response.RegisterForDispose(process);
-
-                        foreach ((string key, string value) in command.EnvironmentVariables)
-                        {
-                            process.StartInfo.Environment[key] = value;
+                            FileName = command.TargetFilePath,
+                            Arguments = command.Arguments,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = false,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
                         }
+                    };
+                    HttpContext.Response.RegisterForDispose(process);
 
-                        process.Start();
-                        return new FileStreamResult(process.StandardOutput.BaseStream, "video/mp2t");
-                    },
-                    error => BadRequest(error.Value)));
+                    foreach ((string key, string value) in command.EnvironmentVariables)
+                    {
+                        process.StartInfo.Environment[key] = value;
+                    }
+
+                    process.Start();
+                    return new FileStreamResult(process.StandardOutput.BaseStream, "video/mp2t");
+                },
+                error => BadRequest(error.Value)));
     }
 
     [HttpHead("iptv/session/{channelNumber}/hls.m3u8")]
@@ -168,7 +173,9 @@ public class IptvController : ControllerBase
             return NotFound();
         }
 
-        _logger.LogWarning("Unable to locate session worker for channel {Channel}; will redirect to start session", channelNumber);
+        _logger.LogWarning(
+            "Unable to locate session worker for channel {Channel}; will redirect to start session",
+            channelNumber);
         return RedirectToAction(nameof(GetHttpLiveStreamingVideo), new { channelNumber });
     }
 
@@ -179,10 +186,15 @@ public class IptvController : ControllerBase
         [FromQuery]
         string mode = "mixed")
     {
+        Option<ChannelViewModel> maybeChannel = await _mediator.Send(new GetChannelByNumber(channelNumber));
+        if (maybeChannel.IsNone || !await maybeChannel.Map(c => c.IsEnabled).IfNoneAsync(false))
+        {
+            return NotFound();
+        }
+
         // if mode is "unspecified" - find the configured mode and set it or redirect
         if (string.IsNullOrWhiteSpace(mode) || mode == "mixed")
         {
-            Option<ChannelViewModel> maybeChannel = await _mediator.Send(new GetChannelByNumber(channelNumber));
             foreach (ChannelViewModel channel in maybeChannel)
             {
                 switch (channel.StreamingMode)
@@ -249,10 +261,9 @@ public class IptvController : ControllerBase
                             Request.Host.ToString(),
                             channelNumber,
                             mode))
-                    .Map(
-                        r => r.Match<IActionResult>(
-                            playlist => Content(playlist, "application/vnd.apple.mpegurl"),
-                            error => BadRequest(error.Value)));
+                    .Map(r => r.Match<IActionResult>(
+                        playlist => Content(playlist, "application/vnd.apple.mpegurl"),
+                        error => BadRequest(error.Value)));
         }
     }
 
@@ -260,10 +271,10 @@ public class IptvController : ControllerBase
     [HttpGet("iptv/logos/{fileName}")]
     [HttpHead("iptv/logos/{fileName}.jpg")]
     [HttpGet("iptv/logos/{fileName}.jpg")]
-    public async Task<IActionResult> GetImage(string fileName)
+    public async Task<IActionResult> GetImage(string fileName, [FromQuery] string contentType)
     {
         Either<BaseError, CachedImagePathViewModel> cachedImagePath =
-            await _mediator.Send(new GetCachedImagePath(fileName, ArtworkKind.Logo));
+            await _mediator.Send(new GetCachedImagePath(fileName, ArtworkKind.Logo, contentType));
         return cachedImagePath.Match<IActionResult>(
             Left: _ => new NotFoundResult(),
             Right: r => new PhysicalFileResult(r.FileName, r.MimeType));
@@ -301,16 +312,19 @@ public class IptvController : ControllerBase
                 "Failed to return ffmpeg multi-variant playlist; falling back to generated playlist");
         }
 
-        Option<ResolutionViewModel> maybeResolution = await _mediator.Send(new GetChannelResolution(channelNumber));
+        Option<ResolutionAndBitrateViewModel> maybeResolutionAndBitrate =
+            await _mediator.Send(new GetChannelResolutionAndBitrate(channelNumber));
         string resolution = string.Empty;
-        foreach (ResolutionViewModel res in maybeResolution)
+        var bitrate = "10000000";
+        foreach (ResolutionAndBitrateViewModel res in maybeResolutionAndBitrate)
         {
             resolution = $",RESOLUTION={res.Width}x{res.Height}";
+            bitrate = res.Bitrate.ToString(CultureInfo.InvariantCulture);
         }
 
         return $@"#EXTM3U
 #EXT-X-VERSION:3
-#EXT-X-STREAM-INF:BANDWIDTH=10000000{resolution}
+#EXT-X-STREAM-INF:BANDWIDTH={bitrate}{resolution}
 {variantPlaylist}";
     }
 

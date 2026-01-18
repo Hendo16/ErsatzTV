@@ -4,14 +4,15 @@ namespace ErsatzTV.Application.Playouts;
 
 public record PlayoutNameViewModel(
     int PlayoutId,
-    ProgramSchedulePlayoutType PlayoutType,
+    PlayoutScheduleKind ScheduleKind,
     string ChannelName,
     string ChannelNumber,
-    ChannelProgressMode ProgressMode,
+    ChannelPlayoutMode PlayoutMode,
     string ScheduleName,
-    string TemplateFile,
-    string ExternalJsonFile,
+    string ScheduleFile,
     TimeSpan? DbDailyRebuildTime)
 {
     public Option<TimeSpan> DailyRebuildTime => Optional(DbDailyRebuildTime);
+
+    public string ScheduleFile { get; set; } = ScheduleFile;
 }

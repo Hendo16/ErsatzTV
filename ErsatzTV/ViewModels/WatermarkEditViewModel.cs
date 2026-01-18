@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Application.Watermarks;
+﻿using ErsatzTV.Application.Artworks;
+using ErsatzTV.Application.Watermarks;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.FFmpeg.State;
 
@@ -26,22 +27,26 @@ public class WatermarkEditViewModel
         DurationSeconds = vm.DurationSeconds;
         Opacity = vm.Opacity;
         PlaceWithinSourceContent = vm.PlaceWithinSourceContent;
+        OpacityExpression = vm.OpacityExpression;
+        ZIndex = vm.ZIndex;
     }
 
     public int Id { get; set; }
     public string Name { get; set; }
-    public string Image { get; set; }
+    public ArtworkContentTypeModel Image { get; set; }
     public ChannelWatermarkMode Mode { get; set; }
     public ChannelWatermarkImageSource ImageSource { get; set; }
     public WatermarkLocation Location { get; set; }
     public WatermarkSize Size { get; set; }
-    public int Width { get; set; }
-    public int HorizontalMargin { get; set; }
-    public int VerticalMargin { get; set; }
+    public double Width { get; set; }
+    public double HorizontalMargin { get; set; }
+    public double VerticalMargin { get; set; }
     public int FrequencyMinutes { get; set; }
     public int DurationSeconds { get; set; }
     public int Opacity { get; set; }
     public bool PlaceWithinSourceContent { get; set; }
+    public string OpacityExpression { get; set; }
+    public int ZIndex { get; set; }
 
     public CreateWatermark ToCreate() =>
         new(
@@ -57,7 +62,9 @@ public class WatermarkEditViewModel
             FrequencyMinutes,
             DurationSeconds,
             Opacity,
-            PlaceWithinSourceContent);
+            PlaceWithinSourceContent,
+            OpacityExpression,
+            ZIndex);
 
     public UpdateWatermark ToUpdate() =>
         new(
@@ -74,5 +81,7 @@ public class WatermarkEditViewModel
             FrequencyMinutes,
             DurationSeconds,
             Opacity,
-            PlaceWithinSourceContent);
+            PlaceWithinSourceContent,
+            OpacityExpression,
+            ZIndex);
 }

@@ -117,7 +117,8 @@ public class SongFolderScanner : LocalFolderScanner, ISongFolderScanner
                     cancellationToken);
 
                 string songFolder = folderQueue.Dequeue();
-                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(songFolder);
+                Option<int> maybeParentFolder =
+                    await _libraryRepository.GetParentFolderId(libraryPath, songFolder, cancellationToken);
 
                 foldersCompleted++;
 
@@ -345,15 +346,14 @@ public class SongFolderScanner : LocalFolderScanner, ISongFolderScanner
         string path = song.MediaVersions.Head().MediaFiles.Head().Path;
         Option<DirectoryInfo> parent = Optional(Directory.GetParent(path));
 
-        return parent.Map(
-            di =>
-            {
-                string coverPath = Path.Combine(di.FullName, "cover.jpg");
-                return ImageFileExtensions
-                    .Map(ext => Path.ChangeExtension(coverPath, ext))
-                    .Filter(f => _localFileSystem.FileExists(f))
-                    .HeadOrNone();
-            }).Flatten();
+        return parent.Map(di =>
+        {
+            string coverPath = Path.Combine(di.FullName, "cover.jpg");
+            return ImageFileExtensions
+                .Map(ext => Path.ChangeExtension(coverPath, ext))
+                .Filter(f => _localFileSystem.FileExists(f))
+                .HeadOrNone();
+        }).Flatten();
     }
 
     private async Task ExtractEmbeddedArtwork(Song song, string ffmpegPath, CancellationToken cancellationToken)

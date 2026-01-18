@@ -1,3 +1,4 @@
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Infrastructure.Data;
@@ -20,16 +21,20 @@ public class UpdateOnDemandCheckpointHandler(
         Option<Playout> maybePlayout = await dbContext.Playouts
             .Include(p => p.Channel)
             .Include(p => p.Items)
-            .SelectOneAsync(p => p.Channel.Number, p => p.Channel.Number == request.ChannelNumber);
+            .SelectOneAsync(p => p.Channel.Number, p => p.Channel.Number == request.ChannelNumber, cancellationToken);
 
         foreach (Playout playout in maybePlayout)
         {
-            if (playout.Channel.ProgressMode is not ChannelProgressMode.OnDemand)
+            if (playout.Channel.PlayoutMode is not ChannelPlayoutMode.OnDemand)
             {
                 return;
             }
 
-            int timeout = await (await configElementRepository.GetValue<int>(ConfigElementKey.FFmpegSegmenterTimeout))
+            playout.OnDemandCheckpoint ??= SystemTime.MinValueUtc;
+
+            int timeout = await (await configElementRepository.GetValue<int>(
+                    ConfigElementKey.FFmpegSegmenterTimeout,
+                    cancellationToken))
                 .IfNoneAsync(60);
 
             // don't move checkpoint back in time

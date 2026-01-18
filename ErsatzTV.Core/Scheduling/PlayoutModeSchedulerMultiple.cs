@@ -24,7 +24,7 @@ public class PlayoutModeSchedulerMultiple : PlayoutModeSchedulerBase<ProgramSche
     {
         var playoutItems = new List<PlayoutItem>();
 
-        DateTimeOffset firstStart = GetStartTimeAfter(playoutBuilderState, scheduleItem);
+        DateTimeOffset firstStart = GetStartTimeAfter(playoutBuilderState, scheduleItem, Option<ILogger>.Some(Logger));
         if (firstStart >= hardStop)
         {
             playoutBuilderState = playoutBuilderState with { CurrentTime = hardStop };
@@ -33,32 +33,65 @@ public class PlayoutModeSchedulerMultiple : PlayoutModeSchedulerBase<ProgramSche
 
         PlayoutBuilderState nextState = playoutBuilderState with
         {
+            CurrentTime = firstStart,
             MultipleRemaining = playoutBuilderState.MultipleRemaining.IfNone(scheduleItem.Count)
         };
 
-        if (nextState.MultipleRemaining == 0)
-        {
-            nextState = nextState with
-            {
-                MultipleRemaining = _collectionItemCount[CollectionKey.ForScheduleItem(scheduleItem)]
-            };
-        }
-
         IMediaCollectionEnumerator contentEnumerator =
             collectionEnumerators[CollectionKey.ForScheduleItem(scheduleItem)];
+
+        if (nextState.MultipleRemaining == 0)
+        {
+            switch (scheduleItem.MultipleMode)
+            {
+                case MultipleMode.CollectionSize:
+                    nextState = nextState with
+                    {
+                        MultipleRemaining = _collectionItemCount[CollectionKey.ForScheduleItem(scheduleItem)]
+                    };
+                    break;
+                case MultipleMode.PlaylistItemSize:
+                    if (contentEnumerator is PlaylistEnumerator { CurrentEnumeratorPlayAll: true } playlistEnumerator)
+                    {
+                        nextState = nextState with
+                        {
+                            MultipleRemaining = playlistEnumerator
+                                .ChildEnumerators[playlistEnumerator.EnumeratorIndex]
+                                .Enumerator.Count
+                        };
+                    }
+
+                    break;
+                case MultipleMode.MultiEpisodeGroupSize:
+                    if (contentEnumerator is ChronologicalMediaCollectionEnumerator chronologicalEnumerator)
+                    {
+                        foreach (MediaItem current in contentEnumerator.Current)
+                        {
+                            nextState = nextState with
+                            {
+                                MultipleRemaining = chronologicalEnumerator.GroupSizeForMediaItem(current)
+                            };
+                        }
+                    }
+
+                    break;
+            }
+        }
+
         while (contentEnumerator.Current.IsSome && nextState.MultipleRemaining > 0 &&
                nextState.CurrentTime < hardStop)
         {
             MediaItem mediaItem = contentEnumerator.Current.ValueUnsafe();
 
             // find when we should start this item, based on the current time
-            DateTimeOffset itemStartTime = GetStartTimeAfter(nextState, scheduleItem);
+            DateTimeOffset itemStartTime = GetStartTimeAfter(nextState, scheduleItem, Option<ILogger>.Some(Logger));
 
             TimeSpan itemDuration = DurationForMediaItem(mediaItem);
             List<MediaChapter> itemChapters = ChaptersForMediaItem(mediaItem);
 
             var playoutItem = new PlayoutItem
             {
+                PlayoutId = playoutBuilderState.PlayoutId,
                 MediaItemId = mediaItem.Id,
                 Start = itemStartTime.UtcDateTime,
                 Finish = itemStartTime.UtcDateTime + itemDuration,
@@ -70,12 +103,23 @@ public class PlayoutModeSchedulerMultiple : PlayoutModeSchedulerBase<ProgramSche
                     ? FillerKind.GuideMode
                     : FillerKind.None,
                 CustomTitle = scheduleItem.CustomTitle,
-                WatermarkId = scheduleItem.WatermarkId,
                 PreferredAudioLanguageCode = scheduleItem.PreferredAudioLanguageCode,
                 PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
-                SubtitleMode = scheduleItem.SubtitleMode
+                SubtitleMode = scheduleItem.SubtitleMode,
+                PlayoutItemWatermarks = []
             };
+
+            foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
+                         .ProgramScheduleItemWatermarks ?? [])
+            {
+                playoutItem.PlayoutItemWatermarks.Add(
+                    new PlayoutItemWatermark
+                    {
+                        PlayoutItem = playoutItem,
+                        WatermarkId = programScheduleItemWatermark.WatermarkId
+                    });
+            }
 
             // LogScheduledItem(scheduleItem, mediaItem, itemStartTime);
 

@@ -7,15 +7,18 @@ public class ColorspaceFilter : BaseFilter
     private readonly FrameState _currentState;
     private readonly IPixelFormat _desiredPixelFormat;
     private readonly bool _forceInputOverrides;
+    private readonly bool _isQsv;
     private readonly VideoStream _videoStream;
 
     public ColorspaceFilter(
         FrameState currentState,
         VideoStream videoStream,
         IPixelFormat desiredPixelFormat,
-        bool forceInputOverrides = false)
+        bool forceInputOverrides = false,
+        bool isQsv = false)
     {
         _currentState = currentState;
+        _isQsv = isQsv;
         _videoStream = videoStream;
         _desiredPixelFormat = desiredPixelFormat;
         _forceInputOverrides = forceInputOverrides;
@@ -37,6 +40,15 @@ public class ColorspaceFilter : BaseFilter
                     if (pixelFormat is PixelFormatVaapi vaapi)
                     {
                         foreach (IPixelFormat pf in AvailablePixelFormats.ForPixelFormat(vaapi.Name, null))
+                        {
+                            name = pf.FFmpegName;
+                        }
+                    }
+
+                    // cuda is not a target software format
+                    if (pixelFormat is PixelFormatCuda cuda)
+                    {
+                        foreach (IPixelFormat pf in AvailablePixelFormats.ForPixelFormat(cuda.Name, null))
                         {
                             name = pf.FFmpegName;
                         }
@@ -94,6 +106,8 @@ public class ColorspaceFilter : BaseFilter
 
             string colorspace = _desiredPixelFormat.BitDepth switch
             {
+                _ when cp.IsUnknown && _isQsv =>
+                    $"{hwdownload}setparams=range=tv:colorspace=bt709:color_trc=bt709:color_primaries=bt709",
                 _ when cp.IsUnknown => "setparams=range=tv:colorspace=bt709:color_trc=bt709:color_primaries=bt709",
                 10 when !cp.IsUnknown =>
                     $"{hwdownload}colorspace={inputOverrides}all=bt709:format=yuv420p10",

@@ -5,19 +5,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ErsatzTV.Application.ProgramSchedules;
 
-public class CreateProgramScheduleHandler :
+public class CreateProgramScheduleHandler(IDbContextFactory<TvContext> dbContextFactory) :
     IRequestHandler<CreateProgramSchedule, Either<BaseError, CreateProgramScheduleResult>>
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-
-    public CreateProgramScheduleHandler(IDbContextFactory<TvContext> dbContextFactory) =>
-        _dbContextFactory = dbContextFactory;
-
     public async Task<Either<BaseError, CreateProgramScheduleResult>> Handle(
         CreateProgramSchedule request,
         CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Validation<BaseError, ProgramSchedule> validation = await Validate(dbContext, request);
         return await validation.Apply(ps => PersistProgramSchedule(dbContext, ps));
@@ -35,19 +30,19 @@ public class CreateProgramScheduleHandler :
     private static Task<Validation<BaseError, ProgramSchedule>> Validate(
         TvContext dbContext,
         CreateProgramSchedule request) =>
-        ValidateName(dbContext, request).MapT(
-            name =>
+        ValidateName(dbContext, request).MapT(name =>
+        {
+            bool keepMultiPartEpisodesTogether = request.KeepMultiPartEpisodesTogether;
+            return new ProgramSchedule
             {
-                bool keepMultiPartEpisodesTogether = request.KeepMultiPartEpisodesTogether;
-                return new ProgramSchedule
-                {
-                    Name = name,
-                    KeepMultiPartEpisodesTogether = keepMultiPartEpisodesTogether,
-                    TreatCollectionsAsShows = keepMultiPartEpisodesTogether && request.TreatCollectionsAsShows,
-                    ShuffleScheduleItems = request.ShuffleScheduleItems,
-                    RandomStartPoint = request.RandomStartPoint
-                };
-            });
+                Name = name,
+                KeepMultiPartEpisodesTogether = keepMultiPartEpisodesTogether,
+                TreatCollectionsAsShows = keepMultiPartEpisodesTogether && request.TreatCollectionsAsShows,
+                ShuffleScheduleItems = request.ShuffleScheduleItems,
+                RandomStartPoint = request.RandomStartPoint,
+                FixedStartTimeBehavior = request.FixedStartTimeBehavior
+            };
+        });
 
     private static async Task<Validation<BaseError, string>> ValidateName(
         TvContext dbContext,

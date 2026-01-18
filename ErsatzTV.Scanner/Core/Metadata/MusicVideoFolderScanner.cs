@@ -21,6 +21,7 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
     private readonly IArtistRepository _artistRepository;
     private readonly IClient _client;
     private readonly ILibraryRepository _libraryRepository;
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
@@ -34,6 +35,7 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalMetadataProvider localMetadataProvider,
         ILocalSubtitlesProvider localSubtitlesProvider,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
         IArtistRepository artistRepository,
@@ -58,6 +60,7 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
         _localFileSystem = localFileSystem;
         _localMetadataProvider = localMetadataProvider;
         _localSubtitlesProvider = localSubtitlesProvider;
+        _localChaptersProvider = localChaptersProvider;
         _artistRepository = artistRepository;
         _musicVideoRepository = musicVideoRepository;
         _libraryRepository = libraryRepository;
@@ -115,18 +118,16 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
                 Either<BaseError, MediaItemScanResult<Artist>> maybeArtist =
                     await FindOrCreateArtist(libraryPath.Id, artistFolder)
                         .BindT(artist => UpdateMetadataForArtist(artist, artistFolder))
-                        .BindT(
-                            artist => UpdateArtworkForArtist(
-                                artist,
-                                artistFolder,
-                                ArtworkKind.Thumbnail,
-                                cancellationToken))
-                        .BindT(
-                            artist => UpdateArtworkForArtist(
-                                artist,
-                                artistFolder,
-                                ArtworkKind.FanArt,
-                                cancellationToken));
+                        .BindT(artist => UpdateArtworkForArtist(
+                            artist,
+                            artistFolder,
+                            ArtworkKind.Thumbnail,
+                            cancellationToken))
+                        .BindT(artist => UpdateArtworkForArtist(
+                            artist,
+                            artistFolder,
+                            ArtworkKind.FanArt,
+                            cancellationToken));
 
                 foreach (BaseError error in maybeArtist.LeftToSeq())
                 {
@@ -296,12 +297,11 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
         try
         {
             Artist artist = result.Item;
-            await LocateArtworkForArtist(artistFolder, artworkKind).IfSomeAsync(
-                async artworkFile =>
-                {
-                    ArtistMetadata metadata = artist.ArtistMetadata.Head();
-                    await RefreshArtwork(artworkFile, metadata, artworkKind, None, None, cancellationToken);
-                });
+            await LocateArtworkForArtist(artistFolder, artworkKind).IfSomeAsync(async artworkFile =>
+            {
+                ArtistMetadata metadata = artist.ArtistMetadata.Head();
+                await RefreshArtwork(artworkFile, metadata, artworkKind, None, None, cancellationToken);
+            });
 
             return result;
         }
@@ -332,7 +332,10 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
             }
 
             string musicVideoFolder = folderQueue.Dequeue();
-            Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(musicVideoFolder);
+            Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(
+                libraryPath,
+                musicVideoFolder,
+                cancellationToken);
 
             // _logger.LogDebug("Scanning music video folder {Folder}", musicVideoFolder);
 
@@ -382,7 +385,8 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
                     .BindT(video => UpdateLibraryFolderId(video, knownFolder))
                     .BindT(UpdateMetadata)
                     .BindT(result => UpdateThumbnail(result, cancellationToken))
-                    .BindT(UpdateSubtitles)
+                    .BindT(result => UpdateSubtitles(result, cancellationToken))
+                    .BindT(result => UpdateChapters(result, cancellationToken))
                     .BindT(FlagNormal);
 
                 foreach (BaseError error in maybeMusicVideo.LeftToSeq())
@@ -532,11 +536,28 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
     }
 
     private async Task<Either<BaseError, MediaItemScanResult<MusicVideo>>> UpdateSubtitles(
-        MediaItemScanResult<MusicVideo> result)
+        MediaItemScanResult<MusicVideo> result,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true);
+            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true, cancellationToken);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _client.Notify(ex);
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, MediaItemScanResult<MusicVideo>>> UpdateChapters(
+        MediaItemScanResult<MusicVideo> result,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _localChaptersProvider.UpdateChapters(result.Item, None, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -549,8 +570,16 @@ public class MusicVideoFolderScanner : LocalFolderScanner, IMusicVideoFolderScan
     private Option<string> LocateThumbnail(MusicVideo musicVideo)
     {
         string path = musicVideo.MediaVersions.Head().MediaFiles.Head().Path;
+
+        string directory = Path.GetDirectoryName(path) ?? string.Empty;
+        string filenameWithoutExtension = Path.GetFileNameWithoutExtension(path);
+        string extension = Path.GetExtension(path);
+
+        string thumbFilename = filenameWithoutExtension + "-thumb" + extension;
+        string thumbPath = Path.Combine(directory, thumbFilename);
+
         return ImageFileExtensions
-            .Map(ext => Path.ChangeExtension(path, ext))
+            .SelectMany(ext => new[] { Path.ChangeExtension(path, ext), Path.ChangeExtension(thumbPath, ext) })
             .Filter(f => _localFileSystem.FileExists(f))
             .HeadOrNone();
     }

@@ -27,7 +27,7 @@ public class Program
 
         Configuration = builder
             .SetBasePath(BasePath)
-            .AddJsonFile("appsettings.json", false, true)
+            .AddJsonFile("appsettings.json", false, false)
             .AddJsonFile(
                 $"appsettings.{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"}.json",
                 true)
@@ -74,6 +74,11 @@ public class Program
                 "ErsatzTV.Application.Subtitles.ExtractEmbeddedSubtitlesHandler",
                 LoggingLevelSwitches.SchedulingLevelSwitch)
 
+            // searching
+            .MinimumLevel.Override(
+                "ErsatzTV.Infrastructure.Search.SearchQueryParser",
+                LoggingLevelSwitches.SearchingLevelSwitch)
+
             // streaming
             .MinimumLevel.Override("ErsatzTV.Application.Streaming", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.FFmpeg", LoggingLevelSwitches.StreamingLevelSwitch)
@@ -85,6 +90,9 @@ public class Program
                 LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.Controllers.IptvController", LoggingLevelSwitches.StreamingLevelSwitch)
             .MinimumLevel.Override("ErsatzTV.Controllers.InternalController", LoggingLevelSwitches.StreamingLevelSwitch)
+            .MinimumLevel.Override(
+                "ErsatzTV.Controllers.TroubleshootController",
+                LoggingLevelSwitches.StreamingLevelSwitch)
 
             // http
             .MinimumLevel.Override("Serilog.AspNetCore.RequestLoggingMiddleware", LoggingLevelSwitches.HttpLevelSwitch)
@@ -117,6 +125,7 @@ public class Program
 
         try
         {
+            Environment.SetEnvironmentVariable("DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE", "false");
             await CreateHostBuilder(args).Build().RunAsync();
             return 0;
         }
@@ -133,40 +142,25 @@ public class Program
 
     private static IHostBuilder CreateHostBuilder(string[] args)
     {
-        string uiPortVariable = Environment.GetEnvironmentVariable("ETV_UI_PORT");
-        if (!int.TryParse(uiPortVariable, out int uiPort))
-        {
-            uiPort = 8409;
-        }
-
-        Settings.UiPort = uiPort;
-
-        string streamingPortVariable = Environment.GetEnvironmentVariable("ETV_STREAMING_PORT");
-        if (!int.TryParse(streamingPortVariable, out int streamingPort))
-        {
-            streamingPort = 8409;
-        }
-
-        Settings.StreamingPort = streamingPort;
+        Settings.UiPort = SystemEnvironment.UiPort;
+        Settings.StreamingPort = SystemEnvironment.StreamingPort;
 
         return Host.CreateDefaultBuilder(args)
             .ConfigureServices(services => services.AddSingleton(LoggingLevelSwitches))
-            .ConfigureWebHostDefaults(
-                webBuilder => webBuilder.UseStartup<Startup>()
-                    .UseConfiguration(Configuration)
-                    .UseKestrel(
-                        options =>
-                        {
-                            options.ListenAnyIP(Settings.UiPort);
+            .ConfigureWebHostDefaults(webBuilder => webBuilder.UseStartup<Startup>()
+                .UseConfiguration(Configuration)
+                .UseKestrel(options =>
+                {
+                    options.ListenAnyIP(Settings.UiPort);
 
-                            if (Settings.StreamingPort != Settings.UiPort)
-                            {
-                                options.ListenAnyIP(Settings.StreamingPort);
-                            }
+                    if (Settings.StreamingPort != Settings.UiPort)
+                    {
+                        options.ListenAnyIP(Settings.StreamingPort);
+                    }
 
-                            options.AddServerHeader = false;
-                        })
-                    .UseContentRoot(BasePath))
+                    options.AddServerHeader = false;
+                })
+                .UseContentRoot(BasePath))
             .UseSerilog();
     }
 }

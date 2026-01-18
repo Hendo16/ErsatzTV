@@ -141,7 +141,10 @@ public class LibraryRepository : ILibraryRepository
         }
     }
 
-    public async Task<Option<int>> GetParentFolderId(string folder)
+    public async Task<Option<int>> GetParentFolderId(
+        LibraryPath libraryPath,
+        string folder,
+        CancellationToken cancellationToken)
     {
         DirectoryInfo parent = new DirectoryInfo(folder).Parent;
         if (parent is null)
@@ -149,11 +152,12 @@ public class LibraryRepository : ILibraryRepository
             return Option<int>.None;
         }
 
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync();
+        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         return await dbContext.LibraryFolders
             .AsNoTracking()
-            .SelectOneAsync(lf => lf.Path, lf => lf.Path == parent.FullName)
+            .Filter(lf => lf.LibraryPathId == libraryPath.Id)
+            .SelectOneAsync(lf => lf.Path, lf => lf.Path == parent.FullName, cancellationToken)
             .MapT(lf => lf.Id);
     }
 

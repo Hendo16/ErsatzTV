@@ -11,7 +11,8 @@ public record CollectionCardResultsViewModel(
     List<OtherVideoCardViewModel> OtherVideoCards,
     List<FillerCardViewModel> FillerCards,
     List<SongCardViewModel> SongCards,
-    List<ImageCardViewModel> ImageCards)
+    List<ImageCardViewModel> ImageCards,
+    List<RemoteStreamCardViewModel> RemoteStreamCards)
 {
     public bool UseCustomPlaybackOrder { get; set; }
 }

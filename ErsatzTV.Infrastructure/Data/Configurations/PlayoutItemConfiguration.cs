@@ -11,15 +11,38 @@ public class PlayoutItemConfiguration : IEntityTypeConfiguration<PlayoutItem>
     {
         builder.ToTable("PlayoutItem");
 
+        builder.HasIndex(p => new { p.Start, p.Finish })
+            .HasDatabaseName("IX_PlayoutItem_Start_Finish");
+
         builder.HasOne(pi => pi.MediaItem)
             .WithMany()
             .HasForeignKey(pi => pi.MediaItemId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasOne(i => i.Watermark)
-            .WithMany()
-            .HasForeignKey(i => i.WatermarkId)
-            .OnDelete(DeleteBehavior.SetNull)
-            .IsRequired(false);
+        builder.HasMany(c => c.Watermarks)
+            .WithMany(m => m.PlayoutItems)
+            .UsingEntity<PlayoutItemWatermark>(
+                j => j.HasOne(ci => ci.Watermark)
+                    .WithMany(mi => mi.PlayoutItemWatermarks)
+                    .HasForeignKey(ci => ci.WatermarkId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasOne(ci => ci.PlayoutItem)
+                    .WithMany(c => c.PlayoutItemWatermarks)
+                    .HasForeignKey(ci => ci.PlayoutItemId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasKey(ci => new { ci.PlayoutItemId, ci.WatermarkId }));
+
+        builder.HasMany(c => c.GraphicsElements)
+            .WithMany(m => m.PlayoutItems)
+            .UsingEntity<PlayoutItemGraphicsElement>(
+                j => j.HasOne(ci => ci.GraphicsElement)
+                    .WithMany(mi => mi.PlayoutItemGraphicsElements)
+                    .HasForeignKey(ci => ci.GraphicsElementId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasOne(ci => ci.PlayoutItem)
+                    .WithMany(c => c.PlayoutItemGraphicsElements)
+                    .HasForeignKey(ci => ci.PlayoutItemId)
+                    .OnDelete(DeleteBehavior.Cascade),
+                j => j.HasKey(ci => new { ci.PlayoutItemId, ci.GraphicsElementId }));
     }
 }

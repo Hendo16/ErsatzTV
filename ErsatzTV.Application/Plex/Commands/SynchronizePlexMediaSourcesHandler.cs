@@ -10,8 +10,9 @@ using Microsoft.Extensions.Logging;
 
 namespace ErsatzTV.Application.Plex;
 
-public class SynchronizePlexMediaSourcesHandler : IRequestHandler<SynchronizePlexMediaSources,
-    Either<BaseError, List<PlexMediaSource>>>
+public class SynchronizePlexMediaSourcesHandler : PlexBaseConnectionHandler,
+    IRequestHandler<SynchronizePlexMediaSources,
+        Either<BaseError, List<PlexMediaSource>>>
 {
     private const string LocalhostUri = "http://localhost:32400";
 
@@ -31,6 +32,7 @@ public class SynchronizePlexMediaSourcesHandler : IRequestHandler<SynchronizePle
         ChannelWriter<IScannerBackgroundServiceRequest> channel,
         IEntityLocker entityLocker,
         ILogger<SynchronizePlexMediaSourcesHandler> logger)
+        : base(plexServerApiClient, mediaSourceRepository, logger)
     {
         _mediaSourceRepository = mediaSourceRepository;
         _plexTvApiClient = plexTvApiClient;
@@ -55,8 +57,8 @@ public class SynchronizePlexMediaSourcesHandler : IRequestHandler<SynchronizePle
         }
 
         // delete removed servers
-        foreach (PlexMediaSource removed in allExisting.Filter(
-                     s => servers.All(pms => pms.ClientIdentifier != s.ClientIdentifier)))
+        foreach (PlexMediaSource removed in allExisting.Filter(s =>
+                     servers.All(pms => pms.ClientIdentifier != s.ClientIdentifier)))
         {
             _logger.LogWarning(
                 "Deleting removed Plex server {ServerName}!",
@@ -102,63 +104,35 @@ public class SynchronizePlexMediaSourcesHandler : IRequestHandler<SynchronizePle
             var toRemove = existing.Connections
                 .Filter(connection => server.Connections.All(c => c.Uri != connection.Uri)).ToList();
             await _mediaSourceRepository.Update(existing, toAdd, toRemove);
-            await FindConnectionToActivate(existing);
+            Option<PlexServerAuthToken> maybeToken = await _plexSecretStore.GetServerAuthToken(server.ClientIdentifier);
+            if (maybeToken.IsNone)
+            {
+                _logger.LogError(
+                    "Unable to activate Plex connection for server {Server} without auth token",
+                    server.ServerName);
+            }
+
+            foreach (PlexServerAuthToken token in maybeToken)
+            {
+                await FindConnectionToActivate(existing, token);
+            }
         }
 
         if (maybeExisting.IsNone)
         {
             await _mediaSourceRepository.Add(server);
-            await FindConnectionToActivate(server);
-        }
-    }
-
-    private async Task FindConnectionToActivate(PlexMediaSource server)
-    {
-        var prioritized = server.Connections
-            .OrderByDescending(pc => pc.Uri == LocalhostUri)
-            .ThenByDescending(pc => pc.IsActive)
-            .ToList();
-
-        foreach (PlexConnection connection in server.Connections)
-        {
-            connection.IsActive = false;
-        }
-
-        Option<PlexServerAuthToken> maybeToken = await _plexSecretStore.GetServerAuthToken(server.ClientIdentifier);
-        foreach (PlexServerAuthToken token in maybeToken)
-        {
-            foreach (PlexConnection connection in prioritized)
+            Option<PlexServerAuthToken> maybeToken = await _plexSecretStore.GetServerAuthToken(server.ClientIdentifier);
+            if (maybeToken.IsNone)
             {
-                try
-                {
-                    _logger.LogDebug("Attempting to locate to Plex at {Uri}", connection.Uri);
-                    if (await _plexServerApiClient.Ping(connection, token))
-                    {
-                        _logger.LogInformation("Located Plex at {Uri}", connection.Uri);
-                        connection.IsActive = true;
-                        break;
-                    }
-                }
-                catch
-                {
-                    // do nothing
-                }
+                _logger.LogError(
+                    "Unable to activate Plex connection for server {Server} without auth token",
+                    server.ServerName);
+            }
+
+            foreach (PlexServerAuthToken token in maybeToken)
+            {
+                await FindConnectionToActivate(server, token);
             }
         }
-
-        if (maybeToken.IsNone)
-        {
-            _logger.LogError(
-                "Unable to activate Plex connection for server {Server} without auth token",
-                server.ServerName);
-        }
-
-        if (server.Connections.All(c => !c.IsActive))
-        {
-            _logger.LogError("Unable to locate Plex");
-            server.Connections.Head().IsActive = true;
-        }
-
-        await _mediaSourceRepository.Update(server, new List<PlexConnection>(), new List<PlexConnection>());
     }
 }

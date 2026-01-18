@@ -23,12 +23,9 @@ public class SynchronizeJellyfinMediaSourcesHandler : IRequestHandler<Synchroniz
         SynchronizeJellyfinMediaSources request,
         CancellationToken cancellationToken)
     {
-        List<JellyfinMediaSource> mediaSources = await _mediaSourceRepository.GetAllJellyfin();
+        List<JellyfinMediaSource> mediaSources = await _mediaSourceRepository.GetAllJellyfin(cancellationToken);
         foreach (JellyfinMediaSource mediaSource in mediaSources)
         {
-            await _scannerWorkerChannel.WriteAsync(
-                new SynchronizeJellyfinAdminUserId(mediaSource.Id),
-                cancellationToken);
             await _scannerWorkerChannel.WriteAsync(new SynchronizeJellyfinLibraries(mediaSource.Id), cancellationToken);
         }
 

@@ -114,12 +114,15 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
                         libraryPath.LibraryId,
                         null,
                         progressMin + percentCompletion * progressSpread,
-                        Array.Empty<int>(),
-                        Array.Empty<int>()),
+                        [],
+                        []),
                     cancellationToken);
 
                 string imageFolder = folderQueue.Dequeue();
-                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(imageFolder);
+                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(
+                    libraryPath,
+                    imageFolder,
+                    cancellationToken);
 
                 foldersCompleted++;
 
@@ -190,7 +193,7 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
                 foreach (string file in allFiles.OrderBy(identity))
                 {
                     Either<BaseError, MediaItemScanResult<Image>> maybeVideo = await _imageRepository
-                        .GetOrAdd(libraryPath, knownFolder, file)
+                        .GetOrAdd(libraryPath, knownFolder, file, cancellationToken)
                         .BindT(video => UpdateStatistics(video, ffmpegPath, ffprobePath))
                         .BindT(video => UpdateLibraryFolderId(video, knownFolder))
                         .BindT(video => UpdateMetadata(video, durationSeconds))
@@ -214,7 +217,7 @@ public class ImageFolderScanner : LocalFolderScanner, IImageFolderScanner
                                     null,
                                     null,
                                     [result.Item.Id],
-                                    Array.Empty<int>()),
+                                    []),
                                 cancellationToken);
                         }
                     }

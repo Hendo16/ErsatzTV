@@ -20,25 +20,47 @@ public class BlockPlayoutFillerBuilder(
         NullValueHandling = NullValueHandling.Ignore
     };
 
-    public async Task<Playout> Build(Playout playout, PlayoutBuildMode mode, CancellationToken cancellationToken)
+    public async Task<PlayoutBuildResult> Build(
+        Playout playout,
+        PlayoutReferenceData referenceData,
+        PlayoutBuildResult result,
+        PlayoutBuildMode mode,
+        CancellationToken cancellationToken)
     {
+        var filteredExistingItems = referenceData.ExistingItems
+            .Where(i => !result.ItemsToRemove.Contains(i.Id))
+            .ToList();
+
+        var allItems = result.AddedItems.ToList();
+
         if (mode is PlayoutBuildMode.Reset)
         {
             // remove all playout items with type filler
             // except block items that are hidden from the guide (guide mode)
-            var toRemove = playout.Items
-                .Where(pi => pi.FillerKind is not FillerKind.None and not FillerKind.GuideMode)
-                .ToList();
-            foreach (PlayoutItem playoutItem in toRemove)
+            foreach (PlayoutItem item in filteredExistingItems)
             {
-                BlockPlayoutChangeDetection.RemoveItemAndHistory(playout, playoutItem);
+                if (item.FillerKind is FillerKind.None or FillerKind.GuideMode)
+                {
+                    allItems.Add(item);
+                    continue;
+                }
+
+                BlockPlayoutChangeDetection.RemoveItemAndHistory(referenceData, item, result);
             }
         }
+        else
+        {
+            allItems.AddRange(filteredExistingItems);
+        }
+
+        var filteredExistingHistory = referenceData.PlayoutHistory
+            .Where(h => !result.HistoryToRemove.Contains(h.Id))
+            .ToList();
 
         var collectionEnumerators = new Dictionary<CollectionKey, IMediaCollectionEnumerator>();
 
         // find all unscheduled periods
-        var queue = new Queue<PlayoutItem>(playout.Items);
+        var queue = new Queue<PlayoutItem>(allItems.OrderBy(i => i.Start));
         while (queue.Count > 1)
         {
             PlayoutItem one = queue.Dequeue();
@@ -53,10 +75,12 @@ public class BlockPlayoutFillerBuilder(
             }
 
             // find applicable deco
-            foreach (Deco deco in GetDecoFor(playout, start))
+            foreach (Deco deco in GetDecoFor(referenceData, start))
             {
                 if (!HasDefaultFiller(deco))
+                {
                     continue;
+                }
 
                 var collectionKey = CollectionKey.ForDecoDefaultFiller(deco);
                 string historyKey = HistoryDetails.ForDefaultFiller(deco);
@@ -68,12 +92,14 @@ public class BlockPlayoutFillerBuilder(
                         mediaCollectionRepository,
                         televisionRepository,
                         artistRepository,
-                        collectionKey);
+                        collectionKey,
+                        cancellationToken);
 
                     enumerator = BlockPlayoutEnumerator.Shuffle(
                         collectionItems,
                         start,
-                        playout,
+                        playout.Seed,
+                        filteredExistingHistory.Append(result.AddedHistory).ToList(),
                         deco,
                         historyKey);
 
@@ -89,7 +115,9 @@ public class BlockPlayoutFillerBuilder(
 
                 // skip this deco if the collection has no items
                 if (enumerator.Count == 0)
+                {
                     continue;
+                }
 
                 DateTimeOffset current = start;
                 var pastTime = false;
@@ -102,6 +130,7 @@ public class BlockPlayoutFillerBuilder(
                         // add filler from deco to unscheduled period
                         var filler = new PlayoutItem
                         {
+                            PlayoutId = playout.Id,
                             MediaItemId = mediaItem.Id,
                             Start = current.UtcDateTime,
                             Finish = current.UtcDateTime + itemDuration,
@@ -131,7 +160,7 @@ public class BlockPlayoutFillerBuilder(
                             }
                         }
 
-                        playout.Items.Add(filler);
+                        result.AddedItems.Add(filler);
 
                         // create a playout history record
                         var nextHistory = new PlayoutHistory
@@ -140,11 +169,12 @@ public class BlockPlayoutFillerBuilder(
                             PlaybackOrder = PlaybackOrder.Shuffle,
                             Index = enumerator.State.Index,
                             When = current.UtcDateTime,
+                            Finish = filler.FinishOffset.UtcDateTime,
                             Key = historyKey,
                             Details = HistoryDetails.ForMediaItem(mediaItem)
                         };
 
-                        playout.PlayoutHistory.Add(nextHistory);
+                        result.AddedHistory.Add(nextHistory);
 
                         current += itemDuration;
                         enumerator.MoveNext();
@@ -159,24 +189,26 @@ public class BlockPlayoutFillerBuilder(
         }
 
 
-        return playout;
+        return result;
     }
 
-    private static Option<Deco> GetDecoFor(Playout playout, DateTimeOffset start)
+    private static Option<Deco> GetDecoFor(PlayoutReferenceData referenceData, DateTimeOffset start)
     {
-        Option<PlayoutTemplate> maybeTemplate = PlayoutTemplateSelector.GetPlayoutTemplateFor(playout.Templates, start);
+        Option<PlayoutTemplate> maybeTemplate =
+            PlayoutTemplateSelector.GetPlayoutTemplateFor(referenceData.PlayoutTemplates, start);
         foreach (PlayoutTemplate template in maybeTemplate)
         {
             if (template.DecoTemplate is not null)
             {
                 foreach (DecoTemplateItem decoTemplateItem in template.DecoTemplate.Items)
                 {
-                    if (decoTemplateItem.StartTime <= start.TimeOfDay && decoTemplateItem.EndTime == TimeSpan.Zero || decoTemplateItem.EndTime > start.TimeOfDay)
+                    if (decoTemplateItem.StartTime <= start.TimeOfDay && decoTemplateItem.EndTime == TimeSpan.Zero ||
+                        decoTemplateItem.EndTime > start.TimeOfDay)
                     {
                         switch (decoTemplateItem.Deco.DefaultFillerMode)
                         {
                             case DecoMode.Inherit:
-                                return Optional(playout.Deco);
+                                return referenceData.Deco;
                             case DecoMode.Override:
                                 return decoTemplateItem.Deco;
                             case DecoMode.Disable:
@@ -188,7 +220,7 @@ public class BlockPlayoutFillerBuilder(
             }
         }
 
-        return Optional(playout.Deco);
+        return referenceData.Deco;
     }
 
     private static bool HasDefaultFiller(Deco deco)

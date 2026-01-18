@@ -16,6 +16,7 @@ using ErsatzTV.Core.Interfaces.Plex;
 using ErsatzTV.Core.Interfaces.Repositories;
 using ErsatzTV.Core.Interfaces.Streaming;
 using ErsatzTV.Core.Scheduling;
+using ErsatzTV.FFmpeg;
 using ErsatzTV.FFmpeg.State;
 using ErsatzTV.Infrastructure.Data;
 using ErsatzTV.Infrastructure.Extensions;
@@ -35,6 +36,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
     private readonly ILogger<GetPlayoutItemProcessByChannelNumberHandler> _logger;
     private readonly IMediaCollectionRepository _mediaCollectionRepository;
     private readonly IMusicVideoCreditsGenerator _musicVideoCreditsGenerator;
+    private readonly IWatermarkSelector _watermarkSelector;
     private readonly IPlexPathReplacementService _plexPathReplacementService;
     private readonly ISongVideoGenerator _songVideoGenerator;
     private readonly ITelevisionRepository _televisionRepository;
@@ -52,6 +54,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         IArtistRepository artistRepository,
         ISongVideoGenerator songVideoGenerator,
         IMusicVideoCreditsGenerator musicVideoCreditsGenerator,
+        IWatermarkSelector watermarkSelector,
         ILogger<GetPlayoutItemProcessByChannelNumberHandler> logger)
         : base(dbContextFactory)
     {
@@ -66,6 +69,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         _artistRepository = artistRepository;
         _songVideoGenerator = songVideoGenerator;
         _musicVideoCreditsGenerator = musicVideoCreditsGenerator;
+        _watermarkSelector = watermarkSelector;
         _logger = logger;
     }
 
@@ -80,10 +84,17 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         DateTimeOffset now = request.Now;
 
         Either<BaseError, PlayoutItemWithPath> maybePlayoutItem = await dbContext.PlayoutItems
+            .AsNoTracking()
+
             // get playout deco
             .Include(i => i.Playout)
             .ThenInclude(p => p.Deco)
+            .ThenInclude(d => d.DecoWatermarks)
             .ThenInclude(d => d.Watermark)
+
+            // get graphics elements
+            .Include(i => i.PlayoutItemGraphicsElements)
+            .ThenInclude(pige => pige.GraphicsElement)
 
             // get playout templates (and deco templates/decos)
             .Include(i => i.Playout)
@@ -91,6 +102,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             .ThenInclude(t => t.DecoTemplate)
             .ThenInclude(t => t.Items)
             .ThenInclude(i => i.Deco)
+            .ThenInclude(d => d.DecoWatermarks)
             .ThenInclude(d => d.Watermark)
             .Include(i => i.MediaItem)
             .ThenInclude(mi => (mi as Episode).EpisodeMetadata)
@@ -170,14 +182,27 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             .ThenInclude(mv => mv.Streams)
             .Include(i => i.MediaItem)
             .ThenInclude(mi => (mi as Image).ImageMetadata)
-            .Include(i => i.Watermark)
+            .Include(i => i.Watermarks)
+            .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as RemoteStream).MediaVersions)
+            .ThenInclude(mv => mv.MediaFiles)
+            .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as RemoteStream).MediaVersions)
+            .ThenInclude(mv => mv.Streams)
+            .Include(i => i.MediaItem)
+            .ThenInclude(mi => (mi as RemoteStream).RemoteStreamMetadata)
+            .Include(i => i.Watermarks)
             .ForChannelAndTime(channel.Id, now)
             .Map(o => o.ToEither<BaseError>(new UnableToLocatePlayoutItem()))
-            .BindT(item => ValidatePlayoutItemPath(dbContext, item));
+            .BindT(item => ValidatePlayoutItemPath(dbContext, item, cancellationToken));
 
         if (maybePlayoutItem.LeftAsEnumerable().Any(e => e is UnableToLocatePlayoutItem))
         {
-            maybePlayoutItem = await _externalJsonPlayoutItemProvider.CheckForExternalJson(channel, now, ffprobePath);
+            maybePlayoutItem = await _externalJsonPlayoutItemProvider.CheckForExternalJson(
+                channel,
+                now,
+                ffprobePath,
+                cancellationToken);
         }
 
         if (maybePlayoutItem.LeftAsEnumerable().Any(e => e is UnableToLocatePlayoutItem))
@@ -187,6 +212,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
 
                 // get playout deco
                 .Include(p => p.Deco)
+                .ThenInclude(d => d.DecoWatermarks)
                 .ThenInclude(d => d.Watermark)
 
                 // get playout templates (and deco templates/decos)
@@ -194,17 +220,18 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 .ThenInclude(t => t.DecoTemplate)
                 .ThenInclude(t => t.Items)
                 .ThenInclude(i => i.Deco)
+                .ThenInclude(d => d.DecoWatermarks)
                 .ThenInclude(d => d.Watermark)
-                .SelectOneAsync(p => p.ChannelId, p => p.ChannelId == channel.Id);
+                .SelectOneAsync(p => p.ChannelId, p => p.ChannelId == channel.Id, cancellationToken);
 
             foreach (Playout playout in maybePlayout)
             {
-                maybePlayoutItem = await CheckForFallbackFiller(dbContext, channel, playout, now);
+                maybePlayoutItem = await CheckForFallbackFiller(dbContext, channel, playout, now, cancellationToken);
             }
 
             if (maybePlayout.IsNone)
             {
-                maybePlayoutItem = await CheckForFallbackFiller(dbContext, channel, null, now);
+                maybePlayoutItem = await CheckForFallbackFiller(dbContext, channel, null, now, cancellationToken);
             }
         }
 
@@ -235,34 +262,21 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             MediaVersion audioVersion = version;
 
             Option<ChannelWatermark> maybeGlobalWatermark = await dbContext.ConfigElements
-                .GetValue<int>(ConfigElementKey.FFmpegGlobalWatermarkId)
-                .BindT(
-                    watermarkId => dbContext.ChannelWatermarks
-                        .SelectOneAsync(w => w.Id, w => w.Id == watermarkId));
+                .GetValue<int>(ConfigElementKey.FFmpegGlobalWatermarkId, cancellationToken)
+                .BindT(watermarkId => dbContext.ChannelWatermarks
+                    .SelectOneAsync(w => w.Id, w => w.Id == watermarkId, cancellationToken));
 
-            Option<ChannelWatermark> playoutItemWatermark = Optional(playoutItemWithPath.PlayoutItem.Watermark);
-            bool disableWatermarks = playoutItemWithPath.PlayoutItem.DisableWatermarks;
-            WatermarkResult watermarkResult = GetPlayoutItemWatermark(playoutItemWithPath.PlayoutItem, now);
-            switch (watermarkResult)
-            {
-                case InheritWatermark:
-                    // do nothing, other code will fall back to channel/global
-                    break;
-                case DisableWatermark:
-                    disableWatermarks = true;
-                    break;
-                case CustomWatermark watermark:
-                    playoutItemWatermark = watermark.Watermark;
-                    break;
-            }
+            List<WatermarkOptions> watermarks = _watermarkSelector.SelectWatermarks(
+                maybeGlobalWatermark,
+                channel,
+                playoutItemWithPath.PlayoutItem,
+                now);
 
             if (playoutItemWithPath.PlayoutItem.MediaItem is Song song)
             {
                 (videoPath, videoVersion) = await _songVideoGenerator.GenerateSongVideo(
                     song,
                     channel,
-                    playoutItemWatermark,
-                    maybeGlobalWatermark,
                     ffmpegPath,
                     ffprobePath,
                     cancellationToken);
@@ -270,12 +284,12 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 // override watermark as song_progress_overlay.png
                 if (videoVersion is BackgroundImageMediaVersion { IsSongWithProgress: true })
                 {
-                    double ratio = channel.FFmpegProfile.Resolution.Width / (double)channel.FFmpegProfile.Resolution.Height;
+                    double ratio = channel.FFmpegProfile.Resolution.Width /
+                                   (double)channel.FFmpegProfile.Resolution.Height;
                     bool is43 = Math.Abs(ratio - 4.0 / 3.0) < 0.01;
                     string image = is43 ? "song_progress_overlay_43.png" : "song_progress_overlay.png";
 
-                    disableWatermarks = false;
-                    playoutItemWatermark = new ChannelWatermark
+                    var progressWatermark = new ChannelWatermark
                     {
                         Mode = ChannelWatermarkMode.Permanent,
                         Size = WatermarkSize.Scaled,
@@ -287,6 +301,14 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         ImageSource = ChannelWatermarkImageSource.Resource,
                         Image = image
                     };
+
+                    var progressWatermarkOption = new WatermarkOptions(
+                        progressWatermark,
+                        Path.Combine(FileSystemLayout.ResourcesCacheFolder, progressWatermark.Image),
+                        Option<int>.None);
+
+                    watermarks.Clear();
+                    watermarks.Add(progressWatermarkOption);
                 }
             }
 
@@ -296,7 +318,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             }
 
             bool saveReports = await dbContext.ConfigElements
-                .GetValue<bool>(ConfigElementKey.FFmpegSaveReports)
+                .GetValue<bool>(ConfigElementKey.FFmpegSaveReports, cancellationToken)
                 .Map(result => result.IfNone(false));
 
             DateTimeOffset start = playoutItemWithPath.PlayoutItem.StartOffset;
@@ -306,7 +328,16 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             DateTimeOffset effectiveNow = request.StartAtZero ? start : now;
             TimeSpan duration = finish - effectiveNow;
 
-            Command process = await _ffmpegProcessService.ForPlayoutItem(
+            _logger.LogDebug(
+                "S: {Start}, F: {Finish}, In: {InPoint}, Out: {OutPoint}, EffNow: {EffectiveNow}, Dur: {Duration}",
+                start,
+                finish,
+                inPoint,
+                outPoint,
+                effectiveNow,
+                duration);
+
+            PlayoutItemResult playoutItemResult = await _ffmpegProcessService.ForPlayoutItem(
                 ffmpegPath,
                 ffprobePath,
                 saveReports,
@@ -322,23 +353,33 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 playoutItemWithPath.PlayoutItem.SubtitleMode ?? channel.SubtitleMode,
                 start,
                 finish,
-                request.StartAtZero ? start : now,
-                playoutItemWatermark,
-                maybeGlobalWatermark,
+                effectiveNow,
+                watermarks,
+                playoutItemWithPath.PlayoutItem.PlayoutItemGraphicsElements,
                 channel.FFmpegProfile.VaapiDisplay,
                 channel.FFmpegProfile.VaapiDriver,
                 channel.FFmpegProfile.VaapiDevice,
                 Optional(channel.FFmpegProfile.QsvExtraHardwareFrames),
-                request.HlsRealtime,
+                hlsRealtime: request.HlsRealtime,
+                playoutItemWithPath.PlayoutItem.MediaItem is RemoteStream { IsLive: true }
+                    ? StreamInputKind.Live
+                    : StreamInputKind.Vod,
                 playoutItemWithPath.PlayoutItem.FillerKind,
                 inPoint,
                 outPoint,
+                request.ChannelStartTime,
                 request.PtsOffset,
                 request.TargetFramerate,
-                disableWatermarks,
-                _ => { });
+                Option<string>.None,
+                _ => { },
+                cancellationToken);
 
-            var result = new PlayoutItemProcessModel(process, duration, finish, true);
+            var result = new PlayoutItemProcessModel(
+                playoutItemResult.Process,
+                playoutItemResult.GraphicsEngineContext,
+                duration,
+                finish,
+                true);
 
             return Right<BaseError, PlayoutItemProcessModel>(result);
         }
@@ -376,7 +417,12 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
 
-                    return new PlayoutItemProcessModel(offlineProcess, maybeDuration, finish, true);
+                    return new PlayoutItemProcessModel(
+                        offlineProcess,
+                        Option<GraphicsEngineContext>.None,
+                        maybeDuration,
+                        finish,
+                        true);
                 case PlayoutItemDoesNotExistOnDisk:
                     Command doesNotExistProcess = await _ffmpegProcessService.ForError(
                         ffmpegPath,
@@ -390,7 +436,12 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
 
-                    return new PlayoutItemProcessModel(doesNotExistProcess, maybeDuration, finish, true);
+                    return new PlayoutItemProcessModel(
+                        doesNotExistProcess,
+                        Option<GraphicsEngineContext>.None,
+                        maybeDuration,
+                        finish,
+                        true);
                 default:
                     Command errorProcess = await _ffmpegProcessService.ForError(
                         ffmpegPath,
@@ -404,7 +455,12 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                         channel.FFmpegProfile.VaapiDevice,
                         Optional(channel.FFmpegProfile.QsvExtraHardwareFrames));
 
-                    return new PlayoutItemProcessModel(errorProcess, maybeDuration, finish, true);
+                    return new PlayoutItemProcessModel(
+                        errorProcess,
+                        Option<GraphicsEngineContext>.None,
+                        maybeDuration,
+                        finish,
+                        true);
             }
         }
 
@@ -419,19 +475,19 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         List<Subtitle> allSubtitles = playoutItemWithPath.PlayoutItem.MediaItem switch
         {
             Episode episode => await Optional(episode.EpisodeMetadata).Flatten().HeadOrNone()
-                .Map(mm => mm.Subtitles ?? new List<Subtitle>())
-                .IfNoneAsync(new List<Subtitle>()),
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
             Movie movie => await Optional(movie.MovieMetadata).Flatten().HeadOrNone()
-                .Map(mm => mm.Subtitles ?? new List<Subtitle>())
-                .IfNoneAsync(new List<Subtitle>()),
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
             MusicVideo musicVideo => await GetMusicVideoSubtitles(musicVideo, channel, settings),
             OtherVideo otherVideo => await Optional(otherVideo.OtherVideoMetadata).Flatten().HeadOrNone()
-                .Map(mm => mm.Subtitles ?? new List<Subtitle>())
-                .IfNoneAsync(new List<Subtitle>()),
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
             FillerMediaItem filler => await Optional(filler.FillerMetadata).Flatten().HeadOrNone()
-                .Map(mm => mm.Subtitles ?? new List<Subtitle>())
-                .IfNoneAsync(new List<Subtitle>()),
-            _ => new List<Subtitle>()
+                .Map(mm => mm.Subtitles ?? [])
+                .IfNoneAsync([]),
+            _ => []
         };
 
         bool isMediaServer = playoutItemWithPath.PlayoutItem.MediaItem is PlexMovie or PlexEpisode or
@@ -482,7 +538,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 subtitles.AddRange(
                     await Optional(musicVideo.MusicVideoMetadata).Flatten().HeadOrNone()
                         .Map(mm => mm.Subtitles)
-                        .IfNoneAsync(new List<Subtitle>()));
+                        .IfNoneAsync([]));
                 break;
         }
 
@@ -493,7 +549,8 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         TvContext dbContext,
         Channel channel,
         Playout playout,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         Option<FillerPreset> maybeFallback = Option<FillerPreset>.None;
 
@@ -520,14 +577,17 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             case InheritDeadAirFallback:
                 // check for channel fallback
                 maybeFallback = await dbContext.FillerPresets
-                    .SelectOneAsync(w => w.Id, w => w.Id == channel.FallbackFillerId);
+                    .SelectOneAsync(w => w.Id, w => w.Id == channel.FallbackFillerId, cancellationToken);
 
                 // then check for global fallback
                 if (maybeFallback.IsNone)
                 {
                     maybeFallback = await dbContext.ConfigElements
-                        .GetValue<int>(ConfigElementKey.FFmpegGlobalFallbackFillerId)
-                        .BindT(fillerId => dbContext.FillerPresets.SelectOneAsync(w => w.Id, w => w.Id == fillerId));
+                        .GetValue<int>(ConfigElementKey.FFmpegGlobalFallbackFillerId, cancellationToken)
+                        .BindT(fillerId => dbContext.FillerPresets.SelectOneAsync(
+                            w => w.Id,
+                            w => w.Id == fillerId,
+                            cancellationToken));
                 }
 
                 break;
@@ -543,7 +603,8 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 _mediaCollectionRepository,
                 _televisionRepository,
                 _artistRepository,
-                collectionKey);
+                collectionKey,
+                cancellationToken);
 
             // TODO: shuffle? does it really matter since we loop anyway
             MediaItem item = items[new Random().Next(items.Count)];
@@ -552,7 +613,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 .Filter(pi => pi.Playout.ChannelId == channel.Id)
                 .Filter(pi => pi.Start > now.UtcDateTime)
                 .OrderBy(pi => pi.Start)
-                .FirstOrDefaultAsync()
+                .FirstOrDefaultAsync(cancellationToken)
                 .Map(Optional)
                 .MapT(pi => pi.StartOffset - now);
 
@@ -561,12 +622,12 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
             version.MediaFiles = await dbContext.MediaFiles
                 .AsNoTracking()
                 .Filter(mf => mf.MediaVersionId == version.Id)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             version.Streams = await dbContext.MediaStreams
                 .AsNoTracking()
                 .Filter(ms => ms.MediaVersionId == version.Id)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
 
             DateTimeOffset finish = maybeDuration.Match(
                 // next playout item exists
@@ -587,10 +648,14 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
                 FillerKind = FillerKind.Fallback,
                 InPoint = TimeSpan.Zero,
                 OutPoint = version.Duration,
-                DisableWatermarks = !fallbackPreset.AllowWatermarks
+                DisableWatermarks = !fallbackPreset.AllowWatermarks,
+                Watermarks = [],
+                PlayoutItemWatermarks = [],
+                GraphicsElements = [],
+                PlayoutItemGraphicsElements = []
             };
 
-            return await ValidatePlayoutItemPath(dbContext, playoutItem);
+            return await ValidatePlayoutItemPath(dbContext, playoutItem, cancellationToken);
         }
 
         return new UnableToLocatePlayoutItem();
@@ -598,13 +663,21 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
 
     private async Task<Either<BaseError, PlayoutItemWithPath>> ValidatePlayoutItemPath(
         TvContext dbContext,
-        PlayoutItem playoutItem)
+        PlayoutItem playoutItem,
+        CancellationToken cancellationToken)
     {
-        string path = await GetPlayoutItemPath(playoutItem);
+        string path = await GetPlayoutItemPath(playoutItem, cancellationToken);
 
         // check filesystem first
         if (_localFileSystem.FileExists(path))
         {
+            if (playoutItem.MediaItem is RemoteStream remoteStream)
+            {
+                path = !string.IsNullOrWhiteSpace(remoteStream.Url)
+                    ? remoteStream.Url
+                    : $"http://localhost:{Settings.StreamingPort}/ffmpeg/remote-stream/{remoteStream.Id}";
+            }
+
             return new PlayoutItemWithPath(playoutItem, path);
         }
 
@@ -669,7 +742,7 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         return new PlayoutItemDoesNotExistOnDisk(path);
     }
 
-    private async Task<string> GetPlayoutItemPath(PlayoutItem playoutItem)
+    private async Task<string> GetPlayoutItemPath(PlayoutItem playoutItem, CancellationToken cancellationToken)
     {
         MediaVersion version = playoutItem.MediaItem.GetHeadVersion();
         MediaFile file = version.MediaFiles.Head();
@@ -679,82 +752,35 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
         {
             PlexMovie plexMovie => await _plexPathReplacementService.GetReplacementPlexPath(
                 plexMovie.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             PlexEpisode plexEpisode => await _plexPathReplacementService.GetReplacementPlexPath(
                 plexEpisode.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             JellyfinMovie jellyfinMovie => await _jellyfinPathReplacementService.GetReplacementJellyfinPath(
                 jellyfinMovie.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             JellyfinEpisode jellyfinEpisode => await _jellyfinPathReplacementService.GetReplacementJellyfinPath(
                 jellyfinEpisode.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             EmbyMovie embyMovie => await _embyPathReplacementService.GetReplacementEmbyPath(
                 embyMovie.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             EmbyEpisode embyEpisode => await _embyPathReplacementService.GetReplacementEmbyPath(
                 embyEpisode.LibraryPathId,
-                path),
+                path,
+                cancellationToken),
             _ => path
         };
     }
 
-    private WatermarkResult GetPlayoutItemWatermark(PlayoutItem playoutItem, DateTimeOffset now)
-    {
-        DecoEntries decoEntries = GetDecoEntries(playoutItem.Playout, now);
-
-        // first, check deco template / active deco
-        foreach (Deco templateDeco in decoEntries.TemplateDeco)
-        {
-            switch (templateDeco.WatermarkMode)
-            {
-                case DecoMode.Override:
-                    if (playoutItem.FillerKind is FillerKind.None || templateDeco.UseWatermarkDuringFiller)
-                    {
-                        _logger.LogDebug("Watermark will come from template deco (override)");
-                        return new CustomWatermark(templateDeco.Watermark);
-                    }
-
-                    _logger.LogDebug("Watermark is disabled by template deco during filler");
-                    return new DisableWatermark();
-                case DecoMode.Disable:
-                    _logger.LogDebug("Watermark is disabled by template deco");
-                    return new DisableWatermark();
-                case DecoMode.Inherit:
-                    _logger.LogDebug("Watermark will inherit from playout deco");
-                    break;
-            }
-        }
-
-        // second, check playout deco
-        foreach (Deco playoutDeco in decoEntries.PlayoutDeco)
-        {
-            switch (playoutDeco.WatermarkMode)
-            {
-                case DecoMode.Override:
-                    if (playoutItem.FillerKind is FillerKind.None || playoutDeco.UseWatermarkDuringFiller)
-                    {
-                        _logger.LogDebug("Watermark will come from playout deco (override)");
-                        return new CustomWatermark(playoutDeco.Watermark);
-                    }
-
-                    _logger.LogDebug("Watermark is disabled by playout deco during filler");
-                    return new DisableWatermark();
-                case DecoMode.Disable:
-                    _logger.LogDebug("Watermark is disabled by playout deco");
-                    return new DisableWatermark();
-                case DecoMode.Inherit:
-                    _logger.LogDebug("Watermark will inherit from channel and/or global setting");
-                    break;
-            }
-        }
-
-        return new InheritWatermark();
-    }
-
     private DeadAirFallbackResult GetDecoDeadAirFallback(Playout playout, DateTimeOffset now)
     {
-        DecoEntries decoEntries = GetDecoEntries(playout, now);
+        DecoEntries decoEntries = DecoSelector.GetDecoEntries(playout, now);
 
         // first, check deco template / active deco
         foreach (Deco templateDeco in decoEntries.TemplateDeco)
@@ -802,43 +828,6 @@ public class GetPlayoutItemProcessByChannelNumberHandler : FFmpegProcessHandler<
 
         return new InheritDeadAirFallback();
     }
-
-    private static DecoEntries GetDecoEntries(Playout playout, DateTimeOffset now)
-    {
-        if (playout is null)
-        {
-            return new DecoEntries(Option<Deco>.None, Option<Deco>.None);
-        }
-
-        Option<Deco> maybePlayoutDeco = Optional(playout.Deco);
-        Option<Deco> maybeTemplateDeco = Option<Deco>.None;
-
-        Option<PlayoutTemplate> maybeActiveTemplate =
-            PlayoutTemplateSelector.GetPlayoutTemplateFor(playout.Templates, now);
-
-        foreach (PlayoutTemplate activeTemplate in maybeActiveTemplate)
-        {
-            Option<DecoTemplateItem> maybeItem = Optional(activeTemplate.DecoTemplate)
-                .SelectMany(dt => dt.Items)
-                .Find(i => i.StartTime <= now.TimeOfDay && i.EndTime == TimeSpan.Zero || i.EndTime > now.TimeOfDay);
-            foreach (DecoTemplateItem item in maybeItem)
-            {
-                maybeTemplateDeco = Optional(item.Deco);
-            }
-        }
-
-        return new DecoEntries(maybeTemplateDeco, maybePlayoutDeco);
-    }
-
-    private sealed record DecoEntries(Option<Deco> TemplateDeco, Option<Deco> PlayoutDeco);
-
-    private abstract record WatermarkResult;
-
-    private sealed record InheritWatermark : WatermarkResult;
-
-    private sealed record DisableWatermark : WatermarkResult;
-
-    private sealed record CustomWatermark(ChannelWatermark Watermark) : WatermarkResult;
 
     private abstract record DeadAirFallbackResult;
 

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Extensions;
 using ErsatzTV.Core.Interfaces.Repositories;
@@ -9,16 +10,25 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
 {
     private readonly System.Collections.Generic.HashSet<int> _remainingMediaItemIds = [];
     private System.Collections.Generic.HashSet<int> _allMediaItemIds;
-    private int _enumeratorIndex;
     private System.Collections.Generic.HashSet<int> _idsToIncludeInEPG;
     private IList<bool> _playAll;
-    private List<IMediaCollectionEnumerator> _sortedEnumerators;
-    private bool _shufflePlaylistItems;
     private CloneableRandom _random;
+    private bool _shufflePlaylistItems;
+    private List<IMediaCollectionEnumerator> _sortedEnumerators;
 
     private PlaylistEnumerator()
     {
     }
+
+    public int CountForRandom => _allMediaItemIds.Count;
+
+    public int CountForFiller => _sortedEnumerators.Select((t, i) => _playAll[i] ? t.Count : 1).Sum();
+
+    public ImmutableList<PlaylistEnumeratorCollectionKey> ChildEnumerators { get; private set; }
+
+    public bool CurrentEnumeratorPlayAll => _playAll[EnumeratorIndex];
+
+    public int EnumeratorIndex { get; private set; }
 
     public void ResetState(CollectionEnumeratorState state) =>
         // seed doesn't matter here
@@ -27,7 +37,7 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
     public CollectionEnumeratorState State { get; private set; }
 
     public Option<MediaItem> Current => _sortedEnumerators.Count > 0
-        ? _sortedEnumerators[_enumeratorIndex].Current
+        ? _sortedEnumerators[EnumeratorIndex].Current
         : Option<MediaItem>.None;
 
     public Option<bool> CurrentIncludeInProgramGuide
@@ -49,21 +59,21 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
 
     public void MoveNext()
     {
-        foreach (MediaItem maybeMediaItem in _sortedEnumerators[_enumeratorIndex].Current)
+        foreach (MediaItem maybeMediaItem in _sortedEnumerators[EnumeratorIndex].Current)
         {
             _remainingMediaItemIds.Remove(maybeMediaItem.Id);
         }
 
-        _sortedEnumerators[_enumeratorIndex].MoveNext();
+        _sortedEnumerators[EnumeratorIndex].MoveNext();
 
         // if we aren't playing all, or if we just finished playing all, move to the next enumerator
-        if (!_playAll[_enumeratorIndex] || _sortedEnumerators[_enumeratorIndex].State.Index == 0)
+        if (!_playAll[EnumeratorIndex] || _sortedEnumerators[EnumeratorIndex].State.Index == 0)
         {
-            _enumeratorIndex = (_enumeratorIndex + 1) % _sortedEnumerators.Count;
+            EnumeratorIndex = (EnumeratorIndex + 1) % _sortedEnumerators.Count;
         }
 
         State.Index += 1;
-        if (_remainingMediaItemIds.Count == 0 && _enumeratorIndex == 0 && _sortedEnumerators[0].State.Index == 0)
+        if (_remainingMediaItemIds.Count == 0 && EnumeratorIndex == 0 && _sortedEnumerators[0].State.Index == 0)
         {
             State.Index = 0;
             _remainingMediaItemIds.UnionWith(_allMediaItemIds);
@@ -76,6 +86,8 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
             }
         }
     }
+
+    public void SetEnumeratorIndex(int enumeratorIndex) => EnumeratorIndex = enumeratorIndex % _sortedEnumerators.Count;
 
     public static async Task<PlaylistEnumerator> Create(
         IMediaCollectionRepository mediaCollectionRepository,
@@ -137,14 +149,16 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
                             // TODO: fix this
                             new ProgramSchedule { KeepMultiPartEpisodesTogether = false },
                             items,
-                            CollectionKey.ForPlaylistItem(playlistItem));
+                            CollectionKey.ForPlaylistItem(playlistItem),
+                            cancellationToken);
                         enumerator = new ShuffledMediaCollectionEnumerator(i, initState, cancellationToken);
                         break;
                     case PlaybackOrder.ShuffleInOrder:
                         enumerator = new ShuffleInOrderCollectionEnumerator(
                             await PlayoutBuilder.GetCollectionItemsForShuffleInOrder(
                                 mediaCollectionRepository,
-                                CollectionKey.ForPlaylistItem(playlistItem)),
+                                CollectionKey.ForPlaylistItem(playlistItem),
+                                cancellationToken),
                             initState,
                             // TODO: fix this
                             false,
@@ -184,7 +198,7 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
         }
 
         result.State = new CollectionEnumeratorState { Seed = state.Seed };
-        result._enumeratorIndex = 0;
+        result.EnumeratorIndex = 0;
 
         // this was a bug when playlist enumerators were first added; shouldn't happen anymore
         if (state.Index < 0)
@@ -202,6 +216,17 @@ public class PlaylistEnumerator : IMediaCollectionEnumerator
                 break;
             }
         }
+
+        var childEnumerators = new List<PlaylistEnumeratorCollectionKey>();
+        foreach (IMediaCollectionEnumerator enumerator in result._sortedEnumerators)
+        {
+            foreach ((CollectionKey collectionKey, _) in enumeratorMap.Find(e => e.Value == enumerator))
+            {
+                childEnumerators.Add(new PlaylistEnumeratorCollectionKey(enumerator, collectionKey));
+            }
+        }
+
+        result.ChildEnumerators = childEnumerators.ToImmutableList();
 
         return result;
     }

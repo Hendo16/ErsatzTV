@@ -57,8 +57,8 @@ public class ScannerService : BackgroundService
                         case SynchronizePlexCollections synchronizePlexCollections:
                             requestTask = SynchronizePlexCollections(synchronizePlexCollections, stoppingToken);
                             break;
-                        case SynchronizeJellyfinAdminUserId synchronizeJellyfinAdminUserId:
-                            requestTask = SynchronizeAdminUserId(synchronizeJellyfinAdminUserId, stoppingToken);
+                        case SynchronizePlexNetworks synchronizePlexNetworks:
+                            requestTask = SynchronizePlexNetworks(synchronizePlexNetworks, stoppingToken);
                             break;
                         case SynchronizeJellyfinLibraries synchronizeJellyfinLibraries:
                             requestTask = SynchronizeLibraries(synchronizeJellyfinLibraries, stoppingToken);
@@ -223,22 +223,38 @@ public class ScannerService : BackgroundService
         }
     }
 
-    private async Task SynchronizeAdminUserId(
-        SynchronizeJellyfinAdminUserId request,
+    private async Task SynchronizePlexNetworks(
+        SynchronizePlexNetworks request,
         CancellationToken cancellationToken)
     {
         using IServiceScope scope = _serviceScopeFactory.CreateScope();
         IMediator mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+        IEntityLocker entityLocker = scope.ServiceProvider.GetRequiredService<IEntityLocker>();
 
         Either<BaseError, Unit> result = await mediator.Send(request, cancellationToken);
         result.BiIter(
-            _ => _logger.LogInformation(
-                "Successfully synchronized Jellyfin admin user id for source {MediaSourceId}",
-                request.JellyfinMediaSourceId),
-            error => _logger.LogWarning(
-                "Unable to synchronize Jellyfin admin user id for source {MediaSourceId}: {Error}",
-                request.JellyfinMediaSourceId,
-                error.Value));
+            _ => _logger.LogDebug("Done synchronizing plex networks for library {LibraryId}", request.PlexLibraryId),
+            error =>
+            {
+                if (error is ScanIsNotRequired)
+                {
+                    _logger.LogDebug(
+                        "Scan is not required for plex networks in library {LibraryId} at this time",
+                        request.PlexLibraryId);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Unable to synchronize plex networks for library {LibraryId}: {Error}",
+                        request.PlexLibraryId,
+                        error.Value);
+                }
+            });
+
+        if (entityLocker.IsLibraryLocked(request.PlexLibraryId))
+        {
+            entityLocker.UnlockLibrary(request.PlexLibraryId);
+        }
     }
 
     private async Task SynchronizeLibraries(SynchronizeJellyfinLibraries request, CancellationToken cancellationToken)

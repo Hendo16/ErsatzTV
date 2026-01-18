@@ -29,7 +29,7 @@ public class GetJellyfinConnectionParametersHandler : IRequestHandler<GetJellyfi
         }
 
         Either<BaseError, JellyfinConnectionParametersViewModel> maybeParameters =
-            await Validate()
+            await Validate(cancellationToken)
                 .MapT(cp => new JellyfinConnectionParametersViewModel(cp.ActiveConnection.Address))
                 .Map(v => v.ToEither<JellyfinConnectionParametersViewModel>());
 
@@ -42,15 +42,15 @@ public class GetJellyfinConnectionParametersHandler : IRequestHandler<GetJellyfi
             error => error);
     }
 
-    private Task<Validation<BaseError, ConnectionParameters>> Validate() =>
-        JellyfinMediaSourceMustExist()
+    private Task<Validation<BaseError, ConnectionParameters>> Validate(CancellationToken cancellationToken) =>
+        JellyfinMediaSourceMustExist(cancellationToken)
             .BindT(MediaSourceMustHaveActiveConnection);
 
-    private Task<Validation<BaseError, JellyfinMediaSource>> JellyfinMediaSourceMustExist() =>
-        _mediaSourceRepository.GetAllJellyfin().Map(list => list.HeadOrNone())
-            .Map(
-                v => v.ToValidation<BaseError>(
-                    "Jellyfin media source does not exist."));
+    private Task<Validation<BaseError, JellyfinMediaSource>> JellyfinMediaSourceMustExist(
+        CancellationToken cancellationToken) =>
+        _mediaSourceRepository.GetAllJellyfin(cancellationToken).Map(list => list.HeadOrNone())
+            .Map(v => v.ToValidation<BaseError>(
+                "Jellyfin media source does not exist."));
 
     private Validation<BaseError, ConnectionParameters> MediaSourceMustHaveActiveConnection(
         JellyfinMediaSource jellyfinMediaSource)

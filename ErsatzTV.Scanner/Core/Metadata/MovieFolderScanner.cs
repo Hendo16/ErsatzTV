@@ -22,6 +22,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
 {
     private readonly IClient _client;
     private readonly ILibraryRepository _libraryRepository;
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
@@ -36,6 +37,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         IMovieRepository movieRepository,
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalSubtitlesProvider localSubtitlesProvider,
+        ILocalChaptersProvider localChaptersProvider,
         ILocalMetadataProvider localMetadataProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
@@ -62,6 +64,7 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         _movieRepository = movieRepository;
         _fillerRepository = fillerRepository;
         _localSubtitlesProvider = localSubtitlesProvider;
+        _localChaptersProvider = localChaptersProvider;
         _localMetadataProvider = localMetadataProvider;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
@@ -121,7 +124,10 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                     cancellationToken);
 
                 string movieFolder = folderQueue.Dequeue();
-                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(movieFolder);
+                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(
+                    libraryPath,
+                    movieFolder,
+                    cancellationToken);
                 foldersCompleted++;
 
                 var filesForEtag = _localFileSystem.ListFiles(movieFolder).ToList();
@@ -129,9 +135,8 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                 var allFiles = filesForEtag
                     .Filter(f => VideoFileExtensions.Contains(Path.GetExtension(f)))
                     .Filter(f => !Path.GetFileName(f).StartsWith("._", StringComparison.OrdinalIgnoreCase))
-                    .Filter(
-                        f => !ExtraFiles.Any(
-                            e => Path.GetFileNameWithoutExtension(f).EndsWith(e, StringComparison.OrdinalIgnoreCase)))
+                    .Filter(f => !ExtraFiles.Any(e =>
+                        Path.GetFileNameWithoutExtension(f).EndsWith(e, StringComparison.OrdinalIgnoreCase)))
                     .ToList();
 
                 string etag = FolderEtag.Calculate(movieFolder, _localFileSystem);
@@ -178,13 +183,14 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
                 {
                     // TODO: figure out how to rebuild playlists
                     Either<BaseError, MediaItemScanResult<Movie>> maybeMovie = await _movieRepository
-                        .GetOrAdd(libraryPath, knownFolder, file)
+                        .GetOrAdd(libraryPath, knownFolder, file, cancellationToken)
                         .BindT(movie => UpdateStatistics(movie, ffmpegPath, ffprobePath))
                         .BindT(video => UpdateLibraryFolderId(video, knownFolder))
                         .BindT(UpdateMetadata)
                         .BindT(movie => UpdateArtwork(movie, ArtworkKind.Poster, cancellationToken))
                         .BindT(movie => UpdateArtwork(movie, ArtworkKind.FanArt, cancellationToken))
-                        .BindT(UpdateSubtitles)
+                        .BindT(movie => UpdateSubtitles(movie, cancellationToken))
+                        .BindT(movie => UpdateChapters(movie, cancellationToken))
                         .BindT(FlagNormal);
 
                     foreach (BaseError error in maybeMovie.LeftToSeq())
@@ -335,11 +341,29 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
         }
     }
 
-    private async Task<Either<BaseError, MediaItemScanResult<Movie>>> UpdateSubtitles(MediaItemScanResult<Movie> result)
+    private async Task<Either<BaseError, MediaItemScanResult<Movie>>> UpdateSubtitles(
+        MediaItemScanResult<Movie> result,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true);
+            await _localSubtitlesProvider.UpdateSubtitles(result.Item, None, true, cancellationToken);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _client.Notify(ex);
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, MediaItemScanResult<Movie>>> UpdateChapters(
+        MediaItemScanResult<Movie> result,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _localChaptersProvider.UpdateChapters(result.Item, None, cancellationToken);
             return result;
         }
         catch (Exception ex)
@@ -370,14 +394,13 @@ public class MovieFolderScanner : LocalFolderScanner, IMovieFolderScanner
 
         string path = movie.MediaVersions.Head().MediaFiles.Head().Path;
         string folder = Path.GetDirectoryName(path) ?? string.Empty;
-        IEnumerable<string> possibleMoviePosters = ImageFileExtensions.Collect(
-                ext => new[] { $"{segment}.{ext}", Path.GetFileNameWithoutExtension(path) + $"-{segment}.{ext}" })
+        IEnumerable<string> possibleMoviePosters = ImageFileExtensions.Collect(ext =>
+                new[] { $"{segment}.{ext}", Path.GetFileNameWithoutExtension(path) + $"-{segment}.{ext}" })
             .Map(f => Path.Combine(folder, f));
         Option<string> result = possibleMoviePosters.Filter(p => _localFileSystem.FileExists(p)).HeadOrNone();
         if (result.IsNone && artworkKind == ArtworkKind.Poster)
         {
-            IEnumerable<string> possibleFolderPosters = ImageFileExtensions.Collect(
-                    ext => new[] { $"folder.{ext}" })
+            IEnumerable<string> possibleFolderPosters = ImageFileExtensions.Collect(ext => new[] { $"folder.{ext}" })
                 .Map(f => Path.Combine(folder, f));
             result = possibleFolderPosters.Filter(p => _localFileSystem.FileExists(p)).HeadOrNone();
         }

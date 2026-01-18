@@ -8,6 +8,7 @@ public class OutputFormatHls : IPipelineStep
 
     private readonly FrameState _desiredState;
     private readonly bool _isFirstTranscode;
+    private readonly bool _isTroubleshooting;
     private readonly Option<string> _mediaFrameRate;
     private readonly bool _oneSecondGop;
     private readonly string _playlistPath;
@@ -19,7 +20,8 @@ public class OutputFormatHls : IPipelineStep
         string segmentTemplate,
         string playlistPath,
         bool isFirstTranscode,
-        bool oneSecondGop)
+        bool oneSecondGop,
+        bool isTroubleshooting)
     {
         _desiredState = desiredState;
         _mediaFrameRate = mediaFrameRate;
@@ -27,12 +29,13 @@ public class OutputFormatHls : IPipelineStep
         _playlistPath = playlistPath;
         _isFirstTranscode = isFirstTranscode;
         _oneSecondGop = oneSecondGop;
+        _isTroubleshooting = isTroubleshooting;
     }
 
-    public EnvironmentVariable[] EnvironmentVariables => Array.Empty<EnvironmentVariable>();
-    public string[] GlobalOptions => Array.Empty<string>();
-    public string[] InputOptions(InputFile inputFile) => Array.Empty<string>();
-    public string[] FilterOptions => Array.Empty<string>();
+    public EnvironmentVariable[] EnvironmentVariables => [];
+    public string[] GlobalOptions => [];
+    public string[] InputOptions(InputFile inputFile) => [];
+    public string[] FilterOptions => [];
 
     public string[] OutputOptions
     {
@@ -55,11 +58,13 @@ public class OutputFormatHls : IPipelineStep
                 _segmentTemplate
             ];
 
+            string pdt = _isTroubleshooting ? string.Empty : "program_date_time+omit_endlist+";
+
             if (_isFirstTranscode)
             {
                 result.AddRange(
                 [
-                    "-hls_flags", "program_date_time+append_list+omit_endlist+independent_segments",
+                    "-hls_flags", $"{pdt}append_list+independent_segments",
                     _playlistPath
                 ]);
             }
@@ -67,7 +72,7 @@ public class OutputFormatHls : IPipelineStep
             {
                 result.AddRange(
                 [
-                    "-hls_flags", "program_date_time+append_list+discont_start+omit_endlist+independent_segments",
+                    "-hls_flags", $"{pdt}append_list+discont_start+independent_segments",
                     "-mpegts_flags", "+initial_discontinuity",
                     _playlistPath
                 ]);
@@ -85,20 +90,22 @@ public class OutputFormatHls : IPipelineStep
 
         foreach (string rFrameRate in _mediaFrameRate)
         {
-            if (!int.TryParse(rFrameRate, out int fr))
+            if (double.TryParse(rFrameRate, out double value))
+            {
+                frameRate = (int)Math.Round(value);
+            }
+            else if (!int.TryParse(rFrameRate, out int fr))
             {
                 string[] split = (rFrameRate ?? string.Empty).Split("/");
                 if (int.TryParse(split[0], out int left) && int.TryParse(split[1], out int right))
                 {
-                    fr = (int)Math.Round(left / (double)right);
+                    frameRate = (int)Math.Round(left / (double)right);
                 }
                 else
                 {
-                    fr = 24;
+                    frameRate = 24;
                 }
             }
-
-            frameRate = fr;
         }
 
         return frameRate;

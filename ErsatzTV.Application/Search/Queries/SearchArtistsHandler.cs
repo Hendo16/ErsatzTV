@@ -5,22 +5,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ErsatzTV.Application.Search;
 
-public class SearchArtistsHandler : IRequestHandler<SearchArtists, List<NamedMediaItemViewModel>>
+public class SearchArtistsHandler(IDbContextFactory<TvContext> dbContextFactory)
+    : IRequestHandler<SearchArtists, List<NamedMediaItemViewModel>>
 {
-    private readonly IDbContextFactory<TvContext> _dbContextFactory;
-
-    public SearchArtistsHandler(IDbContextFactory<TvContext> dbContextFactory) =>
-        _dbContextFactory = dbContextFactory;
-
     public async Task<List<NamedMediaItemViewModel>> Handle(SearchArtists request, CancellationToken cancellationToken)
     {
-        await using TvContext dbContext = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+        await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await dbContext.ArtistMetadata
             .AsNoTracking()
-            .Where(
-                a => EF.Functions.Like(
-                    EF.Functions.Collate(a.Title, TvContext.CaseInsensitiveCollation),
-                    $"%{request.Query}%"))
+            .Where(a => EF.Functions.Like(
+                EF.Functions.Collate(a.Title, TvContext.CaseInsensitiveCollation),
+                $"%{request.Query}%"))
             .OrderBy(a => EF.Functions.Collate(a.Title, TvContext.CaseInsensitiveCollation))
             .Take(10)
             .ToListAsync(cancellationToken)

@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Core.Domain;
+﻿using ErsatzTV.Application.MediaCollections;
+using ErsatzTV.Core.Domain;
 using ErsatzTV.Core.Domain.Filler;
 
 namespace ErsatzTV.Application.Filler;
@@ -16,4 +17,7 @@ public record FillerPresetViewModel(
     int? CollectionId,
     int? MediaItemId,
     int? MultiCollectionId,
-    int? SmartCollectionId);
+    int? SmartCollectionId,
+    PlaylistViewModel Playlist,
+    string Expression,
+    bool UseChaptersAsMediaItems);

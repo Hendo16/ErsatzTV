@@ -14,10 +14,15 @@ public class DeletePlaylistGroupHandler(IDbContextFactory<TvContext> dbContextFa
         await using TvContext dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
 
         Option<PlaylistGroup> maybePlaylistGroup = await dbContext.PlaylistGroups
-            .SelectOneAsync(p => p.Id, p => p.Id == request.PlaylistGroupId);
+            .SelectOneAsync(p => p.Id, p => p.Id == request.PlaylistGroupId, cancellationToken);
 
         foreach (PlaylistGroup playlistGroup in maybePlaylistGroup)
         {
+            if (playlistGroup.IsSystem)
+            {
+                return BaseError.New("Cannot delete system playlist group");
+            }
+
             dbContext.PlaylistGroups.Remove(playlistGroup);
             await dbContext.SaveChangesAsync(cancellationToken);
         }

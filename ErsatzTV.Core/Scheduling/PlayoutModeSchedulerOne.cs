@@ -24,7 +24,10 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
         foreach (MediaItem mediaItem in contentEnumerator.Current)
         {
             // find when we should start this item, based on the current time
-            DateTimeOffset itemStartTime = GetStartTimeAfter(playoutBuilderState, scheduleItem);
+            DateTimeOffset itemStartTime = GetStartTimeAfter(
+                playoutBuilderState,
+                scheduleItem,
+                Option<ILogger>.Some(Logger));
             if (itemStartTime >= hardStop)
             {
                 playoutBuilderState = playoutBuilderState with { CurrentTime = hardStop };
@@ -36,6 +39,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
 
             var playoutItem = new PlayoutItem
             {
+                PlayoutId = playoutBuilderState.PlayoutId,
                 MediaItemId = mediaItem.Id,
                 Start = itemStartTime.UtcDateTime,
                 Finish = itemStartTime.UtcDateTime + itemDuration,
@@ -47,12 +51,23 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
                     ? FillerKind.GuideMode
                     : FillerKind.None,
                 CustomTitle = scheduleItem.CustomTitle,
-                WatermarkId = scheduleItem.WatermarkId,
                 PreferredAudioLanguageCode = scheduleItem.PreferredAudioLanguageCode,
                 PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                 PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
-                SubtitleMode = scheduleItem.SubtitleMode
+                SubtitleMode = scheduleItem.SubtitleMode,
+                PlayoutItemWatermarks = []
             };
+
+            foreach (ProgramScheduleItemWatermark programScheduleItemWatermark in scheduleItem
+                         .ProgramScheduleItemWatermarks ?? [])
+            {
+                playoutItem.PlayoutItemWatermarks.Add(
+                    new PlayoutItemWatermark
+                    {
+                        PlayoutItem = playoutItem,
+                        WatermarkId = programScheduleItemWatermark.WatermarkId
+                    });
+            }
 
             //Get Base Item Genres
             List<Genre> genres = new();
@@ -86,7 +101,7 @@ public class PlayoutModeSchedulerOne : PlayoutModeSchedulerBase<ProgramScheduleI
             // LogScheduledItem(scheduleItem, mediaItem, itemStartTime);
 
             // only play one item from collection, so always advance to the next item
-            // _logger.LogDebug(
+            // Logger.LogDebug(
             //     "Advancing to next schedule item after playout mode {PlayoutMode}",
             //     "One");
 

@@ -44,7 +44,7 @@ public class SynchronizeEmbyLibraryByIdHandler : IRequestHandler<SynchronizeEmby
     public async Task<Either<BaseError, string>>
         Handle(SynchronizeEmbyLibraryById request, CancellationToken cancellationToken)
     {
-        Validation<BaseError, RequestParameters> validation = await Validate(request);
+        Validation<BaseError, RequestParameters> validation = await Validate(request, cancellationToken);
         return await validation.Match(
             parameters => Synchronize(parameters, cancellationToken),
             error => Task.FromResult<Either<BaseError, string>>(error.Join()));
@@ -107,17 +107,18 @@ public class SynchronizeEmbyLibraryByIdHandler : IRequestHandler<SynchronizeEmby
     }
 
     private async Task<Validation<BaseError, RequestParameters>> Validate(
-        SynchronizeEmbyLibraryById request) =>
-        (await ValidateConnection(request), await EmbyLibraryMustExist(request), await ValidateLibraryRefreshInterval())
-        .Apply(
-            (connectionParameters, embyLibrary, libraryRefreshInterval) =>
-                new RequestParameters(
-                    connectionParameters,
-                    embyLibrary,
-                    request.ForceScan,
-                    libraryRefreshInterval,
-                    request.DeepScan
-                ));
+        SynchronizeEmbyLibraryById request,
+        CancellationToken cancellationToken) =>
+        (await ValidateConnection(request), await EmbyLibraryMustExist(request, cancellationToken),
+            await ValidateLibraryRefreshInterval(cancellationToken))
+        .Apply((connectionParameters, embyLibrary, libraryRefreshInterval) =>
+            new RequestParameters(
+                connectionParameters,
+                embyLibrary,
+                request.ForceScan,
+                libraryRefreshInterval,
+                request.DeepScan
+            ));
 
     private Task<Validation<BaseError, ConnectionParameters>> ValidateConnection(
         SynchronizeEmbyLibraryById request) =>
@@ -128,9 +129,8 @@ public class SynchronizeEmbyLibraryByIdHandler : IRequestHandler<SynchronizeEmby
     private Task<Validation<BaseError, EmbyMediaSource>> EmbyMediaSourceMustExist(
         SynchronizeEmbyLibraryById request) =>
         _mediaSourceRepository.GetEmbyByLibraryId(request.EmbyLibraryId)
-            .Map(
-                v => v.ToValidation<BaseError>(
-                    $"Emby media source for library {request.EmbyLibraryId} does not exist."));
+            .Map(v => v.ToValidation<BaseError>(
+                $"Emby media source for library {request.EmbyLibraryId} does not exist."));
 
     private Validation<BaseError, ConnectionParameters> MediaSourceMustHaveActiveConnection(
         EmbyMediaSource embyMediaSource)
@@ -151,12 +151,13 @@ public class SynchronizeEmbyLibraryByIdHandler : IRequestHandler<SynchronizeEmby
     }
 
     private Task<Validation<BaseError, EmbyLibrary>> EmbyLibraryMustExist(
-        SynchronizeEmbyLibraryById request) =>
-        _mediaSourceRepository.GetEmbyLibrary(request.EmbyLibraryId)
+        SynchronizeEmbyLibraryById request,
+        CancellationToken cancellationToken) =>
+        _mediaSourceRepository.GetEmbyLibrary(request.EmbyLibraryId, cancellationToken)
             .Map(v => v.ToValidation<BaseError>($"Emby library {request.EmbyLibraryId} does not exist."));
 
-    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval() =>
-        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval)
+    private Task<Validation<BaseError, int>> ValidateLibraryRefreshInterval(CancellationToken cancellationToken) =>
+        _configElementRepository.GetValue<int>(ConfigElementKey.LibraryRefreshInterval, cancellationToken)
             .FilterT(lri => lri is >= 0 and < 1_000_000)
             .Map(lri => lri.ToValidation<BaseError>("Library refresh interval is invalid"));
 

@@ -1,4 +1,5 @@
-﻿using ErsatzTV.Core;
+﻿using ErsatzTV.Application.Artworks;
+using ErsatzTV.Core;
 using ErsatzTV.Core.Domain;
 
 namespace ErsatzTV.Application.Channels;
@@ -9,10 +10,12 @@ public record CreateChannel(
     string Group,
     string Categories,
     int FFmpegProfileId,
-    string Logo,
+    ArtworkContentTypeModel Logo,
+    ChannelStreamSelectorMode StreamSelectorMode,
+    string StreamSelector,
     string PreferredAudioLanguageCode,
     string PreferredAudioTitle,
-    ChannelProgressMode ProgressMode,
+    ChannelPlayoutMode PlayoutMode,
     StreamingMode StreamingMode,
     int? WatermarkId,
     int? FallbackFillerId,
@@ -20,4 +23,8 @@ public record CreateChannel(
     ChannelSubtitleMode SubtitleMode,
     ChannelMusicVideoCreditsMode MusicVideoCreditsMode,
     string MusicVideoCreditsTemplate,
-    ChannelSongVideoMode SongVideoMode) : IRequest<Either<BaseError, CreateChannelResult>>;
+    ChannelSongVideoMode SongVideoMode,
+    ChannelTranscodeMode TranscodeMode,
+    ChannelIdleBehavior IdleBehavior,
+    bool IsEnabled,
+    bool ShowInEpg) : IRequest<Either<BaseError, CreateChannelResult>>;

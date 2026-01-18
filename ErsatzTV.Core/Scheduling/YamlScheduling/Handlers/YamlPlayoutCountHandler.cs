@@ -1,8 +1,10 @@
 using ErsatzTV.Core.Domain;
+using ErsatzTV.Core.Domain.Filler;
 using ErsatzTV.Core.Domain.Scheduling;
 using ErsatzTV.Core.Interfaces.Scheduling;
 using ErsatzTV.Core.Scheduling.YamlScheduling.Models;
 using Microsoft.Extensions.Logging;
+using NCalc;
 
 namespace ErsatzTV.Core.Scheduling.YamlScheduling.Handlers;
 
@@ -12,7 +14,8 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
         YamlPlayoutContext context,
         YamlPlayoutInstruction instruction,
         PlayoutBuildMode mode,
-        ILogger<YamlPlayoutBuilder> logger,
+        Func<string, Task> executeSequence,
+        ILogger<SequentialPlayoutBuilder> logger,
         CancellationToken cancellationToken)
     {
         if (instruction is not YamlPlayoutCountInstruction count)
@@ -28,8 +31,39 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
 
         foreach (IMediaCollectionEnumerator enumerator in maybeEnumerator)
         {
-            for (var i = 0; i < count.Count; i++)
+            int seed = context.Playout.Seed + context.InstructionIndex + context.CurrentTime.DayOfYear;
+            var random = new Random(seed);
+            int enumeratorCount = enumerator is PlaylistEnumerator playlistEnumerator
+                ? playlistEnumerator.CountForRandom
+                : enumerator.Count;
+            var expression = new Expression(count.Count);
+            expression.EvaluateParameter += (name, e) =>
             {
+                e.Result = name switch
+                {
+                    "count" => enumeratorCount,
+                    "random" => random.Next() % enumeratorCount,
+                    _ => e.Result
+                };
+            };
+
+            object expressionResult = expression.Evaluate();
+            int countValue = expressionResult switch
+            {
+                double doubleResult => (int)Math.Floor(doubleResult),
+                int intResult => intResult,
+                _ => 0
+            };
+
+            for (var i = 0; i < countValue; i++)
+            {
+                foreach (string preRollSequence in context.GetPreRollSequence())
+                {
+                    context.PushFillerKind(FillerKind.PreRoll);
+                    await executeSequence(preRollSequence);
+                    context.PopFillerKind();
+                }
+
                 foreach (MediaItem mediaItem in enumerator.Current)
                 {
                     TimeSpan itemDuration = DurationForMediaItem(mediaItem);
@@ -37,44 +71,75 @@ public class YamlPlayoutCountHandler(EnumeratorCache enumeratorCache) : YamlPlay
                     // create a playout item
                     var playoutItem = new PlayoutItem
                     {
+                        PlayoutId = context.Playout.Id,
                         MediaItemId = mediaItem.Id,
                         Start = context.CurrentTime.UtcDateTime,
                         Finish = context.CurrentTime.UtcDateTime + itemDuration,
                         InPoint = TimeSpan.Zero,
                         OutPoint = itemDuration,
-                        FillerKind = GetFillerKind(count),
+                        FillerKind = GetFillerKind(count, context),
                         CustomTitle = string.IsNullOrWhiteSpace(count.CustomTitle) ? null : count.CustomTitle,
-                        //WatermarkId = scheduleItem.WatermarkId,
+                        DisableWatermarks = count.DisableWatermarks,
                         //PreferredAudioLanguageCode = scheduleItem.PreferredAudioLanguageCode,
                         //PreferredAudioTitle = scheduleItem.PreferredAudioTitle,
                         //PreferredSubtitleLanguageCode = scheduleItem.PreferredSubtitleLanguageCode,
                         //SubtitleMode = scheduleItem.SubtitleMode
-                        GuideGroup = context.PeekNextGuideGroup()
+                        GuideGroup = context.PeekNextGuideGroup(),
                         //GuideStart = effectiveBlock.Start.UtcDateTime,
                         //GuideFinish = blockFinish.UtcDateTime,
                         //BlockKey = JsonConvert.SerializeObject(effectiveBlock.BlockKey),
                         //CollectionKey = JsonConvert.SerializeObject(collectionKey, JsonSettings),
-                        //CollectionEtag = collectionEtags[collectionKey]
+                        //CollectionEtag = collectionEtags[collectionKey],
+                        PlayoutItemWatermarks = [],
+                        PlayoutItemGraphicsElements = []
                     };
 
-                    context.Playout.Items.Add(playoutItem);
+                    foreach (int watermarkId in context.GetChannelWatermarkIds())
+                    {
+                        playoutItem.PlayoutItemWatermarks.Add(
+                            new PlayoutItemWatermark
+                            {
+                                PlayoutItem = playoutItem,
+                                WatermarkId = watermarkId
+                            });
+                    }
+
+                    foreach ((int graphicsElementId, string variablesJson) in context.GetGraphicsElements())
+                    {
+                        playoutItem.PlayoutItemGraphicsElements.Add(
+                            new PlayoutItemGraphicsElement
+                            {
+                                PlayoutItem = playoutItem,
+                                GraphicsElementId = graphicsElementId,
+                                Variables = variablesJson
+                            });
+                    }
+
+                    await AddItemAndMidRoll(context, playoutItem, mediaItem, executeSequence);
                     context.AdvanceGuideGroup();
 
                     // create history record
-                    Option<PlayoutHistory> maybeHistory = GetHistoryForItem(
+                    List<PlayoutHistory> maybeHistory = GetHistoryForItem(
                         context,
                         instruction.Content,
                         enumerator,
                         playoutItem,
-                        mediaItem);
+                        mediaItem,
+                        logger);
 
                     foreach (PlayoutHistory history in maybeHistory)
                     {
-                        context.Playout.PlayoutHistory.Add(history);
+                        context.AddedHistory.Add(history);
                     }
 
-                    context.CurrentTime += itemDuration;
                     enumerator.MoveNext();
+                }
+
+                foreach (string postRollSequence in context.GetPostRollSequence())
+                {
+                    context.PushFillerKind(FillerKind.PostRoll);
+                    await executeSequence(postRollSequence);
+                    context.PopFillerKind();
                 }
             }
 

@@ -21,6 +21,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
     private readonly IClient _client;
     private readonly IFallbackMetadataProvider _fallbackMetadataProvider;
     private readonly ILibraryRepository _libraryRepository;
+    private readonly ILocalChaptersProvider _localChaptersProvider;
     private readonly ILocalFileSystem _localFileSystem;
     private readonly ILocalMetadataProvider _localMetadataProvider;
     private readonly ILocalSubtitlesProvider _localSubtitlesProvider;
@@ -36,6 +37,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         ILocalStatisticsProvider localStatisticsProvider,
         ILocalMetadataProvider localMetadataProvider,
         ILocalSubtitlesProvider localSubtitlesProvider,
+        ILocalChaptersProvider localChaptersProvider,
         IMetadataRepository metadataRepository,
         IImageCache imageCache,
         ILibraryRepository libraryRepository,
@@ -60,6 +62,7 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         _televisionRepository = televisionRepository;
         _localMetadataProvider = localMetadataProvider;
         _localSubtitlesProvider = localSubtitlesProvider;
+        _localChaptersProvider = localChaptersProvider;
         _metadataRepository = metadataRepository;
         _libraryRepository = libraryRepository;
         _mediaItemRepository = mediaItemRepository;
@@ -113,7 +116,8 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                         Array.Empty<int>()),
                     cancellationToken);
 
-                Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(showFolder);
+                Option<int> maybeParentFolder =
+                    await _libraryRepository.GetParentFolderId(libraryPath, showFolder, cancellationToken);
 
                 // this folder is unused by the show, but will be used as parents of season folders
                 LibraryFolder _ = await _libraryRepository.GetOrAddFolder(
@@ -126,8 +130,11 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                         .BindT(show => UpdateMetadataForShow(show, showFolder))
                         .BindT(show => UpdateArtworkForShow(show, showFolder, ArtworkKind.Poster, cancellationToken))
                         .BindT(show => UpdateArtworkForShow(show, showFolder, ArtworkKind.FanArt, cancellationToken))
-                        .BindT(
-                            show => UpdateArtworkForShow(show, showFolder, ArtworkKind.Thumbnail, cancellationToken));
+                        .BindT(show => UpdateArtworkForShow(
+                            show,
+                            showFolder,
+                            ArtworkKind.Thumbnail,
+                            cancellationToken));
 
                 foreach (BaseError error in maybeShow.LeftToSeq())
                 {
@@ -244,7 +251,8 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
                 return new ScanCanceled();
             }
 
-            Option<int> maybeParentFolder = await _libraryRepository.GetParentFolderId(seasonFolder);
+            Option<int> maybeParentFolder =
+                await _libraryRepository.GetParentFolderId(libraryPath, seasonFolder, cancellationToken);
 
             string etag = FolderEtag.CalculateWithSubfolders(seasonFolder, _localFileSystem);
             LibraryFolder knownFolder = await _libraryRepository.GetOrAddFolder(
@@ -339,14 +347,14 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         {
             // TODO: figure out how to rebuild playlists
             Either<BaseError, Episode> maybeEpisode = await _televisionRepository
-                .GetOrAddEpisode(season, libraryPath, seasonFolder, file)
-                .BindT(
-                    episode => UpdateStatistics(new MediaItemScanResult<Episode>(episode), ffmpegPath, ffprobePath)
-                        .MapT(_ => episode))
+                .GetOrAddEpisode(season, libraryPath, seasonFolder, file, cancellationToken)
+                .BindT(episode => UpdateStatistics(new MediaItemScanResult<Episode>(episode), ffmpegPath, ffprobePath)
+                    .MapT(_ => episode))
                 .BindT(video => UpdateLibraryFolderId(video, seasonFolder))
                 .BindT(UpdateMetadata)
                 .BindT(e => UpdateThumbnail(e, cancellationToken))
-                .BindT(UpdateSubtitles)
+                .BindT(e => UpdateSubtitles(e, cancellationToken))
+                .BindT(e => UpdateChapters(e, cancellationToken))
                 .BindT(e => FlagNormal(new MediaItemScanResult<Episode>(e)))
                 .MapT(r => r.Item);
 
@@ -571,11 +579,25 @@ public class TelevisionFolderScanner : LocalFolderScanner, ITelevisionFolderScan
         }
     }
 
-    private async Task<Either<BaseError, Episode>> UpdateSubtitles(Episode episode)
+    private async Task<Either<BaseError, Episode>> UpdateSubtitles(Episode episode, CancellationToken cancellationToken)
     {
         try
         {
-            await _localSubtitlesProvider.UpdateSubtitles(episode, None, true);
+            await _localSubtitlesProvider.UpdateSubtitles(episode, None, true, cancellationToken);
+            return episode;
+        }
+        catch (Exception ex)
+        {
+            _client.Notify(ex);
+            return BaseError.New(ex.ToString());
+        }
+    }
+
+    private async Task<Either<BaseError, Episode>> UpdateChapters(Episode episode, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _localChaptersProvider.UpdateChapters(episode, None, cancellationToken);
             return episode;
         }
         catch (Exception ex)

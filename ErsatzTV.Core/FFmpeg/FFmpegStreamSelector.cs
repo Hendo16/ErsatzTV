@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using ErsatzTV.Core.Domain;
@@ -44,7 +45,8 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
         StreamingMode streamingMode,
         Channel channel,
         string preferredAudioLanguage,
-        string preferredAudioTitle)
+        string preferredAudioTitle,
+        CancellationToken cancellationToken)
     {
         if (streamingMode == StreamingMode.HttpLiveStreamingDirect &&
             string.IsNullOrWhiteSpace(preferredAudioLanguage) && string.IsNullOrWhiteSpace(preferredAudioTitle))
@@ -60,7 +62,8 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
         {
             _logger.LogDebug("Channel {Number} has no preferred audio language code", channel.Number);
             Option<string> maybeDefaultLanguage = await _configElementRepository.GetValue<string>(
-                ConfigElementKey.FFmpegPreferredLanguageCode);
+                ConfigElementKey.FFmpegPreferredLanguageCode,
+                cancellationToken);
             maybeDefaultLanguage.Match(
                 lang => language = lang.ToLowerInvariant(),
                 () =>
@@ -123,10 +126,11 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
     }
 
     public async Task<Option<Subtitle>> SelectSubtitleStream(
-        List<Subtitle> subtitles,
+        ImmutableList<Subtitle> subtitles,
         Channel channel,
         string preferredSubtitleLanguage,
-        ChannelSubtitleMode subtitleMode)
+        ChannelSubtitleMode subtitleMode,
+        CancellationToken cancellationToken)
     {
         if (channel.MusicVideoCreditsMode is ChannelMusicVideoCreditsMode.GenerateSubtitles &&
             subtitles.FirstOrDefault(s => s.SubtitleKind == SubtitleKind.Generated) is { } generatedSubtitle)
@@ -140,26 +144,29 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
             return None;
         }
 
+        var candidateSubtitles = subtitles.ToList();
+
         bool useEmbeddedSubtitles = await _configElementRepository
-            .GetValue<bool>(ConfigElementKey.FFmpegUseEmbeddedSubtitles)
+            .GetValue<bool>(ConfigElementKey.FFmpegUseEmbeddedSubtitles, cancellationToken)
             .IfNoneAsync(true);
 
         if (!useEmbeddedSubtitles)
         {
             _logger.LogDebug("Ignoring embedded subtitles for channel {Number}", channel.Number);
-            subtitles = subtitles.Filter(s => s.SubtitleKind is not SubtitleKind.Embedded).ToList();
+            candidateSubtitles = candidateSubtitles.Filter(s => s.SubtitleKind is not SubtitleKind.Embedded).ToList();
         }
 
-        foreach (Subtitle subtitle in subtitles.Filter(s => s.SubtitleKind is SubtitleKind.Embedded && !s.IsImage)
+        foreach (Subtitle subtitle in candidateSubtitles
+                     .Filter(s => s.SubtitleKind is SubtitleKind.Embedded && !s.IsImage)
                      .ToList())
         {
-            if (subtitle.IsExtracted == false)
+            if (!subtitle.IsExtracted)
             {
                 _logger.LogDebug(
                     "Ignoring embedded subtitle with index {Index} that has not been extracted",
                     subtitle.StreamIndex);
 
-                subtitles.Remove(subtitle);
+                candidateSubtitles.Remove(subtitle);
             }
             else if (string.IsNullOrWhiteSpace(subtitle.Path))
             {
@@ -167,7 +174,7 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
                     "BUG: ignoring embedded subtitle with index {Index} that is missing a path",
                     subtitle.StreamIndex);
 
-                subtitles.Remove(subtitle);
+                candidateSubtitles.Remove(subtitle);
             }
         }
 
@@ -187,26 +194,26 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
                 _logger.LogDebug("Preferred subtitle language has multiple codes {Codes}", allCodes);
             }
 
-            subtitles = subtitles
+            candidateSubtitles = candidateSubtitles
                 .Filter(s => allCodes.Any(c => string.Equals(s.Language, c, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
         }
 
-        if (subtitles.Count > 0)
+        if (candidateSubtitles.Count > 0)
         {
             Option<Subtitle> maybeSelectedSubtitle = subtitleMode switch
             {
-                ChannelSubtitleMode.Forced => subtitles
+                ChannelSubtitleMode.Forced => candidateSubtitles
                     .OrderBy(s => s.StreamIndex)
                     .Find(s => s.Forced)
                     .HeadOrNone(),
 
-                ChannelSubtitleMode.Default => subtitles
+                ChannelSubtitleMode.Default => candidateSubtitles
                     .OrderBy(s => s.Default ? 0 : 1)
                     .ThenBy(s => s.StreamIndex)
                     .HeadOrNone(),
 
-                ChannelSubtitleMode.Any => subtitles
+                ChannelSubtitleMode.Any => candidateSubtitles
                     .OrderBy(s => s.StreamIndex)
                     .HeadOrNone(),
 
@@ -236,8 +243,8 @@ public class FFmpegStreamSelector : IFFmpegStreamSelector
     {
         var audioStreams = version.Streams.Filter(s => s.MediaStreamKind == MediaStreamKind.Audio).ToList();
 
-        var correctLanguage = audioStreams.Filter(
-                s => preferredLanguageCodes.Any(c => string.Equals(s.Language, c, StringComparison.OrdinalIgnoreCase)))
+        var correctLanguage = audioStreams.Filter(s =>
+                preferredLanguageCodes.Any(c => string.Equals(s.Language, c, StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         if (correctLanguage.Count != 0)
