@@ -10,6 +10,7 @@ public class FillerPreset
     public int? Count { get; set; }
     public int? PadToNearestMinute { get; set; }
     public bool AllowWatermarks { get; set; }
+    public bool UseAllFiller { get; set; }
     public CollectionType CollectionType { get; set; }
     public int? CollectionId { get; set; }
     public Collection Collection { get; set; }

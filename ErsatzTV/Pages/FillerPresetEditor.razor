@@ -103,6 +103,12 @@
             </MudStack>
             <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
                 <div class="d-flex">
+                    <MudText>Use All Filler</MudText>
+                </div>
+                <MudCheckBox @bind-Value="@_model.UseAllFiller" For="@(() => _model.UseAllFiller)" Dense="true"/>
+            </MudStack>
+            <MudStack Row="true" Breakpoint="Breakpoint.SmAndDown" Class="form-field-stack gap-md-8 mb-5">
+                <div class="d-flex">
                     <MudText>Collection Type</MudText>
                 </div>
                 <MudSelect @bind-Value="_model.CollectionType" For="@(() => _model.CollectionType)">
@@ -343,6 +349,7 @@
                     _model.Count = fillerPreset.Count;
                     _model.PadToNearestMinute = fillerPreset.PadToNearestMinute;
                     _model.AllowWatermarks = fillerPreset.AllowWatermarks;
+                    _model.UseAllFiller = fillerPreset.UseAllFiller;
                     _model.CollectionType = fillerPreset.CollectionType;
                     _model.Collection = fillerPreset.CollectionId.HasValue
                         ? _mediaCollections.Find(c => c.Id == fillerPreset.CollectionId.Value)

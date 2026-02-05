@@ -1,0 +1,83 @@
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject IJSRuntime JsRuntime
+
+<div>
+    <MudDialog>
+        <DialogContent>
+            <MudStack Row="true">
+                <MudTextField @bind-Value="_newItem" Label="Enter Tag" Adornment="Adornment.Start" @ref="TextFieldRef"/>
+                <MudButton StartIcon="@Icons.Material.Filled.Add" OnClick="AddTag" Color="Color.Primary" Variant="Variant.Filled">Add</MudButton>
+            </MudStack>
+            <MudList T="Movie">
+                <MudListItem Text="Inbox" Icon="@Icons.Material.Filled.Inbox" />
+            </MudList>
+        </DialogContent>
+        <DialogActions>
+            <MudButton Color="Color.Primary" OnClick="Close">Close</MudButton>
+        </DialogActions>
+    </MudDialog>
+</div>
+
+@code {
+    [CascadingParameter]
+    IMudDialogInstance MudDialog { get; set; }
+
+    [Parameter]
+    public List<Tag> Tags { get; set; }
+
+    private string _info;
+    private string _newItem = string.Empty;
+    private MudTextField<string> TextFieldRef = default!;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await TextFieldRef.FocusAsync();
+        }
+    }
+
+    private void AddTag()
+    {
+        if (!string.IsNullOrWhiteSpace(_newItem))
+        {
+            Tags.Add(new Tag { Name = _newItem });
+            _newItem = string.Empty;
+
+            // Refocus after adding an item
+            TextFieldRef.FocusAsync();
+        }
+    }
+
+    private void RemoveTag(int id)
+    {
+        Tag identifiedTag = Tags.SingleOrDefault(t => t.Id == id);
+        Tags.Remove(identifiedTag);
+    }
+
+    protected override Task OnParametersSetAsync()
+    {
+        try
+        {
+            _info = JsonSerializer.Serialize(
+                Tags,
+                new JsonSerializerOptions
+                {
+                    Converters = { new JsonStringEnumConverter() },
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                    WriteIndented = true
+                });
+        }
+        catch (Exception ex)
+        {
+            _info = ex.ToString();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task CopyToClipboard(ElementReference view) => await JsRuntime.InvokeVoidAsync("clipboardCopy.copyText", view);
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(true));
+}

@@ -20,4 +20,5 @@ public record FillerPresetViewModel(
     int? SmartCollectionId,
     PlaylistViewModel Playlist,
     string Expression,
-    bool UseChaptersAsMediaItems);
+    bool UseChaptersAsMediaItems,
+    bool UseAllFiller = false);

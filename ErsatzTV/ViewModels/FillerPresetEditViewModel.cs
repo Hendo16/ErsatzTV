@@ -108,6 +108,7 @@ public class FillerPresetEditViewModel
     }
 
     public bool AllowWatermarks { get; set; }
+    public bool UseAllFiller { get; set; }
 
     public CollectionType CollectionType
     {

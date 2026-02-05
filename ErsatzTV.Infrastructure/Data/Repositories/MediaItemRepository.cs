@@ -85,7 +85,7 @@ public class MediaItemRepository(
         List<int> ids = await dbContext.Connection.QueryAsync<int>(
                 @"SELECT M.Id
                 FROM MediaItem M
-                INNER JOIN MediaVersion MV on M.Id = COALESCE(MovieId, MusicVideoId, OtherVideoId, SongId, ImageId, RemoteStreamId, EpisodeId)
+                INNER JOIN MediaVersion MV on M.Id = COALESCE(MovieId, MusicVideoId, OtherVideoId, SongId, ImageId, RemoteStreamId, EpisodeId, FillerMediaItemId)
                 INNER JOIN MediaFile MF on MV.Id = MF.MediaVersionId
                 WHERE M.LibraryPathId = @LibraryPathId AND MF.Path = @Path",
                 new { LibraryPathId = libraryPath.Id, Path = path })
@@ -168,7 +168,7 @@ public class MediaItemRepository(
     {
         Option<int> maybeMediaItemId = await dbContext.Connection
             .QuerySingleOrDefaultAsync<int?>(
-                @"select coalesce(EpisodeId, MovieId, MusicVideoId, OtherVideoId, SongId, ImageId, RemoteStreamId) as MediaItemId
+                @"select coalesce(EpisodeId, MovieId, MusicVideoId, OtherVideoId, SongId, ImageId, RemoteStreamId, FillerMediaItemId) as MediaItemId
                      from MediaVersion MV
                      inner join MediaFile MF on MV.Id = MF.MediaVersionId
                      where MF.PathHash = @PathHash",

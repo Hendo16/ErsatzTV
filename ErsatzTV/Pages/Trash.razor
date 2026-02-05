@@ -491,6 +491,7 @@
         ApplicationState.PersistAsJson("_episodes", _episodes);
         ApplicationState.PersistAsJson("_musicVideos", _musicVideos);
         ApplicationState.PersistAsJson("_otherVideos", _otherVideos);
+        ApplicationState.PersistAsJson("_fillers", _fillers);
         ApplicationState.PersistAsJson("_songs", _songs);
         ApplicationState.PersistAsJson("_images", _images);
         ApplicationState.PersistAsJson("_remoteStreams", _remoteStreams);
@@ -528,6 +529,7 @@
                 LoadDataAsync("_episodes", () => Mediator.Send(new QuerySearchIndexEpisodes($"type:episode AND ({_query})", 1, 50), token), r => _episodes = r),
                 LoadDataAsync("_musicVideos", () => Mediator.Send(new QuerySearchIndexMusicVideos($"type:music_video AND ({_query})", 1, 50), token), r => _musicVideos = r),
                 LoadDataAsync("_otherVideos", () => Mediator.Send(new QuerySearchIndexOtherVideos($"type:other_video AND ({_query})", 1, 50), token), r => _otherVideos = r),
+                LoadDataAsync("_fillers", () => Mediator.Send(new QuerySearchIndexFiller($"type:filler AND ({_query})", 1, 50), token), r => _fillers = r),
                 LoadDataAsync("_songs", () => Mediator.Send(new QuerySearchIndexSongs($"type:song AND ({_query})", 1, 50), token), r => _songs = r),
                 LoadDataAsync("_images", () => Mediator.Send(new QuerySearchIndexImages($"type:image AND ({_query})", 1, 50), token), r => _images = r),
                 LoadDataAsync("_remoteStreams", () => Mediator.Send(new QuerySearchIndexRemoteStreams($"type:remote_stream AND ({_query})", 1, 50), token), r => _remoteStreams = r),
@@ -555,7 +557,7 @@
     }
 
     private bool IsNotEmpty =>
-        _movies?.Cards.Count > 0 || _shows?.Cards.Count > 0 || _seasons?.Cards.Count > 0 || _episodes?.Cards.Count > 0 || _musicVideos?.Cards.Count > 0 || _otherVideos?.Cards.Count > 0 || _songs?.Cards.Count > 0 || _artists?.Cards.Count > 0 || _images?.Cards.Count > 0 || _remoteStreams?.Cards.Count > 0;
+        _movies?.Cards.Count > 0 || _shows?.Cards.Count > 0 || _seasons?.Cards.Count > 0 || _episodes?.Cards.Count > 0 || _musicVideos?.Cards.Count > 0 || _otherVideos?.Cards.Count > 0 || _fillers?.Cards.Count > 0 || _songs?.Cards.Count > 0 || _artists?.Cards.Count > 0 || _images?.Cards.Count > 0 || _remoteStreams?.Cards.Count > 0;
 
     private IEnumerable<MediaCardViewModel> AllCardsOnPage() =>
         Enumerable.Empty<MediaCardViewModel>()
@@ -566,6 +568,7 @@
             .Concat(_artists.Cards)
             .Concat(_musicVideos.Cards)
             .Concat(_otherVideos.Cards)
+            .Concat(_fillers.Cards)
             .Concat(_songs.Cards)
             .Concat(_images.Cards)
             .Concat(_remoteStreams.Cards);
@@ -581,6 +584,7 @@
                 .Append(_artists.Cards.OrderBy(a => a.SortTitle))
                 .Append(_musicVideos.Cards.OrderBy(mv => mv.SortTitle))
                 .Append(_otherVideos.Cards.OrderBy(ov => ov.SortTitle))
+                .Append(_fillers.Cards.OrderBy(f => f.SortTitle))
                 .Append(_songs.Cards.OrderBy(ov => ov.SortTitle))
                 .Append(_images.Cards.OrderBy(i => i.SortTitle))
                 .Append(_remoteStreams.Cards.OrderBy(rs => rs.SortTitle))
@@ -823,6 +827,10 @@
                 request = new DeleteItemsFromDatabase([otherVideo.OtherVideoId]);
                 await DeleteItemsWithConfirmation("other video", $"{otherVideo.Title} ({otherVideo.Subtitle})", request);
                 break;
+            case FillerCardViewModel filler:
+                request = new DeleteItemsFromDatabase([filler.FillerId]);
+                await DeleteItemsWithConfirmation("filler", $"{filler.Title} ({filler.Subtitle})", request);
+                break;
             case SongCardViewModel song:
                 request = new DeleteItemsFromDatabase([song.SongId]);
                 await DeleteItemsWithConfirmation("song", $"{song.Title} ({song.Subtitle})", request);
@@ -860,7 +868,7 @@
     private async Task EmptyTrash()
     {
         int count = _movies.Count + _shows.Count + _seasons.Count + _episodes.Count + _artists.Count +
-                    _musicVideos.Count + _otherVideos.Count + _songs.Count + _images.Count;
+                    _musicVideos.Count + _otherVideos.Count + _fillers.Count + _songs.Count + _images.Count;
 
         var parameters = new DialogParameters { { "EntityType", count.ToString() }, { "EntityName", "missing items" } };
         var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.ExtraSmall };

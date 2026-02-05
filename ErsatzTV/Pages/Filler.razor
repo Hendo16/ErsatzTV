@@ -68,6 +68,17 @@
                     Edit Tags
                 </MudButton>
             </div>
+            @if (_filler != null && _filler.LocalPath.Contains("TV Spot"))
+            {
+                <div>
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.Edit"
+                               OnClick="@EditTags">
+                        Link Movie
+                    </MudButton>
+                </div>
+            }
         </div>
     </div>
     @if (_filler?.MediaItemState == MediaItemState.FileNotFound)
@@ -261,6 +272,13 @@
     }
 
     private async Task EditTags()
+    {
+        var parameters = new DialogParameters { { "Tags", _filler?.Tags } };
+        var options = new DialogOptions { CloseButton = true, CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        IDialogReference dialog = await Dialog.ShowAsync<EditTagsDialog>(_filler.Title, parameters, options);
+        DialogResult _ = await dialog.Result;
+    }
+    private async Task LinkMovies()
     {
         var parameters = new DialogParameters { { "Tags", _filler?.Tags } };
         var options = new DialogOptions { CloseButton = true, CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };

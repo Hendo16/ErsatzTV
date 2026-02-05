@@ -229,7 +229,7 @@ public class FillerFolderScanner : LocalFolderScanner, IFillerFolderScanner
             {
                 if (!_fileSystem.File.Exists(path))
                 {
-                    _logger.LogInformation("Flagging missing other video at {Path}", path);
+                    _logger.LogInformation("Flagging missing filler at {Path}", path);
                     List<int> FillerIds = await FlagFileNotFound(libraryPath, path);
                     if (!await _scannerProxy.ReindexMediaItems(FillerIds.ToArray(), cancellationToken))
                     {

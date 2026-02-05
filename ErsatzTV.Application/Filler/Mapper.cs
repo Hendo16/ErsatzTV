@@ -27,7 +27,8 @@ internal static class Mapper
                 ? MediaCollections.Mapper.ProjectToViewModel(fillerPreset.Playlist)
                 : null,
             fillerPreset.Expression,
-            fillerPreset.UseChaptersAsMediaItems);
+            fillerPreset.UseChaptersAsMediaItems,
+            fillerPreset.UseAllFiller);
     internal static FillerViewModel ProjectToViewModel(
         FillerMediaItem filler,
         string localPath,
